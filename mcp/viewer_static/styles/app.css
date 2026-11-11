@@ -1,0 +1,638 @@
+/* ============================================================
+   app.css — overall layout & theme for the v1 web app.
+   Left: light-blue workbench (workspace only; the saved document
+   page itself stays white). Right: light pane whose width is
+   user-adjustable via the split handle (--side-pane-width).
+   ============================================================ */
+
+:root {
+  --side-pane-width: 380px;
+  --bg-workbench: #d7e5f4;
+  --bg-chrome: #e9f0f9;
+  --bg-chrome-hover: #d5e3f2;
+  --bg-chrome-active: #c3d6ec;
+  --bg-panel: #f4f7fb;
+  --bg-panel-header: #e8eff8;
+  --border-dark: #b7c8dc;
+  --border-light: #cfd9e6;
+  --text-on-dark: #1f2d3d;
+  --text-muted-dark: #5a6b7f;
+  --text-on-light: #24292f;
+  --text-muted-light: #6a7280;
+  --accent: #2f6fbf;
+  --accent-soft: rgba(47, 111, 191, 0.14);
+  --accent-strong-text: #1c4d8f;
+  --danger: #d63a31;
+  --success: #1f7a3d;
+  --shadow-canvas: 0 3px 18px rgba(31, 45, 61, 0.28);
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; margin: 0; padding: 0; }
+
+body {
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  font-size: 13px;
+  color: var(--text-on-dark);
+  background: var(--bg-workbench);
+  overflow: hidden;
+}
+
+.hidden { display: none !important; }
+
+/* ---------------- App frame ---------------- */
+
+#app { display: flex; flex-direction: column; height: 100%; }
+
+/* ---------------- Top bar ---------------- */
+
+#topbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 5px 8px;
+  background: var(--bg-chrome);
+  border-bottom: 1px solid var(--border-dark);
+  user-select: none;
+}
+
+#topbar .sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 5px;
+  background: var(--border-dark);
+}
+
+#topbar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 26px;
+  padding: 2px 8px;
+  font: inherit;
+  color: var(--text-on-dark);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#topbar button:hover:not(:disabled) {
+  background: var(--bg-chrome-hover);
+  border-color: var(--border-dark);
+}
+
+#topbar button:active:not(:disabled) { background: var(--bg-chrome-active); }
+
+/* Disabled state must be clearly readable as "off". */
+#topbar button:disabled {
+  opacity: 0.32;
+  cursor: not-allowed;
+  filter: grayscale(0.8);
+}
+
+#topbar button[aria-pressed="true"],
+#topbar button.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-strong-text);
+}
+
+#topbar .icon {
+  width: 15px;
+  height: 15px;
+  display: block;
+}
+
+#topbar .icon,
+#toolbar .icon {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+#zoom-level {
+  min-width: 48px;
+  text-align: center;
+  color: var(--text-muted-dark);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+/* ---------------- Main area ---------------- */
+
+#main {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+}
+
+/* Left: light-blue workbench surface. */
+#canvas-pane {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  background: var(--bg-workbench);
+}
+
+/* Right: light pane; width follows --side-pane-width (split handle). */
+#side-pane {
+  flex: 0 0 var(--side-pane-width);
+  width: var(--side-pane-width);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-panel);
+  color: var(--text-on-light);
+  border-left: 1px solid var(--border-dark);
+}
+
+/* ---------------- Split handle ---------------- */
+
+.split-handle {
+  position: relative;
+  flex: 0 0 6px;
+  cursor: col-resize;
+  background: var(--bg-chrome);
+  touch-action: none;
+  user-select: none;
+}
+
+.split-handle::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 2px;
+  height: 26px;
+  transform: translate(-50%, -50%);
+  border-radius: 1px;
+  background: var(--text-muted-dark);
+  opacity: 0.45;
+}
+
+.split-handle:hover::after,
+.split-handle:focus-visible::after,
+body.split-dragging .split-handle::after {
+  width: 3px;
+  height: 42px;
+  background: var(--accent);
+  opacity: 1;
+}
+
+.split-handle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+body.split-dragging {
+  cursor: col-resize;
+  user-select: none;
+}
+
+/* ---------------- Toolbar (vertical rail) ---------------- */
+
+#toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 42px;
+  flex: 0 0 42px;
+  padding: 6px 4px;
+  background: var(--bg-chrome);
+  border-right: 1px solid var(--border-dark);
+  user-select: none;
+}
+
+#toolbar button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  font: inherit;
+  color: var(--text-on-dark);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+#toolbar button:hover { background: var(--bg-chrome-hover); }
+
+#toolbar button.active,
+#toolbar button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-strong-text);
+}
+
+#toolbar .icon {
+  width: 17px;
+  height: 17px;
+  display: block;
+}
+
+/* ---------------- Tabs & panels (side pane) ---------------- */
+
+#side-tools {
+  flex: 1 1 auto;
+  min-height: 150px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#panel-import {
+  flex: 0 0 auto;
+  max-height: 45%;
+  overflow: auto;
+}
+
+#tabs {
+  display: flex;
+  flex: 0 0 auto;
+  background: var(--bg-panel-header);
+  border-bottom: 1px solid var(--border-light);
+  user-select: none;
+}
+
+#tabs button {
+  flex: 1 1 auto;
+  padding: 7px 2px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-muted-light);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#tabs button:hover {
+  color: var(--text-on-light);
+  background: rgba(0, 0, 0, 0.04);
+}
+
+#tabs button.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+  background: transparent;
+}
+
+#side-pane .panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px;
+}
+
+#side-pane #panel-ai {
+  flex: 0 0 var(--ai-pane-height, 46%);
+  min-height: 220px;
+  border-top: 1px solid var(--border-light);
+  background: #fff;
+}
+
+.ai-split-handle {
+  position: relative;
+  flex: 0 0 7px;
+  min-height: 7px;
+  cursor: row-resize;
+  background: var(--bg-chrome);
+  touch-action: none;
+  user-select: none;
+}
+
+.ai-split-handle::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 34px;
+  height: 2px;
+  transform: translate(-50%, -50%);
+  border-radius: 1px;
+  background: var(--text-muted-dark);
+  opacity: 0.45;
+}
+
+.ai-split-handle:hover::after,
+.ai-split-handle:focus-visible::after,
+body.ai-split-dragging .ai-split-handle::after {
+  width: 48px;
+  height: 3px;
+  background: var(--accent);
+  opacity: 1;
+}
+
+.ai-split-handle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+body.ai-split-dragging {
+  cursor: row-resize;
+  user-select: none;
+}
+
+/* ---------------- Side-pane controls (light theme) ---------------- */
+
+#side-pane input,
+#side-pane select,
+#side-pane textarea {
+  font: inherit;
+  color: var(--text-on-light);
+  background: #fff;
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+
+#side-pane input:focus,
+#side-pane select:focus,
+#side-pane textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+#side-pane button {
+  font: inherit;
+  color: var(--text-on-light);
+  background: #fff;
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+#side-pane button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+#side-pane button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+#side-pane button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+#side-pane button.primary:hover:not(:disabled) {
+  color: #fff;
+  filter: brightness(1.08);
+}
+
+/* ---------------- Status bar ---------------- */
+
+#status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 10px;
+  font-size: 12px;
+  color: var(--text-muted-dark);
+  background: var(--bg-chrome);
+  border-top: 1px solid var(--border-dark);
+  user-select: none;
+}
+
+#status-text {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#status-doc-info {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------- Modal ---------------- */
+
+#modal-root {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(31, 45, 61, 0.4);
+}
+
+#modal-root:empty { display: none; }
+
+.modal {
+  display: flex;
+  flex-direction: column;
+  min-width: 340px;
+  max-width: min(680px, 90vw);
+  max-height: 82vh;
+  background: #fff;
+  color: var(--text-on-light);
+  border-radius: 8px;
+  box-shadow: 0 14px 48px rgba(31, 45, 61, 0.35);
+  overflow: hidden;
+}
+
+.modal-header {
+  padding: 12px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.modal-body {
+  padding: 14px 16px;
+  overflow: auto;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 16px;
+  background: #fafbfc;
+  border-top: 1px solid var(--border-light);
+}
+
+/* ---------------- Toast ---------------- */
+
+#toast-root {
+  position: fixed;
+  top: 46px;
+  right: calc(var(--side-pane-width) + 12px); /* keep clear of the side pane */
+  z-index: 1100;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
+}
+
+#toast-root > * {
+  pointer-events: auto;
+  max-width: 360px;
+  padding: 8px 14px;
+  font-size: 13px;
+  color: #fff;
+  background: #2b313b;
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+
+#toast-root > .toast-error { background: var(--danger); }
+#toast-root > .toast-success { background: var(--success); }
+
+/* ---------------- Scrollbars ---------------- */
+
+#stage::-webkit-scrollbar,
+#side-pane .panel::-webkit-scrollbar,
+.modal-body::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+#side-pane .panel::-webkit-scrollbar-thumb,
+.modal-body::-webkit-scrollbar-thumb {
+  background: #c2c7cf;
+  border-radius: 5px;
+}
+
+#stage::-webkit-scrollbar-thumb {
+  background: #b7c8dc;
+  border-radius: 5px;
+}
+
+/* ---------------- 三版本交互变体（A/B/C）---------------- */
+
+#variant-badge {
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #1f6feb;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .3px;
+  cursor: default;
+}
+
+/* A：对话创作 —— 简化工具栏，隐藏精细排版按钮，突出画布与对话 */
+body[data-variant="a"] #topbar button[id^="btn-align-"],
+body[data-variant="a"] #topbar button[id^="btn-distribute-"],
+body[data-variant="a"] #topbar button[id^="btn-z-"] {
+  display: none;
+}
+
+/* C：投稿审阅 —— 弱化手绘工具，突出期刊/审阅/导出 */
+body[data-variant="c"] #variant-badge { background: #7c4dff; }
+
+/* Narrow template cards: the side pane, not the browser width, sets the layout. */
+#side-pane { container-type: inline-size; }
+#side-pane .templates-list .template-item > div { min-width: 0; flex-wrap: wrap; }
+#side-pane .template-thumb { flex: 1 1 140px; max-width: 100%; min-width: 100px; }
+#side-pane .template-preview { max-width: 100%; height: auto; }
+#side-pane .template-info { flex: 1 1 110px; min-width: 80px; overflow-wrap: break-word; }
+#side-pane .template-info > div { flex-wrap: wrap; min-width: 0; gap: 4px; }
+#side-pane .template-info > div > span { flex: 1 1 88px; overflow-wrap: break-word; }
+@container (max-width: 370px) {
+  #side-pane .template-thumb { flex-basis: 100%; }
+  #side-pane .template-thumb .template-preview { width: 100%; }
+  #side-pane .template-info { flex-basis: 100%; min-width: 0; }
+}
+
+/* Viewport-fixed, transient canvas menu; all labels are built with textContent. */
+.editor-context-menu {
+  position: fixed;
+  z-index: 1200;
+  width: max-content;
+  min-width: 218px;
+  max-width: calc(100vw - 16px);
+  padding: 6px;
+  color: var(--text-on-light);
+  background: #fff;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(31, 45, 61, 0.2);
+}
+
+.editor-context-caption {
+  max-width: 300px;
+  padding: 5px 8px 7px;
+  overflow: hidden;
+  color: var(--text-muted-light);
+  border-bottom: 1px solid #edf0f3;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-context-action {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 34px;
+  margin-top: 3px;
+  padding: 6px 9px;
+  color: var(--text-on-light);
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.editor-context-action:hover:not(:disabled),
+.editor-context-action:focus-visible {
+  color: var(--accent-strong-text);
+  background: var(--accent-soft);
+  outline: none;
+}
+
+.editor-context-action:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.editor-context-number {
+  flex: 0 0 auto;
+  color: var(--accent-strong-text);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+/* Entity/relation editor stays inside the upper tool pane; the AI pane is unchanged. */
+#tabs { flex-wrap: wrap; }
+#tabs button { flex: 1 0 10%; min-width: 34px; }
+.diagram-toolbar, .diagram-section, .diagram-record-head { display:flex;align-items:center;justify-content:space-between;gap:6px; }
+.diagram-toolbar { position:sticky;top:-10px;z-index:2;padding:4px 0;background:var(--bg-panel); }
+.diagram-live-preview { margin:8px 0;border:1px solid var(--border-light);background:white;overflow:auto; }
+.diagram-live-preview svg { display:block;width:100%;height:auto; }
+.diagram-note { color:#765414;font-size:11px;line-height:1.45; }
+.diagram-grid { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;margin:5px 0; }
+.diagram-field { display:flex;flex-direction:column;gap:2px;font-size:11px;color:var(--text-muted-light);min-width:0; }
+.diagram-field input,.diagram-field select,.diagram-field textarea { min-width:0;width:100%;font-size:11px; }
+.diagram-record { border:1px solid #dbe2eb;border-radius:5px;padding:6px;margin:7px 0;background:#fff; }
+.diagram-record-head { font-size:11px;margin-bottom:4px; }
+.diagram-json-wrap textarea { width:100%;min-height:180px;font-family:Consolas,monospace;font-size:10px; }
+#diagram-uncertainties { min-height:65px; }

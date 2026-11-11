@@ -1,0 +1,623 @@
+# -*- coding: utf-8 -*-
+"""tools_spec.py — MCP 工具清单（单一来源）。
+
+本文件是 v3-agent-plugin 全部 MCP 工具的唯一事实来源：
+mcp_server.py 的 tools/list 与 tools/call 分发均以 TOOLS / TOOL_MAP 为准，
+技能文档（skill/）与 README 也应引用这里而不是另写一份。
+
+每个条目字段：
+  name          工具名
+  description   中文描述（含"返回："说明，tools/list 原样下发）
+  output        返回 JSON 顶层字段说明（供文档生成，不随 tools/list 下发）
+  input_schema  JSON Schema（tools/list 时以 "inputSchema" 键下发）
+
+mcp/tools.json 由本文件生成（运行 `python tools_spec.py` 重新生成），
+Host 侧 index.js 只读取该 JSON，不解析本文件。
+"""
+
+import json
+from pathlib import Path
+
+TOOLS = [
+    {
+        "name": "figure_create",
+        "description": "创建空的图表文档（FigureDocument）。可同时指定画布尺寸、分辨率、标题；给定 journal_id 时按期刊预设套用画布。返回：{doc, warnings?}，doc 为 figure-document.schema.json 文档对象。",
+        "output": "{doc, warnings?}",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "journal_id": {"type": "string", "description": "期刊/画布预设 id，如 nature-single、custom-blank"},
+                "width_mm": {"type": "number", "exclusiveMinimum": 0, "description": "画布宽（mm），默认 120"},
+                "height_mm": {"type": "number", "exclusiveMinimum": 0, "description": "画布高（mm），默认 90"},
+                "dpi": {"type": "number", "description": "导出分辨率，默认 300"},
+                "title": {"type": "string", "description": "图题"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "figure_templates",
+        "description": "列出图表模板（来自 presets/templates.json），可按 category（chart/diagram/composite）、chart_type 或 capability 过滤。每项含 capability（full/layout/unsupported）、can_apply、auto_generate 与 capability_note。full 表示本地能按有效数据真实生成 SVG，不代表全部模板都已实现真实生成；layout 仅创建空白复合版式、不自动填图；unsupported 仅为示意预览，禁止应用。默认排除 unsupported；预览全部模板须显式 include_unsupported=true，或明确请求 capability=unsupported。UI 应显著标注 unsupported 并禁用应用，服务端也会拒绝绕过 UI 的直接应用。返回：{templates:[...]}。",
+        "output": "{templates:[{..., capability, can_apply, auto_generate, capability_note}]}",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "category": {"type": "string", "description": "模板类别：chart / diagram / composite"},
+                "chart_type": {"type": "string", "description": "图表类型，如 bar、line、volcano"},
+                "capability": {"type": "string", "enum": ["full", "layout", "unsupported"], "description": "能力分类过滤；显式查 unsupported 时即使 include_unsupported 缺省也返回示意项"},
+                "include_unsupported": {"type": "boolean", "description": "默认 false；传 true 可在 UI 预览全部模板，但 unsupported 仍明确标注且禁止应用"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "figure_journals",
+        "description": "列出期刊/画布预设（来自 presets/journals.json），含 width_mm、base_font_pt、min_font_pt、dpi_recommended 等关键字段，可按 category 过滤（journal/thesis/poster/magazine/presentation/custom）。返回：{journals:[...]}。",
+        "output": "{journals:[...]}",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "category": {"type": "string", "description": "预设类别过滤"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "figure_open_data",
+        "description": "打开数据：csv/json/path/xlsx_base64 四选一（禁止同时提供多个源）。支持 CSV/JSON 文本与文件，以及本机 .xlsx/.xlsm/.xls 工作簿或 xlsx_base64；sheet_name 与 sheet 为同项别名，header_row 为 1 起始表头行，切换后重读。工作簿只在内存中读取单元格，不执行宏/公式，也不加载外部工作簿。返回 data:{columns,rows} 可直接供 figure_create_chart.data.inline 使用；同时返回列统计、按真实渲染能力过滤的模板推荐、sheets、sheet_name、header_row、notices/warnings 与含 sha256 的 source_info。include_unsupported=true 仅用于示意预览，unsupported 仍禁止应用。CSV/JSON 文本源保持旧返回 {columns,stats,recommended}。",
+        "output": "{data?, columns, stats, recommended, sheets?, sheet_name?, header_row?, notices?, warnings?, source_info?}",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "csv": {"type": "string", "description": "CSV 文本；不得与其他数据源同传"},
+                "json": {"type": "string", "description": "JSON 文本（[{...}] 或 [[...]]）；不得与其他数据源同传"},
+                "path": {"type": "string", "description": "本机 csv/json/xlsx/xlsm/xls 数据文件路径"},
+                "xlsx_base64": {"type": "string", "description": "工作簿 Base64 或受支持 Excel MIME 的 Base64 data URL；最大 20 MiB，不得与其他数据源同传"},
+                "file_name": {"type": "string", "description": "Base64 工作簿文件名（不含路径），扩展名 .xlsx/.xlsm/.xls；缺省 workbook.xlsx"},
+                "sheet_name": {"type": "string", "description": "工作表名称；与 sheet 同义，冲突时报错"},
+                "sheet": {"type": "string", "description": "工作表名称；与 sheet_name 同义，冲突时报错"},
+                "header_row": {"type": "integer", "minimum": 1, "description": "1 起始表头行；切换工作表或表头行会重新读取"},
+                "include_unsupported": {"type": "boolean", "description": "默认 false；true 仅在推荐结果中额外显示明确不可应用的示意项"},
+            },
+            "anyOf": [
+                {"required": ["csv"]},
+                {"required": ["json"]},
+                {"required": ["path"]},
+                {"required": ["xlsx_base64"]},
+            ],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "figure_create_chart",
+        "description": "由数据建图：解析数据 → 推断图表类型/模板 → 按当前 FigData 实际渲染能力校验 → 生成图表元素并写入文档。data 必须且只能含 csv/json/inline/path/xlsx_base64 一个源；path/xlsx_base64 支持工作簿及 sheet_name/sheet/header_row，多个源直接报错，绝不按优先级误读。工作簿预览所得 data 可原样作为 inline。capability=unsupported 的模板会在服务端拒绝；layout 只创建空白复合版式。若示意图节点显式 kind/shape=chart，唯一数据 slot 自动绑定，多 slot 必须明确 scene_id/node_id；只取模板真实 chart 放进原生 slot bbox，不引入默认满画面板，不改原 inline/source/style/series；slot 与 transform 互斥。旧无 slot 路径保持原行为，跨实体的 chart/panel 遮挡由 layout_audit 给出 collision id/bbox/area 和改善路径。返回：{doc,warnings,capability,layout_audit,slot_binding,status,template_id?}。",
+        "output": "{doc, warnings, capability, layout_audit, slot_binding, status, template_id?}",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "doc": {"type": "object", "description": "FigureDocument 对象"},
+                "data": {
+                    "type": "object",
+                    "description": "单一数据来源：csv/json/inline/path/xlsx_base64",
+                    "properties": {
+                        "csv": {"type": "string"},
+                        "json": {"type": "string"},
+                        "inline": {
+                            "type": "object",
+                            "description": "已解析的数据 {columns:[...], rows:[[...]]}",
+                            "properties": {
+                                "columns": {"type": "array", "items": {"type": "string"}},
+                                "rows": {"type": "array", "items": {"type": "array"}},
+                            },
+                            "required": ["columns", "rows"],
+                        },
+                        "path": {"type": "string", "description": "本机 .xlsx/.xlsm/.xls 工作簿路径"},
+                        "xlsx_base64": {"type": "string", "description": "工作簿 Base64；最大 20 MiB"},
+                        "file_name": {"type": "string", "description": "Base64 工作簿文件名，不得包含路径"},
+                        "sheet_name": {"type": "string", "description": "工作表名称；与 sheet 同义"},
+                        "sheet": {"type": "string", "description": "工作表名称；与 sheet_name 同义"},
+                        "header_row": {"type": "integer", "minimum": 1},
+                    },
+                    "additionalProperties": False,
+                },
+                "template_id": {"type": "string", "description": "指定模板 id（如 tpl-bar）；缺省时按 chart_type 匹配或自动推断"},
+                "chart_type": {"type": "string", "description": "指定图表类型；缺省时由数据推断"},
+                "journal_id": {"type": "string", "description": "期刊预设 id，影响字号与配色"},
+                "palette_id": {"type": "string", "description": "配色 id，如 npg、aaas"},
+                "scene_id": {"type": "string", "description": "显式 chart slot 所在 diagram/scene id；多 slot 时与 node_id 同为必填"},
+                "node_id": {"type": "string", "description": "显式 kind/shape=chart 的语义节点 id；唯一 slot 可省略并自动绑定，多 slot 不得猜测"},
+                "transform": {
+                    "type": "object",
+                    "description": "图表元素的位置与尺寸 {x,y,w,h}（mm）",
+                    "properties": {
+                        "x": {"type": "number"},
+                        "y": {"type": "number"},
+                        "w": {"type": "number"},
+                        "h": {"type": "number"},
+                    },
+                },
+            },
+            "required": ["doc", "data"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "figure_apply_edits",
+        "description": (
+            "对文档应用一批 EditOp（edit-op.schema.json）：经 FigOps.validateAll 顺序校验，"
+            "全部合法后由 FigOps.applyAll 一次应用并写一条事务历史（不部分应用）。"
+            "校验错误保留原始 ops[i] 零基索引，不会静默跳过非法操作。"
+            "返回：{doc, applied, errors}；applied 为实际变更条数，errors 为校验失败明细（成功时为空数组）。"
+            "applied=0 时原样返回 doc，不写 history，也不截断 undo 后的 redo 尾部。"
+            "无 id 的 add_element 首次应用生成 id，并把该 id 写入历史 op，撤销/重做与跨进程重放必须保持同一 id。"
+            "apply_template 使用 {op,template_id,data?,options?}；data 直接为已解析的 {columns,rows} 或 null，"
+            "不要再包 csv/json/inline；options 为 {journal_id?,palette_id?} 或 null。"
+            "直接 MCP/AI 应用也受能力校验：unsupported 整批拒绝；layout 只生成空白复合版式而不自动填图，warnings 必须转述。"
+            "内核 builder 将空 data/options 归一化，且与 figure_create_chart 共用 FigPresets.templateFromStats 生成链，"
+            "因此多面板数据与表征配置不会被另建一套逻辑替换。"
+        ),
+        "output": "{doc, applied, errors, warnings}",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "doc": {"type": "object", "description": "FigureDocument 对象"},
+                "ops": {
+                    "type": "array",
+                    "description": "EditOp 数组。apply_template 的 data/options 由本 schema 展开，其余 op 字段见 edit-op.schema.json。",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "op": {"type": "string", "description": "操作名，如 move、add_element、apply_template"},
+                            "template_id": {"type": "string", "description": "apply_template 的模板 id"},
+                            "data": {
+                                "type": ["object", "null"],
+                                "description": "apply_template 的已解析数据 {columns,rows}，不是 {csv|json|inline} 包装；null 表示空骨架",
+                                "properties": {
+                                    "columns": {"type": "array", "items": {"type": "string"}},
+                                    "rows": {"type": "array", "items": {"type": "array"}},
+                                },
+                                "required": ["columns", "rows"],
+                                "additionalProperties": False,
+                            },
+                            "options": {
+                                "type": ["object", "null"],
+                                "description": "apply_template 的生成选项；null 与非 null 的 data/options 由 builder 归一化",
+                                "properties": {
+                                    "journal_id": {"type": "string", "description": "期刊预设 id"},
+                                    "palette_id": {"type": "string", "description": "配色 id"},
+                                },
+                            },
+                        },
+                        "required": ["op"],
+                    },
+                },
+            },
+            "required": ["doc", "ops"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "figure_apply_journal",
+        "description": "套用期刊预设：调整画布宽高、按比例缩放文字字号、写入 meta.journal_preset_id。返回：{doc, warnings}，warnings 为中文告警（如字号低于期刊下限）。",
+        "output": "{doc, warnings}",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "doc": {"type": "object", "description": "FigureDocument 对象"},
+                "journal_id": {"type": "string", "description": "期刊预设 id，见 figure_journals"},
+            },
+            "required": ["doc", "journal_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "figure_recolor",
+        "description": "按调色板重新着色：把文档内元素的 fill/stroke 映射到目标调色板（白/黑/透明等中性色不参与）。返回：{doc}。",
+        "output": "{doc}",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "doc": {"type": "object", "description": "FigureDocument 对象"},
+                "palette_id": {"type": "string", "description": "调色板 id，见 presets/palettes.json（npg/aaas/…）"},
+                "strategy": {"type": "string", "enum": ["byOrder", "byHue", "byRole"], "description": "配对策略，默认 byHue"},
+            },
+            "required": ["doc", "palette_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "figure_add_anchor",
+        "description": "添加命名锚点（bbox_norm 或 bbox_mm 二选一）。锚点是 Agent 指代图中位置的载体（后续可用 @锚点id 定位）。返回：{doc, anchor}。",
+        "output": "{doc, anchor}",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "doc": {"type": "object", "description": "FigureDocument 对象"},
+                "label": {"type": "string", "description": "锚点标签，如 (a)、主标题"},
+                "bbox_norm": {
+                    "type": "object",
+                    "description": "归一化框 {x,y,w,h}，0–1",
+                    "properties": {
+                        "x": {"type": "number", "minimum": 0, "maximum": 1},
+                        "y": {"type": "number", "minimum": 0, "maximum": 1},
+                        "w": {"type": "number", "minimum": 0, "maximum": 1},
+                        "h": {"type": "number", "minimum": 0, "maximum": 1},
+                    },
+                    "required": ["x", "y", "w", "h"],
+                    "additionalProperties": False,
+                },
+                "bbox_mm": {
+                    "type": "object",
+                    "description": "毫米框 {x,y,w,h}",
+                    "properties": {
+                        "x": {"type": "number", "minimum": 0},
+                        "y": {"type": "number", "minimum": 0},
+                        "w": {"type": "number", "minimum": 0},
+                        "h": {"type": "number", "minimum": 0},
+                    },
+                    "required": ["x", "y", "w", "h"],
+                    "additionalProperties": False,
+                },
+                "note": {"type": "string", "description": "备注，写给后续 AI 看"},
+                "element_ids": {"type": "array", "items": {"type": "string"}, "description": "锚点包含的元素 id"},
+            },
+            "required": ["doc", "label"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "figure_anchors",
+        "description": "列出文档内全部锚点。返回：{anchors:[{id,label,bbox_mm,note,element_ids}]}。",
+        "output": "{anchors:[{id,label,bbox_mm,note,element_ids}]}",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "doc": {"type": "object", "description": "FigureDocument 对象"},
+            },
+            "required": ["doc"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "figure_place",
+        "description": "按锚点或元素 id 定位放置：封装 move（绝对坐标）+ resize。target 可为元素 id 或 @锚点id。返回：{doc}。",
+        "output": "{doc}",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "doc": {"type": "object", "description": "FigureDocument 对象"},
+                "target": {"type": "string", "description": "元素 id 或 @锚点id"},
+                "x_mm": {"type": "number", "description": "目标左上角 x（mm，绝对坐标）"},
+                "y_mm": {"type": "number", "description": "目标左上角 y（mm，绝对坐标）"},
+                "w_mm": {"type": "number", "description": "可选，目标宽（mm）"},
+                "h_mm": {"type": "number", "description": "可选，目标高（mm）"},
+            },
+            "required": ["doc", "target", "x_mm", "y_mm"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "figure_panel_layout",
+        "description": "设置 panel 元素的网格布局（cols×rows、间距），并按格子重排其子元素。返回：{doc}。",
+        "output": "{doc}",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "doc": {"type": "object", "description": "FigureDocument 对象"},
+                "panel_id": {"type": "string", "description": "type=panel 的元素 id"},
+                "cols": {"type": "integer", "minimum": 1, "description": "列数"},
+                "rows": {"type": "integer", "minimum": 1, "description": "行数"},
+                "gap_mm": {"type": "number", "description": "格子间距（mm），默认 2"},
+                "labels": {"type": ["string", "array"], "description": "面板标签（如 \"a\"）；数组时按子面板顺序逐个命名"},
+            },
+            "required": ["doc", "panel_id", "cols", "rows"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "figure_check",
+        "description": "按期刊规范检查文档（字号过小/宽度不符/DPI 过低/面板越界/低对比/无锚点等）。返回：{ok, warnings:[{code,message,element_id?}]}。",
+        "output": "{ok, warnings:[{code, message, element_id?}]}",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "doc": {"type": "object", "description": "FigureDocument 对象"},
+            },
+            "required": ["doc"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "figure_render",
+        "description": "把文档渲染为 SVG 字符串（确定性渲染，同输入同输出）。不支持的 chartType、数据/映射绘制失败或“需 v2”占位结果均明确失败，绝不作为成功 SVG 返回；纯空白复合版式仅标注“空版式（未填图）”，不代表自动填图。返回：{svg}。",
+        "output": "{svg}",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "doc": {"type": "object", "description": "FigureDocument 对象"},
+                "format": {"type": "string", "enum": ["svg"], "description": "目前仅支持 svg"},
+            },
+            "required": ["doc", "format"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "figure_export",
+        "description": "导出文件：svg/png/jpeg/tiff/pdf 全部先复用同一内核科学映射生成 SVG；svg 直接写盘，其余格式经 py/figraster.py 的 export_svg 交给 PyMuPDF 完成服务端矢量 PDF 与栅格化，再由 Pillow 编码 PNG/JPEG/TIFF 并写尺寸/DPI 元数据。Pillow 不承担科学映射。可选 panel_id 接受文档中一个 type=panel 或 type=chart 的元素 id；未知 id、rect/group 等其他类型、重复 id 或不可见元素均精确拒绝，绝不回退到整图。panel 导出只含该 panel 及后代，范围含实际 transform 与 padding，不另加边；top-left/top-right 标签向上扩 0.6mm 加一个字号，below 向下扩 1.2 个字号。chart 导出仅把 canonical 整图 SVG 的根 width/height/viewBox 裁为该 chart 的实际 mm 范围，其他 chart 的坐标/矢量可保留在画幅外，但不得进入最终 PNG/PDF 画幅；不改 doc、doc.canvas、data、映射或源 SVG 几何。文件名使用 chart-id 或 panel-id，px 按裁后物理 root 尺寸和上取整规则计算。transparent=true 仅 PNG 合法，删除默认白底但保留用户显式绘制的白色元素；其他格式必须显式拒绝，不转 RGB 冒充透明。默认仍是完整画布和不透明 PNG，canvas.background 非默认白色时不应被误删。dpi 缺省取 doc.canvas.dpi；out_path 缺省按 图题[_panel-id|_chart-id]_scope宽x高mm_实际dpi.ext 落在当前目录。位图/PDF 导出需要 PyMuPDF 与 Pillow，转换依赖缺失会明确报错。返回：{path, bytes, px:{width,height}}。自动导出不等同于数据真实性、字体或视觉出版验收。",
+        "output": "{path, bytes, px:{width, height}}",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "doc": {"type": "object", "description": "FigureDocument 对象"},
+                "format": {"type": "string", "enum": ["png", "jpeg", "tiff", "pdf", "svg"], "description": "导出格式"},
+                "dpi": {"type": "number", "description": "导出分辨率，缺省用画布 dpi；自动文件名和位图元数据均使用本次实际覆盖值"},
+                "out_path": {"type": "string", "description": "输出文件绝对/相对路径；缺省时按 scope 后物理尺寸、实际 dpi 和可读 panel/chart id 命名"},
+                "panel_id": {"type": "string", "description": "可选，仅导出指定的一个 type=panel 或 type=chart 元素；chart 按 transform 对 canonical SVG 做 canvas viewBox 裁剪，不改 doc/canvas/data；未知 id、rect/group 等其他类型或不可见元素报错，绝不回退整图"},
+                "transparent": {"type": "boolean", "description": "可选，默认 false；仅 PNG 可设 true，删除默认白底但保留显式白色元素，其他格式设 true 会报错"},
+            },
+            "required": ["doc", "format"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "figure_review",
+        "description": (
+            "审阅结构化文档与检查结果：DSH 桥可调用文本聊天，当前 DSH 审阅路径不发送附图；"
+            "不传图时只能进行结构化审阅，不得声称看过像素或完成视觉/审美验收。"
+            "Python 直连路径可通过 png_base64 附带当前渲染光栅图，实际以 OpenAI text+image_url parts 发送；"
+            "仅接受不超过 20 MiB 的有效 PNG/JPEG Base64 或对应 data URL，明确拒绝 SVG、远程 URL、"
+            "格式不符和损坏数据，不做 SVG 视觉推断。传图也不表示已完成真实账号联网或视觉能力验收。"
+            "有可用模型路径时返回 mode=model，否则回退到离线规则（mode=fallback）。"
+            "build_messages_only=true 是 DSH host 内部保留模式（与 model_response 一样不对 AI 暴露 input_schema 字段）："
+            "先运行 presets.check，再构建全部 content 为字符串的审阅 messages，直接返回 {ok:true,messages}，"
+            "host 可补入限定 scope 的文档上下文后交给自己的文本模型；此模式禁止 png_base64，"
+            "不读取 key、不调用模型、也不在失败时静默回退离线审阅。该返回是待送模型的文本，不是像素或视觉证据。"
+            "自动审阅不证明数据真实性，最终 PDF 仍需逐面板人工检查。"
+            "常规返回：{items:[{severity,target,issue,suggestion,op}], mode}。"
+        ),
+        "output": "{items:[{severity, target, issue, suggestion, op}], mode}；host messages-only 内部模式返回 {messages}",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "doc": {"type": "object", "description": "FigureDocument 对象；结构化审阅的数据范围限于文档中的画布、元素几何/样式/文本、锚点与科学统计等信息，不含像素观察"},
+                "png_base64": {"type": "string", "description": "Python 独立直连路径的可选 PNG/JPEG Base64 或 data URL，最大 20 MiB；拒绝 SVG、远程 URL 和非法数据。DSH 桥不发送图像；不传图仅为结构化审阅，均不能替代真实模型能力与视觉验收；host 内部 messages-only 模式禁止与此字段伴用"},
+                "journal_id": {"type": "string", "description": "按该期刊预设审阅；未知 id 会明确报错"},
+            },
+            "required": ["doc"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "figure_history",
+        "description": "列出文档的可追溯历史（rev/ts/label/source/ops/checkpoint）。返回：{history:[...]}。",
+        "output": "{history:[{rev, ts, label, source, checkpoint, ...}]}",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "doc": {"type": "object", "description": "FigureDocument 对象"},
+            },
+            "required": ["doc"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "figure_revert",
+        "description": "回滚到指定 rev：在历史里追加一条 revert 记录，不丢历史。返回：{doc}。",
+        "output": "{doc}",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "doc": {"type": "object", "description": "FigureDocument 对象"},
+                "rev": {"type": "integer", "description": "目标版本号，见 figure_history"},
+            },
+            "required": ["doc", "rev"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "figure_save_project",
+        "description": "保存工程文件（*.figureproj.json）：doc 的 history 提升到工程顶层，assets 一并写入。返回：{path}。",
+        "output": "{path}",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "doc": {"type": "object", "description": "FigureDocument 对象"},
+                "path": {"type": "string", "description": "工程文件路径，建议扩展名 .figureproj.json"},
+                "assets": {"type": "object", "description": "可选，{名称: 内容} 的资产字典"},
+            },
+            "required": ["doc", "path"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "figure_load_project",
+        "description": "读取工程文件（*.figureproj.json），history 回填进 doc。返回：{doc, history}。",
+        "output": "{doc, history}",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "工程文件路径"},
+            },
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "figure_open_viewer",
+        "description": "启动（或复用）人工复核查看器并返回其 URL；传入 doc 时会把当前文档推给查看器显示。返回：{url}。",
+        "output": "{url}",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "doc": {"type": "object", "description": "可选，要显示的 FigureDocument 对象"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "figure_scientific_contract",
+        "description": (
+            "读取或写入科学论证合同（scientific contract，存于 doc.meta.scientific_contract，"
+            "经桥 FigOps 的 set_scientific_contract 操作应用并保留历史/撤销）。"
+            "contract 省略或为空时为只读查询：不写历史，返回当前合同与统计。"
+            "顶层字段白名单：schema_version/results_question/figure_claim/falsifier/archetype/"
+            "hero_panel/panels/statistics；archetype ∈ quantitative_grid/schematic_led_composite/"
+            "image_plate_quant/asymmetric_mixed；panels=[{element_id,label,sequence,question,"
+            "evidence_role,decisive_comparison,unique_gain,claim_dependency,destination}]，"
+            "evidence_role ∈ setup/example/primary/control/decomposition/stratification/orthogonal/"
+            "perturbation/boundary/mechanistic，destination ∈ main/extended/other/discard；"
+            "statistics 为 element_id → {n_definition,biological_replicates,technical_replicates,"
+            "center,spread,uncertainty_source,uncertainty_column,test,correction,comparison,p_value,"
+            "source_data,unit_x,unit_y} 的映射（spread ∈ SD/SEM/95CI/range，uncertainty_source ∈ "
+            "replicates/column）。所有字段 optional（渐进填写）；非空 contract 是补丁而非整份重置："
+            "省略的顶层字段保留，标量显式 null 清除，panels 出现时整体替换。"
+            "statistics 省略或为 {} 保留现有统计；statistics=null 清除全部 chart 统计；"
+            "statistics[id] 的对象整体替换该图统计，null 或 {} 只清除该图，未列出的图保留。"
+            "真实统计数据唯一来源是各 chart 元素的 chart.statistics，应用时逐条写入对应 chart 并不在 meta 留镜像。"
+            "应用模式返回：{ok, doc, contract, warnings}（server 记一条 set_scientific_contract 历史）；"
+            "查询模式返回：{ok, contract, statistics, doc}。"
+        ),
+        "output": "{ok, doc?, contract, statistics?, warnings?}",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "doc": {"type": "object", "description": "FigureDocument 对象"},
+                "contract": {
+                    "type": "object",
+                    "description": (
+                        "可选。省略或为空 = 只读查询（不写历史）。"
+                        "写入时为科学论证合同对象，字段白名单与取值见工具描述；"
+                        "结构细节由 Python/内核校验，不在 schema 内展开"
+                    ),
+                },
+                "source": {
+                    "type": "string",
+                    "enum": ["user", "ai"],
+                    "description": "可选，历史记录的 actor 来源，默认 user",
+                },
+            },
+            "required": ["doc"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "figure_scientific_audit",
+        "description": (
+            "科学论证审计（确定性规则，不依赖 AI、不伪造结论）：检查 question/claim/falsifier "
+            "缺失、面板 evidence_role/unique_gain 缺口、相同角色无独立增益（review 提示非错误）、"
+            "hero_panel 建议/悬挂/未声明/目标类型错误、多面板无决定性比较 → NOT_AUDITABLE、统计溯源（n/center/spread/"
+            "source_data）、单位缺失、有误差源未申报误差类型、有 p_value 缺 test/correction/"
+            "comparison、字号 5pt 字形下限与数学 script 风险、线宽、元素越界；并明确说明不能从"
+            "颜色/数值/形状推断 SD/SEM/检验或结论。覆盖范围（scope）：误差线渲染仅承诺 bar/"
+            "bar_grouped，其余图型如实标注 not covered（不判 PASS）。返回：{ok, scientific_ready, "
+            "coverage:{question,panels,statistics,hero_panel,final_size}（各值均为 bool；statistics 要求每个有效 chart 独立覆盖），warnings:[{code,message,"
+            "element_id?,severity}], checks?}；severity ∈ error/warning/info，缺证据时 "
+            "scientific_ready=false，绝不假装通过。"
+        ),
+        "output": "{ok, scientific_ready, coverage, warnings, checks?}",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "doc": {"type": "object", "description": "FigureDocument 对象"},
+            },
+            "required": ["doc"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "figure_schematic",
+        "description": "由调用方明确提供的实体—关系 JSON 构建或更新可编辑科研示意图，内部先 FigDiagram.build，再用新增 apply_schematic EditOp 物化到完整历史。合同 {id,nodes,relations,sources,canvas?,layout?}；节点 role=question/method/evidence/conclusion，shape=box/ellipse/cell/molecule/material/process/outcome/sample/device/group/chart；仅显式 kind/shape=chart 声明数据 slot，绝不按 role/entity 转数据，重建保留同 slot chart/用户内容与稳定 id；关系 kind=activate/inhibit/include/associate/sequence，source/target 必须引用已声明节点，include/associate 为无方向容器/并列语义，supports from/to 和 sourceId/targetId 别名但不猜测生物学。返回真实 FigureDocument、warnings、溯源 metadata；连线是原生动态 connector，节点移动后按真实 bbox 重算。相同规范合同结构相同，默认保留同语义节点的手动布局，仅 layout.auto_layout=true 明确重排；提交时间只写 history/meta，不进入 SVG 几何。来源始终 user_provided_unverified，不表示已抓取、科学核实或真实人类复核；preview=true 额外返回实际 SVG。",
+        "output": "{doc,applied,warnings,diagram,status,scientific_validation,human_review,svg?}",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "contract": {"type": "object", "description": "完整实体关系合同，不能是外部代码；schema_version/nodes/relations/sources/layout/source hash 由 runtime 严格校验并全量保存"},
+                "doc": {"type": "object", "description": "可选现有 FigureDocument；省略则新建，现有其他面板/图表会保留"},
+                "preview": {"type": "boolean", "description": "默认 false；true 返回由已提交 doc 生成的实际 SVG"},
+                "source": {"type": "string", "enum": ["user", "ai"], "description": "历史 actor，默认 user"},
+            },
+            "required": ["contract"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "figure_lineage",
+        "description": "返回真实图表字段/0 起始原始行→图元的双向 lookup、数据版本与统计缺口，以及实体/关系/connector 到用户 sources 的定位。lookup 可传 {element_id?,source_row?}；不支持的图型明确 unsupported/partial，未声明 raw SHA 为 unknown，不从 inline rows 冒算原文 hash。返回真实 history 概要、科学复核状态和局限；所有 audit 为本地确定性规则，不执行来源代码，不宣称真实人类视觉或论文验收。",
+        "output": "{status,complete,charts,diagrams,lookup,history,issues,limitations,scientific_validation,human_visual_review,...}",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "doc": {"type": "object", "description": "待审计 FigureDocument"},
+                "lookup": {"type": "object", "description": "可选 {element_id?: string, source_row?: integer>=0}，source_row 从 0 开始"},
+            },
+            "required": ["doc"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "figure_export_bundle",
+        "description": "在明确非空 output_directory 写入可编辑工程、实际 SVG/PNG/JPEG/PDF/TIFF、lineage、result.json 和 manifest。output_contract 按其动态格式/文件名/dpi 请求驱动，原公开字段全部保留；refs/result 中的 apiKey 等凭据必须脱敏，不会读取环境模型配置冒称实际模型。input_source 可为路径、对象或数组，只读取字节以计算实际 SHA-256，可选核对声明 hash，缺失/不一致清楚 partial，不默认复制论文。每个导出件真实解码验证实际格式、像素与 DPI（PDF 校验实际 MediaBox）；不熟扩展名或失败保留 honest partial，不写成功检查。result 含 case_id、source、uncertainty、changes、checks、带 path/sha256 的 artifacts、version、ui_native_result_status、model id/config（仅调用者显式给值，否则 null）及 human_review（默认 null，不冒称 DeepSeek 视觉复核）。旧 figure_export 的默认输出目录和 directory 等级不变。",
+        "output": "{status,output_directory,result_path,manifest_path,case_id,source,sources,uncertainty,changes,checks,artifacts,errors,model,human_review,ui_native_result_status,...}",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "doc": {"type": "object", "description": "要交付的 FigureDocument；不会读取或改写正式 current.figureproj.json"},
+                "output_directory": {"type": "string", "minLength": 1, "description": "明确实际输出目录，可以先不存在；已存在则必须是目录"},
+                "output_contract": {"type": "object", "description": "调用方原生合同；formats/export_formats/exports/artifacts/previews/deliverables 可提供格式字符串或 {format/extension/filename,dpi}，其他公开字段原样保留"},
+                "input_source": {"type": ["array", "object", "string"], "description": "可选 paper/data 的路径、{path,sha256?,locator?} 对象或同类数组；只核对 hash，不执行来源"},
+                "case_id": {"description": "优先于合同 case_id 的调用方标识，缺失为 null，不编造官方案例 ID"},
+                "model_id": {"type": "string", "description": "仅当调用方明确知道运行模型 id 时提供；省略为 null"},
+                "model_config": {"type": "object", "description": "仅调用方明确提供的模型配置；省略为 null，敏感字段脱敏"},
+                "ui_native_result_status": {"description": "宿主 UI 原生结果状态；缺省 not_observed，不映射为自动质量通过"},
+                "human_review": {"type": "object", "description": "用户实际完成的人类复核记录；省略为 null/not performed，不自动生成"},
+            },
+            "required": ["doc", "output_directory"],
+            "additionalProperties": False,
+        },
+    },
+]
+
+
+TOOL_MAP = {t["name"]: t for t in TOOLS}
+
+
+def get_tool(name):
+    """按名称取工具定义，找不到返回 None。"""
+    return TOOL_MAP.get(name)
+
+
+def mcp_tools():
+    """生成 tools/list 的标准 MCP 工具数组（仅标准字段）。"""
+    return [
+        {
+            "name": t["name"],
+            "description": t["description"],
+            "inputSchema": t["input_schema"],
+        }
+        for t in TOOLS
+    ]
+
+
+# ---------------------------------------------------------------------------
+# tools.json 生成（Host 侧 index.js 只读取该 JSON）
+# ---------------------------------------------------------------------------
+
+def build_tools_json():
+    """构造 mcp/tools.json 的内容（与 tools/list 完全同源）。"""
+    return {
+        "source": "mcp/tools_spec.py (single source of truth)",
+        "count": len(TOOLS),
+        "tools": mcp_tools(),
+    }
+
+
+def write_tools_json(path=None):
+    """把 build_tools_json() 写入 tools.json（缺省为同目录），返回路径。"""
+    target = Path(path) if path else Path(__file__).resolve().parent / "tools.json"
+    payload = json.dumps(build_tools_json(), ensure_ascii=False, indent=2)
+    target.write_text(payload, encoding="utf-8")
+    return str(target)
+
+
+if __name__ == "__main__":
+    print(write_tools_json())

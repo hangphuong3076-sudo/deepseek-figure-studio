@@ -1,0 +1,23 @@
+{
+  "name": "figure-drawing",
+  "version": "1.0.0",
+  "description": "科研绘图插件（skill + MCP + 斜杠命令）：按期刊预设建图、用 CSV/JSON/TSV 或 Excel 生成图表、EditOp 自然语言改图、导出 PNG/JPEG/TIFF/PDF/SVG。Python 3.13 + Pillow + PyMuPDF + openpyxl + xlrd + Node 22，无 npm/构建/CDN 依赖，完全自包含。",
+  "skills": ["./skills/figure-drawing"],
+  "mcpServers": {
+    "figure": {
+      "command": "python",
+      "args": ["./mcp/server.py"]
+    }
+  },
+  "commands": ["./commands"],
+  "viewer": {
+    "command": "python",
+    "args": ["./mcp/viewer.py", "--port", "8770"],
+    "url": "http://127.0.0.1:8770/"
+  },
+  "variants": {
+    "A": { "label": "对话创作", "url": "http://127.0.0.1:8770/?variant=A", "note": "AI 优先、简化工具栏" },
+    "B": { "label": "专业编辑", "url": "http://127.0.0.1:8770/?variant=B", "note": "属性优先、全工具" },
+    "C": { "label": "投稿审阅", "url": "http://127.0.0.1:8770/?variant=C", "note": "期刊/审阅/历史/导出优先" }
+  }
+}

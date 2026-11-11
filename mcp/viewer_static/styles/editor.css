@@ -1,0 +1,160 @@
+/* ============================================================
+   editor.css — canvas stage, overlays, anchors, handles.
+   The white page area is #svg-stage (the saved document keeps a
+   white paper background); editing chrome lives in #overlay-layer
+   (drawn by Editor on top of the page).
+   ============================================================ */
+
+/* ---------------- Stage (light-blue workbench surface) ---------------- */
+
+#stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  background-color: var(--bg-workbench);
+  background-image: radial-gradient(rgba(31, 45, 61, 0.12) 1px, transparent 1.4px);
+  background-size: 22px 22px;
+}
+
+/* Cursor hints per active tool; Editor mirrors App.ui.tool on data-tool. */
+#stage[data-tool="select"] { cursor: default; }
+#stage[data-tool="marquee"],
+#stage[data-tool="anchor"],
+#stage[data-tool="rect"],
+#stage[data-tool="ellipse"],
+#stage[data-tool="line"],
+#stage[data-tool="arrow"],
+#stage[data-tool="image"] { cursor: crosshair; }
+#stage[data-tool="text"] { cursor: text; }
+
+/* ---------------- Page & overlay layers ---------------- */
+
+#svg-stage {
+  position: absolute;
+  left: 0;
+  top: 0;
+  background: #fff;
+  box-shadow: var(--shadow-canvas);
+  transform-origin: 0 0;
+}
+
+#overlay-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+/* Handles / interactive chrome inside the overlay opt back in
+   by carrying the .interactive class (the svg itself stays click-through). */
+#overlay-layer .interactive { pointer-events: auto; }
+
+/* ---------------- Selection & transform handles ---------------- */
+
+.selection-box {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1;
+}
+
+.handle {
+  fill: #fff;
+  stroke: var(--accent);
+  stroke-width: 1;
+}
+
+.handle:hover { fill: var(--accent); }
+
+.handle-nw, .handle-se { cursor: nwse-resize; }
+.handle-ne, .handle-sw { cursor: nesw-resize; }
+.handle-n, .handle-s { cursor: ns-resize; }
+.handle-e, .handle-w { cursor: ew-resize; }
+
+.rotate-handle {
+  fill: #fff;
+  stroke: var(--accent);
+  cursor: grab;
+}
+
+.rotate-handle:hover { fill: var(--accent); }
+.rotate-handle:active { cursor: grabbing; }
+
+/* Rubber band while dragging a marquee selection. */
+.marquee-box {
+  fill: rgba(79, 140, 255, 0.12);
+  stroke: var(--accent);
+  stroke-dasharray: 4 2;
+}
+
+/* Alignment / snap guide lines drawn during drag. */
+.guide-line {
+  stroke: #ff8a65;
+  stroke-dasharray: 3 2;
+}
+
+/* ---------------- Anchors (named regions for AI) ---------------- */
+
+.anchor-box {
+  fill: rgba(38, 166, 154, 0.06);
+  stroke: #26a69a;
+  stroke-width: 1;
+  stroke-dasharray: 6 3;
+}
+
+.anchor-box.focused {
+  stroke-width: 2;
+  fill: rgba(38, 166, 154, 0.14);
+}
+
+.anchor-label {
+  font: 10px "Segoe UI", "Microsoft YaHei", sans-serif;
+  fill: #0b6b60;
+}
+
+/* ---------------- In-place text editor (double-click) ---------------- */
+
+.inline-text-editor {
+  position: absolute;
+  z-index: 8;
+  background: #fff;
+  color: #111;
+  border: 1px solid var(--accent);
+  outline: none;
+  padding: 0;
+  resize: none;
+}
+
+/* ---------------- Canvas info overlays ---------------- */
+
+/* Floating badges: top = document size (mm) & DPI, bottom-right = zoom.
+   Hidden while empty so modules only need to fill them when they can. */
+#canvas-info,
+#zoom-badge {
+  position: absolute;
+  z-index: 6;
+  pointer-events: none;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  color: #24313f;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(31, 45, 61, 0.18);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+#canvas-info {
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+#zoom-badge {
+  right: 12px;
+  bottom: 10px;
+}
+
+#canvas-info:empty,
+#zoom-badge:empty { display: none; }

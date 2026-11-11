@@ -1,0 +1,813 @@
+{
+  "version": "1.0",
+  "disclaimer": "配色数据来自公开仓库，已标注来源与许可。原仓库对色值的整理本身可能来自第三方文章，商用前请自行核对。",
+  "fields": {
+    "id": "唯一标识",
+    "name": "显示名",
+    "category": "journal / qualitative / sequential / diverging / categorical / accent",
+    "colors": "hex 数组，按推荐使用顺序排列",
+    "roles": "可选：把颜色映射到语义角色（primary/signal/neutral/accent...）",
+    "source": "出处",
+    "license": "许可"
+  },
+  "palettes": [
+    {
+      "id": "npg",
+      "name": "NPG (Nature 系)",
+      "category": "journal",
+      "colors": [
+        "#E64B35",
+        "#4DBBD5",
+        "#00A087",
+        "#3C5488",
+        "#F39B7F",
+        "#8491B4",
+        "#91D1C2",
+        "#DC0000",
+        "#7E6148",
+        "#B09C85"
+      ],
+      "roles": {
+        "primary": "#3C5488",
+        "signal": "#E64B35",
+        "accent": "#00A087",
+        "neutral": "#8491B4"
+      },
+      "source": "xuhangc/PythonResearchPaperPlot 第1章 图1-2-10；前四色 #E64B35 #4DBBD5 #00A087 #3C5488，其余为 ggsci::pal_npg 常见扩展",
+      "license": "MIT (仓库) / ggsci 原色表"
+    },
+    {
+      "id": "aaas",
+      "name": "AAAS (Science 系)",
+      "category": "journal",
+      "colors": [
+        "#3B4992",
+        "#EE0000",
+        "#008B45",
+        "#631879",
+        "#008280",
+        "#BB0021",
+        "#5F559B",
+        "#A20056",
+        "#808180",
+        "#1B1919"
+      ],
+      "roles": {
+        "primary": "#3B4992",
+        "signal": "#EE0000",
+        "accent": "#008B45",
+        "neutral": "#808180"
+      },
+      "source": "xuhangc/PythonResearchPaperPlot 第1章 图1-2-10；前四色 #3B4992 #EE0000 #008B45 #631879",
+      "license": "MIT (仓库)"
+    },
+    {
+      "id": "nejm",
+      "name": "NEJM",
+      "category": "journal",
+      "colors": [
+        "#BC3C29",
+        "#0072B5",
+        "#E18727",
+        "#20854E",
+        "#7876B1",
+        "#6F99AD",
+        "#FFDC91",
+        "#EE4C97"
+      ],
+      "roles": {
+        "primary": "#0072B5",
+        "signal": "#BC3C29",
+        "accent": "#20854E",
+        "neutral": "#6F99AD"
+      },
+      "source": "xuhangc/PythonResearchPaperPlot 第1章 图1-2-10；前四色",
+      "license": "MIT (仓库)"
+    },
+    {
+      "id": "lancet",
+      "name": "Lancet",
+      "category": "journal",
+      "colors": [
+        "#00468B",
+        "#ED0000",
+        "#42B540",
+        "#0099B4",
+        "#925E9F",
+        "#FDAF91",
+        "#AD002A",
+        "#ADB6B6",
+        "#1B1919"
+      ],
+      "source": "ggsci::pal_lancet（经由 lcpmgh/colors @palettes.csv 整理）",
+      "license": "MIT (lcpmgh/colors)"
+    },
+    {
+      "id": "jco",
+      "name": "JCO",
+      "category": "journal",
+      "colors": [
+        "#0073C2",
+        "#EFC000",
+        "#868686",
+        "#CD534C",
+        "#7AA6DC",
+        "#003C67",
+        "#8F7700",
+        "#3B3B3B",
+        "#A73030",
+        "#4A6990"
+      ],
+      "source": "ggsci::pal_jco（经由 lcpmgh/colors 整理）",
+      "license": "MIT (lcpmgh/colors)"
+    },
+    {
+      "id": "npg-classic",
+      "name": "NPG 经典四色",
+      "category": "journal",
+      "colors": [
+        "#E64B35",
+        "#4DBBD5",
+        "#00A087",
+        "#3C5488"
+      ],
+      "source": "xuhangc/PythonResearchPaperPlot 图1-2-10",
+      "license": "MIT (仓库)"
+    },
+    {
+      "id": "nature-skills-6",
+      "name": "nature-skills 六色",
+      "category": "journal",
+      "colors": [
+        "#2166AC",
+        "#B2182B",
+        "#1B7837",
+        "#F1A340",
+        "#762A83",
+        "#666666"
+      ],
+      "roles": {
+        "primary": "#2166AC",
+        "signal": "#B2182B",
+        "accent": "#1B7837",
+        "neutral": "#666666"
+      },
+      "source": "Yuan1z0825/nature-skills skills/nature-figure/scripts/plot_templates.py PALETTE",
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "show2know-01",
+      "name": "Show2Know 01",
+      "category": "qualitative",
+      "colors": [
+        "#8ECFC9",
+        "#FFBE7A",
+        "#FA7F6F",
+        "#82B0D2",
+        "#BEB8DC",
+        "#E7DAD2"
+      ],
+      "source": "Winn1y/Show2Know 0 Collection and Color/Color/PaperColorTemple.md",
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "show2know-05",
+      "name": "Show2Know 05 (12色)",
+      "category": "qualitative",
+      "colors": [
+        "#1F77B4",
+        "#FF7F0E",
+        "#2CA02C",
+        "#D62728",
+        "#9467BD",
+        "#8C564B",
+        "#E377C2",
+        "#7F7F7F",
+        "#BCBD22",
+        "#17BECF",
+        "#AEC7E8",
+        "#FFBB78"
+      ],
+      "source": "Winn1y/Show2Know PaperColorTemple.md（等价 matplotlib tab20 子集）",
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "okabe-ito",
+      "name": "Okabe-Ito 色盲友好",
+      "category": "qualitative",
+      "colors": [
+        "#0072B2",
+        "#E69F00",
+        "#009E73",
+        "#D55E00",
+        "#CC79A7",
+        "#56B4E9",
+        "#F0E442",
+        "#666666"
+      ],
+      "roles": {
+        "primary": "#0072B2",
+        "signal": "#D55E00",
+        "accent": "#009E73",
+        "neutral": "#666666"
+      },
+      "source": "Okabe & Ito (2008) 公开色板",
+      "license": "public domain"
+    },
+    {
+      "id": "colorbrewer-set2",
+      "name": "ColorBrewer Set2",
+      "category": "qualitative",
+      "colors": [
+        "#66C2A5",
+        "#FC8D62",
+        "#8DA0CB",
+        "#E78AC3",
+        "#A6D854",
+        "#FFD92F",
+        "#E5C494",
+        "#B3B3B3"
+      ],
+      "source": "ColorBrewer 2.0 (Cynthia Brewer)",
+      "license": "Apache-2.0 (ColorBrewer)"
+    },
+    {
+      "id": "colorbrewer-dark2",
+      "name": "ColorBrewer Dark2",
+      "category": "qualitative",
+      "colors": [
+        "#1B9E77",
+        "#D95F02",
+        "#7570B3",
+        "#E7298A",
+        "#66A61E",
+        "#E6AB02",
+        "#A6761D",
+        "#666666"
+      ],
+      "source": "ColorBrewer 2.0",
+      "license": "Apache-2.0 (ColorBrewer)"
+    },
+    {
+      "id": "viridis",
+      "name": "Viridis",
+      "category": "sequential",
+      "colors": [
+        "#440154",
+        "#414487",
+        "#2A788E",
+        "#22A884",
+        "#7AD151",
+        "#FDE725"
+      ],
+      "source": "matplotlib viridis（采样点）",
+      "license": "CC0 / matplotlib BSD"
+    },
+    {
+      "id": "magma",
+      "name": "Magma",
+      "category": "sequential",
+      "colors": [
+        "#000004",
+        "#3B0F70",
+        "#8C2981",
+        "#DE4968",
+        "#FE9F6D",
+        "#FCFDBF"
+      ],
+      "source": "matplotlib magma（采样点）",
+      "license": "CC0 / matplotlib BSD"
+    },
+    {
+      "id": "blues",
+      "name": "Blues",
+      "category": "sequential",
+      "colors": [
+        "#F7FBFF",
+        "#DEEBF7",
+        "#C6DBEF",
+        "#9ECAE1",
+        "#6BAED6",
+        "#4292C6",
+        "#2171B5",
+        "#08519C",
+        "#08306B"
+      ],
+      "source": "ColorBrewer Blues",
+      "license": "Apache-2.0 (ColorBrewer)"
+    },
+    {
+      "id": "rdbu",
+      "name": "RdBu (发散)",
+      "category": "diverging",
+      "colors": [
+        "#67001F",
+        "#B2182B",
+        "#D6604D",
+        "#F4A582",
+        "#FDDBC7",
+        "#F7F7F7",
+        "#D1E5F0",
+        "#92C5DE",
+        "#4393C3",
+        "#2166AC",
+        "#053061"
+      ],
+      "source": "ColorBrewer RdBu",
+      "license": "Apache-2.0 (ColorBrewer)"
+    },
+    {
+      "id": "grayscale",
+      "name": "灰度（黑白印刷安全）",
+      "category": "categorical",
+      "colors": [
+        "#000000",
+        "#404040",
+        "#737373",
+        "#A6A6A6",
+        "#D9D9D9",
+        "#FFFFFF"
+      ],
+      "source": "generic",
+      "license": "public domain"
+    },
+    {
+      "id": "accent-duo",
+      "name": "中性+信号 双色（审阅友好）",
+      "category": "accent",
+      "colors": [
+        "#666666",
+        "#B2182B"
+      ],
+      "roles": {
+        "neutral": "#666666",
+        "signal": "#B2182B"
+      },
+      "source": "nature-skills 配色指导：一中性 + 一信号 + 一强调，禁用红绿与彩虹色",
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "colorbrewer-set1",
+      "name": "ColorBrewer Set1 (9色)",
+      "category": "qualitative",
+      "colors": [
+        "#E41A1C",
+        "#377EB8",
+        "#4DAF4A",
+        "#984EA3",
+        "#FF7F00",
+        "#FFFF33",
+        "#A65628",
+        "#F781BF",
+        "#999999"
+      ],
+      "source": "ColorBrewer 2.0 (Cynthia Brewer, colorbrewer2.org)",
+      "license": "Apache-2.0 (ColorBrewer)"
+    },
+    {
+      "id": "colorbrewer-set3",
+      "name": "ColorBrewer Set3 (12色)",
+      "category": "qualitative",
+      "colors": [
+        "#8DD3C7",
+        "#FFFFB3",
+        "#BEBADA",
+        "#FB8072",
+        "#80B1D3",
+        "#FDB462",
+        "#B3DE69",
+        "#FCCDE5",
+        "#D9D9D9",
+        "#BC80BD",
+        "#CCEBC5",
+        "#FFED6F"
+      ],
+      "source": "ColorBrewer 2.0 (Cynthia Brewer, colorbrewer2.org)",
+      "license": "Apache-2.0 (ColorBrewer)"
+    },
+    {
+      "id": "colorbrewer-paired",
+      "name": "ColorBrewer Paired (12色)",
+      "category": "qualitative",
+      "colors": [
+        "#A6CEE3",
+        "#1F78B4",
+        "#B2DF8A",
+        "#33A02C",
+        "#FB9A99",
+        "#E31A1C",
+        "#FDBF6F",
+        "#FF7F00",
+        "#CAB2D6",
+        "#6A3D9A",
+        "#FFFF99",
+        "#B15928"
+      ],
+      "source": "ColorBrewer 2.0 (Cynthia Brewer, colorbrewer2.org)",
+      "license": "Apache-2.0 (ColorBrewer)"
+    },
+    {
+      "id": "colorbrewer-pastel1",
+      "name": "ColorBrewer Pastel1 (9色)",
+      "category": "qualitative",
+      "colors": [
+        "#FBB4AE",
+        "#B3CDE3",
+        "#CCEBC5",
+        "#DECBE4",
+        "#FED9A6",
+        "#FFFFCC",
+        "#E5D8BD",
+        "#FDDAEC",
+        "#F2F2F2"
+      ],
+      "source": "ColorBrewer 2.0 (Cynthia Brewer, colorbrewer2.org)",
+      "license": "Apache-2.0 (ColorBrewer)"
+    },
+    {
+      "id": "colorbrewer-pastel2",
+      "name": "ColorBrewer Pastel2 (8色)",
+      "category": "qualitative",
+      "colors": [
+        "#B3E2CD",
+        "#FDCDAC",
+        "#CBD5E8",
+        "#F4CAE4",
+        "#E6F5C9",
+        "#FFF2AE",
+        "#F1E2CC",
+        "#CCCCCC"
+      ],
+      "source": "ColorBrewer 2.0 (Cynthia Brewer, colorbrewer2.org)",
+      "license": "Apache-2.0 (ColorBrewer)"
+    },
+    {
+      "id": "colorbrewer-accent",
+      "name": "ColorBrewer Accent (8色)",
+      "category": "qualitative",
+      "colors": [
+        "#7FC97F",
+        "#BEAED4",
+        "#FDC086",
+        "#FFFF99",
+        "#386CB0",
+        "#F0027F",
+        "#BF5B17",
+        "#666666"
+      ],
+      "source": "ColorBrewer 2.0 (Cynthia Brewer, colorbrewer2.org)",
+      "license": "Apache-2.0 (ColorBrewer)"
+    },
+    {
+      "id": "colorbrewer-ylgnbu",
+      "name": "ColorBrewer YlGnBu (顺序)",
+      "category": "sequential",
+      "colors": [
+        "#FFFFD9",
+        "#EDF8B1",
+        "#C7E9B4",
+        "#7FCDBB",
+        "#41B6C4",
+        "#1D91C0",
+        "#225EA8",
+        "#253494",
+        "#081D58"
+      ],
+      "source": "ColorBrewer 2.0 (Cynthia Brewer, colorbrewer2.org)",
+      "license": "Apache-2.0 (ColorBrewer)"
+    },
+    {
+      "id": "colorbrewer-bupu",
+      "name": "ColorBrewer BuPu (顺序)",
+      "category": "sequential",
+      "colors": [
+        "#F7FCFD",
+        "#E0ECF4",
+        "#BFD3E6",
+        "#9EBCDA",
+        "#8C96C6",
+        "#8C6BB1",
+        "#88419D",
+        "#810F7C",
+        "#4D004B"
+      ],
+      "source": "ColorBrewer 2.0 (Cynthia Brewer, colorbrewer2.org)",
+      "license": "Apache-2.0 (ColorBrewer)"
+    },
+    {
+      "id": "colorbrewer-orrd",
+      "name": "ColorBrewer OrRd (顺序)",
+      "category": "sequential",
+      "colors": [
+        "#FFF7EC",
+        "#FEE8C8",
+        "#FDD49E",
+        "#FDBB84",
+        "#FC8D59",
+        "#EF6548",
+        "#D7301F",
+        "#B30000",
+        "#7F0000"
+      ],
+      "source": "ColorBrewer 2.0 (Cynthia Brewer, colorbrewer2.org)",
+      "license": "Apache-2.0 (ColorBrewer)"
+    },
+    {
+      "id": "colorbrewer-pubugn",
+      "name": "ColorBrewer PuBuGn (顺序)",
+      "category": "sequential",
+      "colors": [
+        "#FFF7FB",
+        "#ECE2F0",
+        "#D0D1E6",
+        "#A6BDDB",
+        "#67A9CF",
+        "#3690C0",
+        "#02818A",
+        "#016C59",
+        "#014636"
+      ],
+      "source": "ColorBrewer 2.0 (Cynthia Brewer, colorbrewer2.org)",
+      "license": "Apache-2.0 (ColorBrewer)"
+    },
+    {
+      "id": "colorbrewer-gnbu",
+      "name": "ColorBrewer GnBu (顺序)",
+      "category": "sequential",
+      "colors": [
+        "#F7FCF0",
+        "#E0F3DB",
+        "#CCEBC5",
+        "#A8DDB5",
+        "#7BCCC4",
+        "#4EB3D3",
+        "#2B8CBE",
+        "#0868AC",
+        "#084081"
+      ],
+      "source": "ColorBrewer 2.0 (Cynthia Brewer, colorbrewer2.org)",
+      "license": "Apache-2.0 (ColorBrewer)"
+    },
+    {
+      "id": "colorbrewer-ylorrd",
+      "name": "ColorBrewer YlOrRd (顺序)",
+      "category": "sequential",
+      "colors": [
+        "#FFFFCC",
+        "#FFEDA0",
+        "#FED976",
+        "#FEB24C",
+        "#FD8D3C",
+        "#FC4E2A",
+        "#E31A1C",
+        "#BD0026",
+        "#800026"
+      ],
+      "source": "ColorBrewer 2.0 (Cynthia Brewer, colorbrewer2.org)",
+      "license": "Apache-2.0 (ColorBrewer)"
+    },
+    {
+      "id": "colorbrewer-reds",
+      "name": "ColorBrewer Reds (顺序)",
+      "category": "sequential",
+      "colors": [
+        "#FFF5F0",
+        "#FEE0D2",
+        "#FCBBA1",
+        "#FC9272",
+        "#FB6A4A",
+        "#EF3B2C",
+        "#CB181D",
+        "#A50F15",
+        "#67000D"
+      ],
+      "source": "ColorBrewer 2.0 (Cynthia Brewer, colorbrewer2.org)",
+      "license": "Apache-2.0 (ColorBrewer)"
+    },
+    {
+      "id": "colorbrewer-greens",
+      "name": "ColorBrewer Greens (顺序)",
+      "category": "sequential",
+      "colors": [
+        "#F7FCF5",
+        "#E5F5E0",
+        "#C7E9C0",
+        "#A1D99B",
+        "#74C476",
+        "#41AB5D",
+        "#238B45",
+        "#006D2C",
+        "#00441B"
+      ],
+      "source": "ColorBrewer 2.0 (Cynthia Brewer, colorbrewer2.org)",
+      "license": "Apache-2.0 (ColorBrewer)"
+    },
+    {
+      "id": "colorbrewer-piyg",
+      "name": "ColorBrewer PiYG (发散)",
+      "category": "diverging",
+      "colors": [
+        "#8E0152",
+        "#C51B7D",
+        "#DE77AE",
+        "#F1B6DA",
+        "#FDE0EF",
+        "#F7F7F7",
+        "#E6F5D0",
+        "#B8E186",
+        "#7FBC41",
+        "#4D9221",
+        "#276419"
+      ],
+      "source": "ColorBrewer 2.0 (Cynthia Brewer, colorbrewer2.org)",
+      "license": "Apache-2.0 (ColorBrewer)"
+    },
+    {
+      "id": "colorbrewer-prgn",
+      "name": "ColorBrewer PRGn (发散)",
+      "category": "diverging",
+      "colors": [
+        "#40004B",
+        "#762A83",
+        "#9970AB",
+        "#C2A5CF",
+        "#E7D4E8",
+        "#F7F7F7",
+        "#D9F0D3",
+        "#A6DBA0",
+        "#5AAE61",
+        "#1B7837",
+        "#00441B"
+      ],
+      "source": "ColorBrewer 2.0 (Cynthia Brewer, colorbrewer2.org)",
+      "license": "Apache-2.0 (ColorBrewer)"
+    },
+    {
+      "id": "colorbrewer-brbg",
+      "name": "ColorBrewer BrBG (发散)",
+      "category": "diverging",
+      "colors": [
+        "#543005",
+        "#8C510A",
+        "#BF812D",
+        "#DFC27D",
+        "#F6E8C3",
+        "#F5F5F5",
+        "#C7EAE5",
+        "#80CDC1",
+        "#35978F",
+        "#01665E",
+        "#003C30"
+      ],
+      "source": "ColorBrewer 2.0 (Cynthia Brewer, colorbrewer2.org)",
+      "license": "Apache-2.0 (ColorBrewer)"
+    },
+    {
+      "id": "colorbrewer-puor",
+      "name": "ColorBrewer PuOr (发散)",
+      "category": "diverging",
+      "colors": [
+        "#7F3B08",
+        "#B35806",
+        "#E08214",
+        "#FDB863",
+        "#FEE0B6",
+        "#F7F7F7",
+        "#D8DAEB",
+        "#B2ABD2",
+        "#8073AC",
+        "#542788",
+        "#2D004B"
+      ],
+      "source": "ColorBrewer 2.0 (Cynthia Brewer, colorbrewer2.org)",
+      "license": "Apache-2.0 (ColorBrewer)"
+    },
+    {
+      "id": "colorbrewer-rdylgn",
+      "name": "ColorBrewer RdYlGn (发散)",
+      "category": "diverging",
+      "colors": [
+        "#A50026",
+        "#D73027",
+        "#F46D43",
+        "#FDAE61",
+        "#FEE08B",
+        "#FFFFBF",
+        "#D9EF8B",
+        "#A6D96A",
+        "#66BD63",
+        "#1A9850",
+        "#006837"
+      ],
+      "source": "ColorBrewer 2.0 (Cynthia Brewer, colorbrewer2.org)",
+      "license": "Apache-2.0 (ColorBrewer)"
+    },
+    {
+      "id": "colorbrewer-spectral",
+      "name": "ColorBrewer Spectral (发散)",
+      "category": "diverging",
+      "colors": [
+        "#9E0142",
+        "#D53E4F",
+        "#F46D43",
+        "#FDAE61",
+        "#FEE08B",
+        "#FFFFBF",
+        "#E6F598",
+        "#ABDDA4",
+        "#66C2A5",
+        "#3288BD",
+        "#5E4FA2"
+      ],
+      "source": "ColorBrewer 2.0 (Cynthia Brewer, colorbrewer2.org)",
+      "license": "Apache-2.0 (ColorBrewer)"
+    },
+    {
+      "id": "jama",
+      "name": "JAMA",
+      "category": "journal",
+      "colors": [
+        "#374E55",
+        "#DF8F44",
+        "#00A1D5",
+        "#B24745",
+        "#79AF97",
+        "#6A6599",
+        "#80796B"
+      ],
+      "source": "ggsci::pal_jama（经由 lcpmgh/colors @palettes.csv 整理）",
+      "license": "MIT (lcpmgh/colors)"
+    },
+    {
+      "id": "tol-bright",
+      "name": "Paul Tol Bright (色盲友好)",
+      "category": "qualitative",
+      "colors": [
+        "#4477AA",
+        "#EE6677",
+        "#228833",
+        "#CCBB44",
+        "#66CCEE",
+        "#AA3377",
+        "#BBBBBB"
+      ],
+      "source": "Paul Tol, SRON technical note (Colour Schemes)",
+      "license": "custom permissive (Paul Tol)"
+    },
+    {
+      "id": "tol-muted",
+      "name": "Paul Tol Muted (色盲友好)",
+      "category": "qualitative",
+      "colors": [
+        "#332288",
+        "#88CCEE",
+        "#44AA99",
+        "#117733",
+        "#999933",
+        "#DDCC77",
+        "#CC6677",
+        "#882255",
+        "#AA4499",
+        "#DDDDDD"
+      ],
+      "source": "Paul Tol, SRON technical note (Colour Schemes)",
+      "license": "custom permissive (Paul Tol)"
+    },
+    {
+      "id": "colorbrewer-greys",
+      "name": "ColorBrewer Greys (顺序)",
+      "category": "sequential",
+      "colors": [
+        "#FFFFFF",
+        "#F0F0F0",
+        "#D9D9D9",
+        "#BDBDBD",
+        "#969696",
+        "#737373",
+        "#525252",
+        "#252525",
+        "#000000"
+      ],
+      "source": "ColorBrewer 2.0 (Cynthia Brewer, colorbrewer2.org)",
+      "license": "Apache-2.0 (ColorBrewer)"
+    },
+    {
+      "id": "colorbrewer-purples",
+      "name": "ColorBrewer Purples (顺序)",
+      "category": "sequential",
+      "colors": [
+        "#FCFBFD",
+        "#EFEDF5",
+        "#DADAEB",
+        "#BCBDDC",
+        "#9E9AC8",
+        "#807DBA",
+        "#6A51A3",
+        "#54278F",
+        "#3F007D"
+      ],
+      "source": "ColorBrewer 2.0 (Cynthia Brewer, colorbrewer2.org)",
+      "license": "Apache-2.0 (ColorBrewer)"
+    }
+  ]
+}

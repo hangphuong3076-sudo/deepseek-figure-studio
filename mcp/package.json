@@ -1,0 +1,6 @@
+{
+  "name": "dsh-figure-studio-mcp",
+  "private": true,
+  "type": "commonjs",
+  "description": "作用域标记：mcp/bridge.js 是 CommonJS，需覆盖外层 bundle 根 package.json 的 type:module。"
+}

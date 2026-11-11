@@ -1,0 +1,36 @@
+{
+  "name": "dsh-figure-studio",
+  "version": "1.0.0",
+  "description": "科研绘图工作台（DeepSeek Harness 插件 bundle）：AI 建图/改图/审阅 + 左画布右对话可视化工作台 + 期刊规范 + 可追溯历史 + PNG/JPG/TIFF/PDF/SVG 导出。",
+  "type": "module",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "mcp",
+    "presets",
+    "commands",
+    "skills",
+    "examples",
+    "start-viewer.bat",
+    "start-native-viewer.bat"
+  ],
+  "engines": {
+    "dsh": ">=0.2.0-rc.2"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-tools": "*",
+    "@deepseek-ai/schemastery": "*"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": ["@deepseek-ai/dsh-client-ui-settings"]
+    }
+  }
+}

@@ -1,0 +1,23 @@
+# cordis.patch.yml — dsh-figure-studio bundle layer.
+#
+# DSH 会按 bundle 在 profile 中的顺序应用本层；行按 id 覆盖/插入。
+# 插件行 name 必须写裸包名（dsh-figure-studio），这样 Node 能解析到安装的
+# index.js，同时 client 浏览器半（package.json 的 dsh.client）也会挂到这一行。
+- insert:
+    - id: figure-studio
+      name: dsh-figure-studio
+      config:
+        # python 解释器：留空则按 python / python3 自动探测
+        python: ''
+        # 可视化工作台端口（figure_open_viewer / start-viewer 使用）
+        viewerPort: 8770
+        # 插件加载时是否随之一同启动可视化双栏工作台（默认 true）
+        startViewer: true
+        # 窗口 AI 面板复用 DSH DeepSeek 的本机 llm 桥端口（默认 8771）
+        llmBridgePort: 8771
+        # 留空就复用 DSH 当前选中的模型；两者须同时填写才能覆盖
+        provider: ''
+        model: ''
+        maxTokens: 8192
+        # 可选：DeepSeek API key 文件路径（优先于环境变量 DEEPSEEK_API_KEY）
+        deepseekKeyFile: ''
