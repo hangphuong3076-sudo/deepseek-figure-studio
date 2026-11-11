@@ -9,6 +9,41 @@
 
 本插件**自带可视化双栏工作台**（`mcp/viewer.py` + `mcp/viewer_static/`）：**左边是可拖拽/编辑的 SVG 画布，右边是 AI 对话面板**（自然语言改图 + AI 审阅 + 锚点/图层/属性/模板/期刊/历史/工程 9 个标签页），类 Illustrator 的直接操作（点选/框选/拖动/缩放/旋转/编组/对齐/文字/图片）。启动方式见下文「可视化工作台」。
 
+![工作台截图](images/workbench.png)
+
+## 特性
+
+- **SVG 逐元素导入**：图形/文本/路径/分组分别成为可编辑图元；支持移动、改色、改字号、图层与历史，默认清理脚本、事件属性和外部引用；复杂滤镜等会明确提示简化；
+- **可调整双栏与淡蓝工作区**：拖动中间分隔手柄改变左右宽度，重开保持，支持键盘方向键与双击复位；工作区使用淡蓝色，文档纸面仍保持白色；
+- **图表拆分为图元**：选中图表后点「拆为图元」，柱子、坐标轴、文字、图例分别可编辑；原始 spec/data 保存在新分组的 `source_chart` 中，可撤销完整恢复；
+
+- **期刊预设**：28 套（Nature / Science / Cell / IEEE / Elsevier / ACS / PNAS / 学位论文 / 海报 / 幻灯…），自动设定栏宽画布、基准字号、推荐 DPI；
+- **模板推荐与能力标注**：60 个模板概念/表征/复合模板，不是 60 种真实渲染器。按 FigData/真实 FigDiagram builder 分为 27 `full`、12 `layout`、21 `unsupported`；示意图原始参数不会自动关联数据；默认推荐与展示排除 unsupported，空版式明确“不自动填图”，unsupported 只能预览且禁止应用；可按「表征」筛选，按数据列名推荐；
+- **表征绘图**：XPS 全谱/高分辨拟合/双区域，Raman 单谱/多谱，XRD、FTIR、UV–Vis/PL、NMR、EIS、CV、应力应变、粒径分布。支持真实轴方向与单位、用户拟合/基线/组分曲线、峰标注、声明式归一化与叠加偏移、log10 守卫；曲线都由真实 CSV 列绘制，原始行不因归一化、偏移或参数修改而改变；
+- **配色**：43 套（期刊 / ColorBrewer / Okabe-Ito / Paul Tol / viridis…），提供真实色块预览和分类浏览，支持 `byOrder/byHue/byRole` 重着色；
+- **自然语言改图**：一切变更以 EditOp 数组经校验后应用，整批应用、可追溯、可回滚（`figure_history` / `figure_revert`）；
+- **编号选框定位**：用「锚点」工具连续框选多个区域，自动在 AI 输入框追加 `[1]`、`[2]`，已经输入指令也不会吞掉后续编号；输入“把1的字号改成 8pt、把2移到右上”会精确路由到对应局部，支持联合指令与清除引用；
+- **常驻 AI 对话区**：右栏下半部分固定显示 AI，可自然语言讨论当前图形、局部修改与审阅；上半栏继续保留工具与属性。上下高度可拖动并保存。不是新建 DSH agent 会话；
+- **右键发送给 AI**：在画布上选中元素或框选区域后，右键选择「发送给 AI」，会创建/复用对应原生锚点，并在下栏追加编号及坐标，不重复生成历史；
+- **AI 阶段进度**：收集文档、等待模型、流式返回及拆分为待应用操作时显示真实阶段与字符/增量数，失败显示原因；点击“应用”才提交修改，不把生成预览误写成已完成；
+- **自定义画布**：设置中直接输入宽高（mm），可等比调整现有图形与编号选框，原始数据、字号 pt 和 DPI 不变；也可只调整画布、保留原布局；
+- **AI 零 key（DSH 内，工具 + 窗口）**：复用 DSH 的 `ctx.llm` 与本机 `llm 桥`，当前桥是**文本聊天**路径，不转换附图；
+  `figure_review` 依据结构化文档和规则生成意见，不把不支持附图的文本审阅冒称为视觉/审美验收。
+  现有 7 个 multimodal 单测只验证模拟 HTTP 的消息角色、`image_url` 结构、PNG/JPEG 校验和错误分支，**未发送真实模型请求，不能作为视觉质量或真实账号多模态能力证明**。视觉直连仍须用用户实际模型与账号另测；
+  独立窗口/MCP 可配置 key 或 `proxyUrl`，无 key 时明确回退到离线规则；
+- **统一导出链与范围**：服务端 MCP/HTTP 的 SVG/PNG/JPEG/TIFF/PDF 都以同一份 canonical `FigRender` SVG 为唯一真源；SVG 直接输出，PDF 与栅格化由 PyMuPDF 完成（PDF 保留矢量路径，浏览器本地 PDF 回退仍是栅格单页）。
+  Pillow 只负责位图编码与尺寸/DPI 校验。位图/PDF 导出需要 PyMuPDF 与 Pillow，本机实测 PyMuPDF 1.27.2.2；
+  依赖见 `INSTALL.md`。TIFF 写 282/283 标签，PDF MediaBox 来自导出范围的 mm→pt。
+  `panel_id` 可参照一个 `type=panel` 或 `type=chart` 元素。panel 导出只含该 panel 及后代，范围含完整 transform 与 padding，不带画布 bleed；top-left/top-right 外置标签向上扩 0.6mm + 一个标签字号，below 标签向下扩 1.2 个字号。chart 子图导出复用完整 canonical SVG，仅修改根 `width/height/viewBox` 为该 chart 的实际 mm 范围，不改源 doc、canvas、data、映射或图元坐标；画幅外矢量可以保留在 SVG 中，但 PNG/PDF 最终画幅不得混入另一 chart。
+  未知 id、`rect`/`group` 等其他类型、重复 id 或不可见元素均精确拒绝，不回退整图。默认文件名区分 `_panel-id` 与 `_chart-id`，MCP `px` 与 PNG 尺寸均从裁后物理 root 计算，PDF MediaBox 使用相同范围。**透明仅用于 PNG**，只去默认画布底色，保留显式白色图元；其他格式不会暗中改成透明。未绑定数据、未知图型或真实渲染异常必须导出失败，不再以“需 v2”占位图报告成功。
+  自动检查不等于数据真实性、字体或视觉出版验收；
+- **Excel 工作簿真实导入**：「导入数据」真实接受 .xlsx/.xlsm/.xls（不支持 .xlsb）；GUI 用 `File.arrayBuffer` 或 `readAsArrayBuffer` 分块转 Base64，POST 到本机 `POST /api/import-spreadsheet`，不把二进制交给 CSV parser。先在模板推荐前显示文件名、工作表、1 起始表头行、列统计、前几行和 notices；切换工作表/表头重读只更新预览，不写画布或历史。用户确认后经现有 `App.commit` 一次导入，note 记录文件名、工作表、表头行和 SHA-256，绘图使用已选 rows。
+  .xlsx/.xlsm 由 openpyxl 只读打开且不加载外部链接，.xls 由 xlrd 读取 BIFF 存储值；数字和布尔值保持类型。**不执行宏或公式**，OOXML 公式只取保存的缓存，缺缓存置空并在 notices 中给出单元格位置（超过 50 个才截断）；旧 .xls 无法提供逐公式缓存诊断，不隐瞒这一边界。无需模型或 API key，单工作簿限 20 MiB，并限制行列/单元格和 XML 解压资源。**没有 XLSX 导出能力**。
+- **静态导入边界**：SVG 静态置入是“先 sanitize，再 rasterize 为 PNG”，不把原始标记挂到活动 DOM。
+  若引入 HTML 静态导入，也必须沿用“先 sanitize、后 rasterize”的隔离链，HTML 不得直接执行或作为活动 DOM/远程资源嵌入。
+  旧 Pillow-only renderer 仅为显式调用旧 `document-to-image` API 的兼容保留，其有限图型和占位输出不属于 canonical SVG 能力表，也不是正式导出的回退。
+- **自包含**：`mcp/lib/`（JS 内核）、`mcp/py/`（光栅器 + 工程读写）、`presets/` 与全部编辑器功能均打包在插件内，拷走即用；无需从网络下载模板或图片资源。
+
 ## 科学论证工作流
 
 在「论证」标签页先填写整图的科学问题、图级结论和反证条件，再为每个面板填写证据角色、决定性比较、独立推断增益与目的地。面板按 a、b、c… 的阅读顺序组织，但不机械分配 a=示意、d=验证；主图由关键证据决定。所有声明经 `set_scientific_contract` 写入历史和工程，可撤销恢复。
@@ -54,39 +89,6 @@ AI、模板调用及 `apply_template` EditOp 也必须经过同一能力校验�
 
 EIS Nyquist 使用用户提供的 Z′ 与**已取负的** −Z″ 列，按真实单位标注坐标；横纵轴采用相同 px/Ω 比例，较窄方向只扩展显示数据域，不非等比拉伸数据。原始 CSV 行不被取负以外的后处理、等比换算或拟合改写，插件也不擅自做等效电路拟合。Bode 频率轴使用 log10；非正频率不计入并明确提示排除数。
 
-## 特性
-
-- **SVG 逐元素导入**：图形/文本/路径/分组分别成为可编辑图元；支持移动、改色、改字号、图层与历史，默认清理脚本、事件属性和外部引用；复杂滤镜等会明确提示简化；
-- **可调整双栏与淡蓝工作区**：拖动中间分隔手柄改变左右宽度，重开保持，支持键盘方向键与双击复位；工作区使用淡蓝色，文档纸面仍保持白色；
-- **图表拆分为图元**：选中图表后点「拆为图元」，柱子、坐标轴、文字、图例分别可编辑；原始 spec/data 保存在新分组的 `source_chart` 中，可撤销完整恢复；
-
-- **期刊预设**：28 套（Nature / Science / Cell / IEEE / Elsevier / ACS / PNAS / 学位论文 / 海报 / 幻灯…），自动设定栏宽画布、基准字号、推荐 DPI；
-- **模板推荐与能力标注**：60 个模板概念/表征/复合模板，不是 60 种真实渲染器。按 FigData/真实 FigDiagram builder 分为 27 `full`、12 `layout`、21 `unsupported`；示意图原始参数不会自动关联数据；默认推荐与展示排除 unsupported，空版式明确“不自动填图”，unsupported 只能预览且禁止应用；可按「表征」筛选，按数据列名推荐；
-- **表征绘图**：XPS 全谱/高分辨拟合/双区域，Raman 单谱/多谱，XRD、FTIR、UV–Vis/PL、NMR、EIS、CV、应力应变、粒径分布。支持真实轴方向与单位、用户拟合/基线/组分曲线、峰标注、声明式归一化与叠加偏移、log10 守卫；曲线都由真实 CSV 列绘制，原始行不因归一化、偏移或参数修改而改变；
-- **配色**：43 套（期刊 / ColorBrewer / Okabe-Ito / Paul Tol / viridis…），提供真实色块预览和分类浏览，支持 `byOrder/byHue/byRole` 重着色；
-- **自然语言改图**：一切变更以 EditOp 数组经校验后应用，整批应用、可追溯、可回滚（`figure_history` / `figure_revert`）；
-- **编号选框定位**：用「锚点」工具连续框选多个区域，自动在 AI 输入框追加 `[1]`、`[2]`，已经输入指令也不会吞掉后续编号；输入“把1的字号改成 8pt、把2移到右上”会精确路由到对应局部，支持联合指令与清除引用；
-- **常驻 AI 对话区**：右栏下半部分固定显示 AI，可自然语言讨论当前图形、局部修改与审阅；上半栏继续保留工具与属性。上下高度可拖动并保存。不是新建 DSH agent 会话；
-- **右键发送给 AI**：在画布上选中元素或框选区域后，右键选择「发送给 AI」，会创建/复用对应原生锚点，并在下栏追加编号及坐标，不重复生成历史；
-- **AI 阶段进度**：收集文档、等待模型、流式返回及拆分为待应用操作时显示真实阶段与字符/增量数，失败显示原因；点击“应用”才提交修改，不把生成预览误写成已完成；
-- **自定义画布**：设置中直接输入宽高（mm），可等比调整现有图形与编号选框，原始数据、字号 pt 和 DPI 不变；也可只调整画布、保留原布局；
-- **AI 零 key（DSH 内，工具 + 窗口）**：复用 DSH 的 `ctx.llm` 与本机 `llm 桥`，当前桥是**文本聊天**路径，不转换附图；
-  `figure_review` 依据结构化文档和规则生成意见，不把不支持附图的文本审阅冒称为视觉/审美验收。
-  现有 7 个 multimodal 单测只验证模拟 HTTP 的消息角色、`image_url` 结构、PNG/JPEG 校验和错误分支，**未发送真实模型请求，不能作为视觉质量或真实账号多模态能力证明**。视觉直连仍须用用户实际模型与账号另测；
-  独立窗口/MCP 可配置 key 或 `proxyUrl`，无 key 时明确回退到离线规则；
-- **统一导出链与范围**：服务端 MCP/HTTP 的 SVG/PNG/JPEG/TIFF/PDF 都以同一份 canonical `FigRender` SVG 为唯一真源；SVG 直接输出，PDF 与栅格化由 PyMuPDF 完成（PDF 保留矢量路径，浏览器本地 PDF 回退仍是栅格单页）。
-  Pillow 只负责位图编码与尺寸/DPI 校验。位图/PDF 导出需要 PyMuPDF 与 Pillow，本机实测 PyMuPDF 1.27.2.2；
-  依赖见 `INSTALL.md`。TIFF 写 282/283 标签，PDF MediaBox 来自导出范围的 mm→pt。
-  `panel_id` 可参照一个 `type=panel` 或 `type=chart` 元素。panel 导出只含该 panel 及后代，范围含完整 transform 与 padding，不带画布 bleed；top-left/top-right 外置标签向上扩 0.6mm + 一个标签字号，below 标签向下扩 1.2 个字号。chart 子图导出复用完整 canonical SVG，仅修改根 `width/height/viewBox` 为该 chart 的实际 mm 范围，不改源 doc、canvas、data、映射或图元坐标；画幅外矢量可以保留在 SVG 中，但 PNG/PDF 最终画幅不得混入另一 chart。
-  未知 id、`rect`/`group` 等其他类型、重复 id 或不可见元素均精确拒绝，不回退整图。默认文件名区分 `_panel-id` 与 `_chart-id`，MCP `px` 与 PNG 尺寸均从裁后物理 root 计算，PDF MediaBox 使用相同范围。**透明仅用于 PNG**，只去默认画布底色，保留显式白色图元；其他格式不会暗中改成透明。未绑定数据、未知图型或真实渲染异常必须导出失败，不再以“需 v2”占位图报告成功。
-  自动检查不等于数据真实性、字体或视觉出版验收；
-- **Excel 工作簿真实导入**：「导入数据」真实接受 .xlsx/.xlsm/.xls（不支持 .xlsb）；GUI 用 `File.arrayBuffer` 或 `readAsArrayBuffer` 分块转 Base64，POST 到本机 `POST /api/import-spreadsheet`，不把二进制交给 CSV parser。先在模板推荐前显示文件名、工作表、1 起始表头行、列统计、前几行和 notices；切换工作表/表头重读只更新预览，不写画布或历史。用户确认后经现有 `App.commit` 一次导入，note 记录文件名、工作表、表头行和 SHA-256，绘图使用已选 rows。
-  .xlsx/.xlsm 由 openpyxl 只读打开且不加载外部链接，.xls 由 xlrd 读取 BIFF 存储值；数字和布尔值保持类型。**不执行宏或公式**，OOXML 公式只取保存的缓存，缺缓存置空并在 notices 中给出单元格位置（超过 50 个才截断）；旧 .xls 无法提供逐公式缓存诊断，不隐瞒这一边界。无需模型或 API key，单工作簿限 20 MiB，并限制行列/单元格和 XML 解压资源。**没有 XLSX 导出能力**。
-- **静态导入边界**：SVG 静态置入是“先 sanitize，再 rasterize 为 PNG”，不把原始标记挂到活动 DOM。
-  若引入 HTML 静态导入，也必须沿用“先 sanitize、后 rasterize”的隔离链，HTML 不得直接执行或作为活动 DOM/远程资源嵌入。
-  旧 Pillow-only renderer 仅为显式调用旧 `document-to-image` API 的兼容保留，其有限图型和占位输出不属于 canonical SVG 能力表，也不是正式导出的回退。
-- **自包含**：`mcp/lib/`（JS 内核）、`mcp/py/`（光栅器 + 工程读写）、`presets/` 与全部编辑器功能均打包在插件内，拷走即用；无需从网络下载模板或图片资源。
-
 ## 目录结构
 
 ```
@@ -107,6 +109,7 @@ deepseek-figure-bundle/
 │   └── figure-viewer.md       # /figure-viewer     打开可视化工作台
 ├── presets/                # journals / palettes / templates 预设
 ├── examples/sample.csv     # 样例数据（端到端示例用）
+├── images/workbench.png    # README 工作台截图
 ├── start-native-viewer.bat # 一键打开「原生窗口」工作台（无需浏览器，Windows）
 ├── start-viewer.bat        # 旧方式：一键打开浏览器网页（Windows）
 └── mcp/                    # 后端：MCP 服务器 + 可视化工作台
