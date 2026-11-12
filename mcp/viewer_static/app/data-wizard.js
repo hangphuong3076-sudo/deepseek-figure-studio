@@ -59,7 +59,8 @@
         else if (k === 'checked') el.checked = !!v;
         else if (k === 'disabled') el.disabled = !!v;
         else if (k.slice(0, 2) === 'on' && typeof v === 'function') {
-          el.addEventListener(k.slice(2), v);
+          // 事件类型大小写敏感：onClick/onclick 一律注册为小写事件名
+          el.addEventListener(String(k.slice(2)).toLowerCase(), v);
         } else el.setAttribute(k, v);
       });
     }

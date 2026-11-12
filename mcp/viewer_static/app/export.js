@@ -434,6 +434,8 @@
       warnLine: null,
       filenameInput: null,
       filenameDirty: false,
+      saveModeDownloadRadio: null,
+      saveModeDirRadio: null,
       progressArea: null,
       progressText: null,
       exportBtn: null,
@@ -545,6 +547,45 @@
     });
     filenameInput.type = "text";
     panel.appendChild(filenameInput);
+
+    // --- R07/R08 保存方式：浏览器下载（默认）或服务端直接写入本机文件夹 ---
+    // 受限窗口（内嵌浏览器）下载可能不落地；写盘模式走同一 canonical SVG
+    // + figraster 服务端链，任何窗口可用，产物在用户数据目录 exports/ 下。
+    panel.appendChild(el("div", { fontWeight: "bold", margin: "10px 0 4px" }, "保存方式"));
+    var saveModeRow = el("div", { display: "flex", gap: "14px", flexWrap: "wrap", margin: "4px 0 0" });
+    var dlRadio = el("input"); dlRadio.type = "radio"; dlRadio.name = "export-save-mode";
+    var dirRadio = el("input"); dirRadio.type = "radio"; dirRadio.name = "export-save-mode";
+    var SAVE_MODE_KEY = "figstudio.export.saveMode";
+    try {
+      var savedMode = G.localStorage.getItem(SAVE_MODE_KEY);
+      dirRadio.checked = savedMode === "dir";
+      dlRadio.checked = savedMode !== "dir";
+    } catch (e) { dlRadio.checked = true; }
+    function rememberMode() {
+      try { G.localStorage.setItem(SAVE_MODE_KEY, dirRadio.checked ? "dir" : "download"); }
+      catch (e2) { /* localStorage 不可用时保持默认 */ }
+    }
+    dlRadio.addEventListener("change", rememberMode);
+    dirRadio.addEventListener("change", rememberMode);
+    // 注意：el(tag, style, text) 第三参是文本，不能传子节点数组——手动组装
+    var dlLabel = el("label", { display: "flex", gap: "5px", alignItems: "center", cursor: "pointer" });
+    dlLabel.appendChild(dlRadio);
+    dlLabel.appendChild(el("span", null, "浏览器下载"));
+    saveModeRow.appendChild(dlLabel);
+    var dirLabel = el("label", { display: "flex", gap: "5px", alignItems: "center", cursor: "pointer" });
+    dirLabel.appendChild(dirRadio);
+    dirLabel.appendChild(el("span", null, "保存到本机文件夹（受限窗口可用）"));
+    saveModeRow.appendChild(dirLabel);
+    panel.appendChild(saveModeRow);
+    var dirHint = el("div", {
+      color: "#555", fontSize: "11px", margin: "4px 0 0", lineHeight: "1.5"
+    }, "写盘模式：文件保存到用户数据目录 exports/ 文件夹（导出后显示完整路径），同名自动加序号不覆盖。");
+    dirHint.style.display = dirRadio.checked ? "block" : "none";
+    dirRadio.addEventListener("change", function () { dirHint.style.display = dirRadio.checked ? "block" : "none"; });
+    dlRadio.addEventListener("change", function () { dirHint.style.display = dirRadio.checked ? "none" : "block"; });
+    panel.appendChild(dirHint);
+    ui.saveModeDownloadRadio = dlRadio;
+    ui.saveModeDirRadio = dirRadio;
 
     // --- warning line ---
     var warnLine = el("div", {
@@ -892,6 +933,41 @@
       }
     }
     ui.setBusy(true);
+    // R07/R08：写盘模式 → 服务端 canonical 链直接保存到 exports/ 并回显路径
+    if (ui.saveModeDirRadio && ui.saveModeDirRadio.checked && typeof G.fetch === "function") {
+      try { ui.stage("正在通过服务端导出到文件夹…"); } catch (e) { /* ignore */ }
+      G.fetch("/api/export-to-dir", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          doc: doc,
+          format: opts.format,
+          dpi: opts.dpi,
+          panel_id: opts.panel_id || null,
+          transparent: opts.transparent === true,
+          filename: opts.filename.trim()
+        })
+      }).then(function (r) { return r.json(); }).then(function (j) {
+        ui.setBusy(false);
+        if (!j || j.ok !== true) throw new Error((j && j.error) || "服务端导出失败");
+        ui.lastExport = { format: opts.format, filename: j.path, bytes: j.bytes, path: j.path };
+        if (state.dialog) {
+          ui.progressArea.style.display = "block";
+          ui.progressText.style.whiteSpace = "pre-wrap";
+          ui.progressText.style.overflowWrap = "anywhere";
+          ui.progressText.textContent = "已保存到本机：\n" + j.path +
+            "（" + formatBytes(j.bytes) + "）";
+        }
+        notify("已导出到 " + j.path + "（" + formatBytes(j.bytes) + "）", { type: "success", ms: 9000 });
+      }, function (err) {
+        ui.setBusy(false);
+        notifyError("服务端导出失败：" + (err && err.message ? err.message : String(err)));
+      }).catch(function (err2) {
+        ui.setBusy(false);
+        notifyError("服务端导出失败：" + (err2 && err2.message ? err2.message : String(err2)));
+      });
+      return;
+    }
     doExport(doc, opts.format, {
       dpi: opts.dpi,
       quality: opts.quality,

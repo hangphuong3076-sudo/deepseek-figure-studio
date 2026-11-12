@@ -1499,7 +1499,12 @@
       panelEl.appendChild(b);
       return b;
     }
-    btn('导入数据', function () { openData(); });
+    btn('导入数据', function () {
+      try { openData(); } catch (err) { toastError('打开文件选择失败：' + err.message); }
+    });
+    btn('粘贴数据', function () {
+      try { openDataPaste(); } catch (err) { toastError('打开粘贴导入失败：' + err.message); }
+    }).title = '直接粘贴 CSV/TSV/JSON 文本建图（不依赖文件选择框）';
     btn('导入图片', function () { openImage(); }).title =
       '置入为位图图层；不做 OCR/图表识别，不自动仿绘或恢复原始数据';
     btn('导入 SVG', function () { openSvg(); });
@@ -1521,7 +1526,56 @@
         applyDataFile(file, cb);
       });
     input.click();
+    // 受限环境（如内嵌浏览器）可能不弹文件选择框：给出可操作的替代路径，
+    // 而不是静默失败。用户可能仍在选文件，所以 6 秒后仅提示一次、非错误语气。
+    setTimeout(function () {
+      if (!input.files || !input.files.length) {
+        toast('如果刚才没有弹出文件选择框：当前窗口可能不支持选择本地文件，' +
+          '可改点「粘贴数据」直接贴入 CSV/JSON，或用 start-native-viewer.bat 打开独立窗口',
+          { type: 'info', ms: 9000 });
+      }
+    }, 6000);
     return input;
+  }
+
+  // Import.openDataPaste(cb?) — 粘贴 CSV/TSV/JSON 文本建图（不依赖文件
+  // 选择对话框；受限环境与快速试用均可走此路径，与文件导入同一解析/向导链）。
+  function openDataPaste(cb) {
+    requireApp();
+    var area = h('textarea', {
+      'data-role': 'paste-data-area',
+      placeholder: '在此粘贴 CSV / TSV / JSON 文本（第一行为表头）…\n' +
+        '例如：\ncondition,value_a,value_b\nctrl,1.2,10.1\ntreat,2.1,20.3',
+      style: 'width:100%;height:180px;box-sizing:border-box;font-family:monospace;' +
+        'font-size:12px;padding:6px;border:1px solid #bbb;border-radius:4px;resize:vertical;'
+    });
+    openModal({
+      title: '粘贴数据建图',
+      body: h('div', {}, [
+        area,
+        h('div', {
+          text: '解析与文件导入完全一致（自动探测分隔符）；来源按「粘贴文本」记录。' +
+            'Excel 二进制文件请使用「导入数据」文件方式。',
+          style: 'font-size:11px;color:#666;margin-top:6px;'
+        })
+      ]),
+      actions: [
+        { label: '取消' },
+        {
+          label: '解析并建图',
+          primary: true,
+          onClick: function () {
+            var text = String(area.value || '').trim();
+            if (!text) {
+              toastError('请先粘贴数据文本');
+              return false;
+            }
+            applyDataTable(text, 'pasted-data.csv', cb);
+            return true;
+          }
+        }
+      ]
+    });
   }
 
   // Import.openImage(cb?) — pick an image and place it (dialog asks about
@@ -1562,6 +1616,7 @@
   global.Import = {
     mount: mount,
     openData: openData,
+    openDataPaste: openDataPaste,
     openImage: openImage,
     openSvg: openSvg,
     pasteImageFromClipboard: pasteImageFromClipboard,
