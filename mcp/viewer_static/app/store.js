@@ -253,6 +253,14 @@
 
       panelEl.appendChild(global.Ui.h("div", { class: "ui-panel-title", text: "工程" }));
 
+      // 术语说明（R03）：工程=完整可再编辑存档；投稿图像用顶栏「导出」
+      panelEl.appendChild(global.Ui.h("div", {
+        style: "font-size:11px;color:#5b6472;line-height:1.6;margin:2px 0 8px;white-space:normal;",
+        text: "「工程」= 完整可再编辑的存档（当前文档 + 全部修改历史 + 数据来源，"
+          + "即 *.figureproj.json 文件），用于以后重开继续改。"
+          + "投稿/插图用的图像（PNG/PDF/SVG/TIFF）请点顶栏「导出」。"
+      }));
+
       var btnRow = global.Ui.h("div", { class: "ui-btn-row" });
       btnRow.appendChild(global.Ui.button({
         label: "新建",
@@ -282,7 +290,64 @@
           });
         }
       }));
+      // R09：导出/导入工程文件按钮复用「历史」页能力，入口就近放在工程页
+      btnRow.appendChild(global.Ui.button({
+        label: "导出工程文件",
+        title: "下载 *.figureproj.json（文档+全部历史；受限窗口若下载不落地，"
+          + "可到工程数据目录直接取文件）",
+        onClick: function () {
+          if (global.History && typeof global.History.exportProject === "function") {
+            global.History.exportProject();
+          } else {
+            toast("缺少 History.exportProject，请刷新页面", { type: "error" });
+          }
+        }
+      }));
+      btnRow.appendChild(global.Ui.button({
+        label: "导入工程文件",
+        title: "从 *.figureproj.json 恢复（替换当前文档，历史随文件恢复）",
+        onClick: function () {
+          var input = document.createElement("input");
+          input.type = "file";
+          input.accept = ".json,application/json,.figureproj.json";
+          input.style.display = "none";
+          input.addEventListener("change", function () {
+            if (input.parentNode) input.parentNode.removeChild(input);
+            var file = input.files && input.files[0];
+            if (!file) return;
+            if (global.History && typeof global.History.importProject === "function") {
+              global.History.importProject(file).catch(function (err) {
+                toast("导入工程失败：" + errText(err), { type: "error" });
+              });
+            }
+          });
+          document.body.appendChild(input);
+          input.click();
+        }
+      }));
       panelEl.appendChild(btnRow);
+
+      // 数据目录路径（R08）：让用户知道工程文件实际存在哪里
+      var dirLine = global.Ui.h("div", {
+        style: "font-size:11px;color:#6b7280;margin:6px 0 0;line-height:1.5;word-break:break-all;",
+        text: "正在查询工程数据目录…"
+      });
+      panelEl.appendChild(dirLine);
+      if (typeof global.fetch === "function") {
+        global.fetch("/api/data-dirs", { cache: "no-store" })
+          .then(function (r) { return r && r.ok ? r.json() : null; })
+          .then(function (j) {
+            if (!j || j.ok !== true) {
+              dirLine.textContent = "数据目录查询失败（不影响使用）";
+              return;
+            }
+            dirLine.textContent = "工程保存在本机：" + j.data_dir +
+              "（当前文档自动保存于 projects/current.figureproj.json）";
+          })
+          .catch(function () {
+            dirLine.textContent = "数据目录查询失败（不影响使用）";
+          });
+      }
 
       panelEl.appendChild(global.Ui.h("div", { class: "ui-panel-title", text: "最近工程" }));
       listEl = global.Ui.h("div", { class: "ui-project-list", id: "store-project-list" });

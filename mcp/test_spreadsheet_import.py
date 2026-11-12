@@ -288,7 +288,7 @@ const panel = new Node('section');
 Import.mount(panel);
 assert.deepStrictEqual(
   walk(panel).filter(node => node.tagName === 'BUTTON').map(node => node.textContent),
-  ['导入数据', '导入图片', '导入 SVG']);
+  ['导入数据', '粘贴数据', '导入图片', '导入 SVG']);
 assert.ok(!walk(panel).some(n => n.attributes['data-spreadsheet-mount'] === '1'),
   '原生导入数据入口不得自动追加重复 Excel 按钮');
 const nativeFetch = global.fetch;

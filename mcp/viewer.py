@@ -673,6 +673,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._handle_save(body, path)
             elif path == "/api/export":
                 self._handle_export(body)
+            elif path == "/api/export-to-dir":
+                self._handle_export_to_dir(body)
             elif path == "/api/projects/migrate":
                 self._handle_projects_migrate(body)
             else:
@@ -757,6 +759,18 @@ class ViewerHandler(BaseHTTPRequestHandler):
         })
 
     def _handle_export(self, body):
+        self._export_common(body, to_dir=False)
+
+    def _handle_export_to_dir(self, body):
+        """R07/R08：导出直接写入用户数据目录 exports/ 文件夹并返回绝对路径。
+
+        浏览器下载在受限窗口（内嵌浏览器等）可能无法落地；本端点由服务端
+        走同一 canonical SVG + figraster 链写盘，任何环境可用。仅 loopback。
+        请求体：{doc?, format, dpi?, panel_id?, transparent?, filename?}
+        """
+        self._export_common(body, to_dir=True)
+
+    def _export_common(self, body, to_dir):
         if not isinstance(body, dict):
             raise ValueError("请求体必须是 JSON 对象")
         fmt_raw = body.get("format")
@@ -801,6 +815,47 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
         svg = _render_svg(doc, panel_id=panel_id)
         size_mm = _svg_physical_dimensions(svg)
+
+        if to_dir:
+            # 服务端直接写盘：用户数据目录 exports/（与插件代码分离），
+            # 同名文件自动加序号不覆盖；返回绝对路径。
+            if self.client_address[0] not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+                self.close_connection = True
+                self._send_json({"ok": False, "error": "仅允许本机 loopback 请求"}, 403)
+                return
+            exports_dir = FIGPATHS.data_dir() / "exports" if FIGPATHS is not None \
+                else PLUGIN_DIR / "projects" / "exports"
+            exports_dir.mkdir(parents=True, exist_ok=True)
+            filename = _suggest_filename(doc, fmt, dpi, size_mm, panel_id)
+            raw_name = body.get("filename")
+            if isinstance(raw_name, str) and raw_name.strip():
+                safe = Path(raw_name.strip()).name  # 去掉任何路径成分
+                if safe.lower().endswith("." + ("jpg" if fmt == "jpeg" else fmt)):
+                    filename = safe
+                else:
+                    filename = safe + "." + ("jpg" if fmt == "jpeg" else fmt)
+            target = exports_dir / filename
+            n = 1
+            while target.exists():
+                stem = target.stem
+                target = exports_dir / ("%s-%d%s" % (stem, n, target.suffix))
+                n += 1
+            if fmt == "svg":
+                target.write_text(svg, encoding="utf-8")
+            else:
+                FIGRASTER.export_svg(
+                    svg, doc, str(target), fmt, dpi=dpi,
+                    panel_id=panel_id, transparent=transparent)
+            self._send_json({
+                "ok": True,
+                "path": str(target.resolve()),
+                "bytes": target.stat().st_size,
+                "format": fmt,
+                "dpi": dpi,
+                "size_mm": list(size_mm),
+            })
+            return
+
         if fmt == "svg":
             data = svg.encode("utf-8")
         else:

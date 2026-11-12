@@ -26,7 +26,9 @@
         if (k === 'class') el.className = v;
         else if (k === 'text') el.textContent = v;
         else if (k.slice(0, 2) === 'on' && typeof v === 'function') {
-          el.addEventListener(k.slice(2), v);
+          // 事件名大小写不敏感（onClick/onclick 均注册为 'click'）：
+          // addEventListener 的事件类型是大小写敏感的
+          el.addEventListener(String(k.slice(2)).toLowerCase(), v);
         } else el.setAttribute(k, v);
       });
     }
@@ -44,7 +46,7 @@
     } catch (e) { return true; }
   }
 
-  function card(title, desc, buttonLabel, onClick, keyHint) {
+  function card(title, desc, buttonLabel, onClick, keyHint, pasteOption) {
     return h('div', {
       'data-task': title,
       style: 'flex:1 1 200px;min-width:200px;max-width:260px;border:1px solid #d5dbe3;' +
@@ -53,13 +55,43 @@
       h('div', { style: 'font-size:15px;font-weight:bold;color:#1f2937;', text: title }),
       h('div', { style: 'font-size:12px;color:#5b6472;line-height:1.5;', text: desc }),
       h('div', { style: 'flex:1;' }),
-      h('div', { style: 'display:flex;align-items:center;gap:8px;' }, [
+      h('div', { style: 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;' }, [
         h('button', {
           text: buttonLabel,
           style: 'padding:6px 14px;border-radius:5px;border:1px solid #1f6feb;' +
             'background:#1f6feb;color:#fff;cursor:pointer;font-size:13px;',
-          onClick: onClick
+          onClick: function (evt) {
+            try {
+              onClick(evt);
+            } catch (err) {
+              // 不再静默失败：把原因显示出来
+              if (global.Ui && typeof global.Ui.toast === 'function') {
+                global.Ui.toast('操作失败：' + (err && err.message ? err.message : String(err)),
+                  { type: 'error' });
+              }
+            }
+          }
         }),
+        pasteOption ? h('button', {
+          'data-task-paste': '1',
+          text: '粘贴数据',
+          title: '不依赖文件选择框：直接粘贴 CSV/TSV/JSON 文本建图（受限窗口也可用）',
+          style: 'padding:6px 12px;border-radius:5px;border:1px solid #c8d2dd;' +
+            'background:#fff;color:#1f2937;cursor:pointer;font-size:12px;',
+          onClick: function () {
+            try {
+              if (global.Import && typeof global.Import.openDataPaste === 'function') {
+                global.Import.openDataPaste();
+              } else {
+                throw new Error('导入模块未提供粘贴入口（请刷新页面加载新版）');
+              }
+            } catch (err) {
+              if (global.Ui && typeof global.Ui.toast === 'function') {
+                global.Ui.toast('打开粘贴导入失败：' + err.message, { type: 'error' });
+              }
+            }
+          }
+        }) : null,
         keyHint ? h('span', { style: 'font-size:11px;color:#8a93a2;', text: keyHint }) : null
       ])
     ]);
@@ -136,12 +168,15 @@
       }),
       h('div', { style: 'display:flex;gap:12px;flex-wrap:wrap;' }, [
         card('从数据绘图',
-          '导入 CSV / JSON / Excel，经字段映射与统计含义确认后建图；原始数据保持不变。',
+          '导入 CSV / JSON / Excel，经字段映射与统计含义确认后建图；原始数据保持不变。' +
+          '窗口弹不出文件选择框时，用「粘贴数据」直接贴入。',
           '导入数据', function () {
             if (global.Import && typeof global.Import.openData === 'function') {
               global.Import.openData();
+            } else {
+              throw new Error('导入模块未加载（请刷新页面）');
             }
-          }),
+          }, null, true),
         card('编辑已有 SVG',
           '逐元素导入 SVG 图形/文字/路径，分别可编辑；或组合多张图排版论文图版。',
           '导入 SVG', function () {
