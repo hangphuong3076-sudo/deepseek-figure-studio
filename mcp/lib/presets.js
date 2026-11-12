@@ -233,7 +233,10 @@
     global.FigPalette.load(bundle.palettes);
     _journals = _deepCopy(bundle.journals.presets);
     _templates = _deepCopy(bundle.templates.templates);
+    _rules = Array.isArray(bundle.journals.rules) ? _deepCopy(bundle.journals.rules) : [];
   }
+
+  var _rules = [];
 
   function journals() {
     _requireLoaded();
@@ -975,6 +978,12 @@
     if (opts.legend !== undefined && ["none", "right", "top", "bottom"].indexOf(opts.legend) < 0) {
       _fail("opts.legend 必须是 none/right/top/bottom");
     }
+    if (opts.mapping !== undefined && opts.mapping !== null) {
+      if (!_isObj(opts.mapping)) _fail("opts.mapping 必须是 {槽位: 列名|null} 对象");
+      if (!data || !_isObj(data) || !Array.isArray(data.columns)) {
+        _fail("opts.mapping 需要同时提供 data（{columns, rows}）");
+      }
+    }
 
     if (tpl.category === "diagram") {
       if (!global.FigDiagram || typeof global.FigDiagram.build !== "function") _fail("FigDiagram 未加载，示意图保持不可应用");
@@ -1041,6 +1050,30 @@
     }
 
     var mapping = needData && columns.length ? _resolveMapping(tpl, columns, rows, warnings) : {};
+
+    // R02：用户确认的字段映射优先。规则＝「用户确认值优先；未提供才用推断」：
+    // 槽位必须是模板 default_mapping 声明的槽；字符串值必须是真实列名；
+    // null 显式清空该槽。校验失败立即抛错（不静默回退推断，否则向导里
+    // 用户看到的映射与实际生成的图表不一致）。
+    if (_isObj(opts.mapping) && needData && columns.length) {
+      var allowedSlots = _isObj(tpl.default_mapping) ? Object.keys(tpl.default_mapping) : [];
+      Object.keys(opts.mapping).forEach(function (slot) {
+        if (allowedSlots.indexOf(slot) < 0) {
+          _fail("opts.mapping 的槽位「" + slot + "」不是模板「" + tpl.name +
+            "」声明的映射槽（可用：" + (allowedSlots.join("、") || "无") + "）");
+        }
+        var v = opts.mapping[slot];
+        if (v === undefined) return;
+        if (v === null) {
+          mapping[slot] = null;
+          return;
+        }
+        if (typeof v !== "string" || columns.indexOf(v) < 0) {
+          _fail("opts.mapping." + slot + " 引用的列「" + v + "」在数据列中不存在");
+        }
+        mapping[slot] = v;
+      });
+    }
 
     // --- characterization 骨架（表征谱图模板）---
     // tpl.characterization.curves[].column 引用 default_mapping 的槽名；
@@ -1194,7 +1227,235 @@
     };
   }
 
+  // ------------------------------------------------ R07 期刊规则证据与检查
+  //
+  // journals.json 的 rules[] 每条带官方 URL/核查日期/适用范围/等级/依据；
+  // verification != "verified" 的规则即使测量达标也只给 unknown（规则本身
+  // 未确认）。未执行的检查不产生 pass；无可测对象 → not_applicable。
+  // level=required 违反 → fail；level=recommended 违反 → warning。
+
+  function journalRules(journalId) {
+    _requireLoaded();
+    if (journalId == null) return _rules.slice();
+    if (typeof journalId !== "string") _fail("journalRules 的 journalId 必须为字符串");
+    return _rules.filter(function (r) {
+      return Array.isArray(r.journal_ids) && r.journal_ids.indexOf(journalId) >= 0;
+    });
+  }
+
+  function _minFontSizeOf(doc) {
+    var min = null;
+    (doc.elements || []).forEach(function (el) {
+      if (!el) return;
+      var candidates = [];
+      if (el.type === "text" && el.style && typeof el.style.fontSizePt === "number") {
+        candidates.push(el.style.fontSizePt);
+      }
+      var pres = el.chart && el.chart.presentation;
+      if (pres) {
+        ["axes", "legend", "series", "peaks"].forEach(function () { /* noop */ });
+        if (pres.axes) ["x", "y"].forEach(function (ax) {
+          var a = pres.axes[ax];
+          if (a && a.title && typeof a.title.fontSizePt === "number") candidates.push(a.title.fontSizePt);
+          if (a && a.tick && typeof a.tick.fontSizePt === "number") candidates.push(a.tick.fontSizePt);
+        });
+        if (pres.legend && typeof pres.legend.fontSizePt === "number") candidates.push(pres.legend.fontSizePt);
+        if (pres.peaks) Object.keys(pres.peaks).forEach(function (id) {
+          if (pres.peaks[id] && typeof pres.peaks[id].fontSizePt === "number") {
+            candidates.push(pres.peaks[id].fontSizePt);
+          }
+        });
+      }
+      candidates.forEach(function (v) {
+        if (min === null || v < min) min = v;
+      });
+    });
+    return min; // null = 文档无可测字号（图表内部默认字号不在元素上，保持 unknown）
+  }
+
+  function _maxFontSizeOf(doc) {
+    var max = null;
+    (doc.elements || []).forEach(function (el) {
+      if (el && el.type === "text" && el.style && typeof el.style.fontSizePt === "number") {
+        if (max === null || el.style.fontSizePt > max) max = el.style.fontSizePt;
+      }
+    });
+    return max;
+  }
+
+  function _minStrokeWidthOf(doc) {
+    var min = null;
+    (doc.elements || []).forEach(function (el) {
+      if (el && el.style && typeof el.style.strokeWidthPt === "number") {
+        if (min === null || el.style.strokeWidthPt < min) min = el.style.strokeWidthPt;
+      }
+    });
+    return min;
+  }
+
+  // 位图有效 DPI：仅对带像素尺寸记录的 image 元素可测（pxWidth/pxWidth 由
+  // 导入时记录）；无记录 → null（unknown，不用 dpi 标签冒充）。
+  function _minRasterDpiOf(doc) {
+    var min = null, anyImage = false;
+    (doc.elements || []).forEach(function (el) {
+      if (!el || el.type !== "image") return;
+      anyImage = true;
+      if (typeof el.pxWidth !== "number" || typeof el.pxHeight !== "number") return;
+      var wMm = el.transform && el.transform.w;
+      if (!(wMm > 0)) return;
+      var dpi = el.pxWidth / (wMm / 25.4);
+      if (min === null || dpi < min) min = dpi;
+    });
+    return { dpi: min, anyImage: anyImage };
+  }
+
+  function checkJournalRules(doc, opts) {
+    _requireLoaded();
+    if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
+      _fail("checkJournalRules 需要有效的 doc");
+    }
+    opts = opts || {};
+    var appliedId = (doc.canvas && doc.canvas.journal_preset_id) ||
+      (doc.meta && doc.meta.journal_preset_id) || null;
+    // 检查目标：显式指定 > 文档已套用的预设
+    var targetId = typeof opts.journal_id === "string" ? opts.journal_id : appliedId;
+    if (!targetId) {
+      return {
+        ok: true, journal_id: null, results: [],
+        note: "文档未套用期刊预设；可传 opts.journal_id 显式指定检查目标"
+      };
+    }
+    var rules = journalRules(targetId);
+    if (!rules.length) {
+      return {
+        ok: true, journal_id: targetId, results: [],
+        note: "该预设暂无逐条证据规则（沿用预设默认值，投稿前自行核对官方指南）"
+      };
+    }
+    var minFont = _minFontSizeOf(doc);
+    var maxFont = _maxFontSizeOf(doc);
+    var minStroke = _minStrokeWidthOf(doc);
+    var raster = _minRasterDpiOf(doc);
+    var canvas = doc.canvas || {};
+    var results = rules.map(function (rule) {
+      var measured = null, comparable = false, violates = false, applicable = true;
+      switch (rule.property) {
+        case "figure_width":
+          measured = typeof canvas.width_mm === "number" ? canvas.width_mm : null;
+          comparable = measured !== null;
+          break;
+        case "figure_height":
+          measured = typeof canvas.height_mm === "number" ? canvas.height_mm : null;
+          comparable = measured !== null;
+          break;
+        case "min_font_size":
+          measured = minFont;
+          comparable = measured !== null;
+          break;
+        case "max_font_size":
+          measured = maxFont;
+          comparable = measured !== null;
+          break;
+        case "line_width":
+          measured = minStroke;
+          comparable = measured !== null;
+          break;
+        case "raster_dpi":
+          measured = raster.dpi;
+          comparable = measured !== null;
+          applicable = raster.anyImage; // 无位图素材 → not_applicable
+          break;
+        default:
+          comparable = false;
+      }
+      if (comparable) {
+        var tol = typeof rule.tolerance === "number" ? rule.tolerance : 0;
+        if (rule.operator === "equal") violates = Math.abs(measured - rule.value) > tol;
+        else if (rule.operator === "min") violates = measured < rule.value;
+        else if (rule.operator === "max") violates = measured > rule.value;
+      }
+      var status;
+      if (!applicable) status = "not_applicable";
+      else if (rule.verification !== "verified") status = "unknown";
+      else if (!comparable) status = "unknown";
+      else if (violates) status = (rule.level === "required") ? "fail" : "warning";
+      else status = "pass";
+      var suggestion = null;
+      if (status === "fail" || status === "warning") {
+        suggestion = "调整 " + rule.property + "（当前 " + (measured === null ? "未知" : measured) +
+          " " + (rule.unit || "") + "，要求 " + rule.operator + " " + rule.value + "）";
+      } else if (status === "unknown" && rule.verification !== "verified") {
+        suggestion = "规则值未经官方页面直接核对（" + rule.sourceUrl + "），投稿前自行确认";
+      } else if (status === "unknown") {
+        suggestion = "文档中无可测量的 " + rule.property + " 对象";
+      }
+      return {
+        rule_id: rule.id, property: rule.property, level: rule.level,
+        status: status, measured: measured, required: rule.value,
+        unit: rule.unit || null, operator: rule.operator,
+        verification: rule.verification, source_url: rule.sourceUrl || null,
+        checked_at: rule.checkedAt || null, evidence: rule.evidence || null,
+        suggestion: suggestion
+      };
+    });
+    var hardFail = results.some(function (r) { return r.status === "fail"; });
+    return {
+      ok: !hardFail,
+      journal_id: targetId,
+      results: results,
+      counts: {
+        pass: results.filter(function (r) { return r.status === "pass"; }).length,
+        fail: results.filter(function (r) { return r.status === "fail"; }).length,
+        warning: results.filter(function (r) { return r.status === "warning"; }).length,
+        unknown: results.filter(function (r) { return r.status === "unknown"; }).length,
+        not_applicable: results.filter(function (r) { return r.status === "not_applicable"; }).length
+      }
+    };
+  }
+
   // ---------------------------------------------------------- exports
+
+  // R02：图型渲染语义（与 lib/data.js RENDERS 实际行为对应，改动渲染
+  // 聚合方式必须同步这里）。向导用它在确认页如实展示统计含义。
+  var RENDERER_SEMANTICS = {
+    bar: { required: ["x", "y"], aggregation: "category_mean",
+      note: "同一分类的重复观测取均值（mean）；误差线来自 chart.statistics 或用户误差列" },
+    bar_grouped: { required: ["x", "y", "group"], aggregation: "cell_mean",
+      note: "分类×分组单元格内重复观测取均值（mean）" },
+    pie: { required: ["x", "y"], aggregation: "category_sum",
+      note: "同一分类求和（sum）后归一化为占比" },
+    line: { required: ["x", "y"], aggregation: "none",
+      note: "不聚合：按 x 排序连线；非数值 y 行被排除" },
+    line_multi: { required: ["x", "y", "group"], aggregation: "none",
+      note: "不聚合：按 group 拆系列，各自按 x 排序连线" },
+    area: { required: ["x", "y"], aggregation: "none",
+      note: "不聚合：按 x 排序填充面积" },
+    scatter: { required: ["x", "y"], aggregation: "none",
+      note: "不聚合：逐行绘制散点；非数值行被排除" },
+    histogram: { required: ["x"], aggregation: "binning",
+      note: "对 x 数值列分箱计数" },
+    heatmap: { required: ["x", "y", "color"], aggregation: "cell_value",
+      note: "x×y 类别网格，每格取该 (x,y) 的 color 值" },
+    box: { required: ["x", "y"], aggregation: "distribution",
+      note: "按 x 分组绘制 y 分布（中位数/四分位，原始值参与计算）" }
+  };
+
+  // R02：模板映射槽位定义（向导据此渲染可编辑下拉）。
+  // optional 判定沿用 default_mapping 描述里的「可选」标记。
+  function mappingSlots(templateId) {
+    var tpl = template(templateId);
+    if (!tpl) _fail("未找到模板：" + templateId);
+    var dm = _isObj(tpl.default_mapping) ? tpl.default_mapping : {};
+    return Object.keys(dm).map(function (slot) {
+      var desc = dm[slot] == null ? "" : String(dm[slot]);
+      return {
+        slot: slot,
+        description: desc,
+        optional: !desc || /可选/.test(desc),
+        numeric: /数值|占比|权重|效应|CI|log2FC|log10|PC[12]|FPR|TPR|生存率|size/i.test(desc)
+      };
+    });
+  }
 
   var FigPresets = {
     load: load,
@@ -1210,7 +1471,11 @@
     scaleFonts: scaleFonts,
     inferColumns: inferColumns,
     recommend: recommend,
-    templateFromStats: templateFromStats
+    templateFromStats: templateFromStats,
+    mappingSlots: mappingSlots,
+    RENDERER_SEMANTICS: RENDERER_SEMANTICS,
+    journalRules: journalRules,
+    checkJournalRules: checkJournalRules
   };
 
   // Older data.js revisions decorate these methods after load. The registry is

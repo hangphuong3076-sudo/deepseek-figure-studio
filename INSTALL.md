@@ -3,6 +3,15 @@
 本插件已按 **DeepSeek Harness 官方插件规范**改造成一个可安装的 **bundle**（npm 包），
 同时保留**完全自包含**的可视化工作台与 MCP 后端。两条安装路线任选其一：
 
+> **依赖的单一事实来源（2026-11-12 起）**：`pyproject.toml` + `uv.lock`。Python 依赖 =
+> PyMuPDF/Pillow/openpyxl/xlrd（desktop 可选组=pywebview）。安装方式二选一：
+> - 有 uv：`uv sync --locked`（锁文件过期时该命令失败，适合固定安装验证；`--frozen` 不检查过期，不能替代一致性检查）
+> - 无 uv：`python -m pip install PyMuPDF Pillow openpyxl xlrd`（版本范围见 pyproject；pywebview 可选）
+> Node 22 系列由系统安装（Python 锁文件不管理 Node），`scripts/doctor.py` 会单独检查。
+> **本地诊断**：`python scripts/doctor.py`（人读）或 `--json`（机器可读）；解释器/Node/依赖/桥/预设/窗口容器/数据目录/模型凭据状态逐项给出具体下一步，不调用模型、不输出密钥。
+> **用户数据目录（R08）**：工程与配置存于 `%LOCALAPPDATA%\DeepSeekFigureStudio`（Windows）/ `~/.local/share/DeepSeekFigureStudio`（其他），可用环境变量 `FIGURE_DATA_DIR` 显式指定；旧 `mcp/projects` 原样保留，首次启动日志与 `GET /api/data-dirs` 提示待迁移清单，经 UI「历史」页或 `POST /api/projects/migrate`（`{"overwrite":false}`，loopback 限定）显式复制迁移——冲突不覆盖、覆盖前自动备份、原文件始终保留。
+
+
 - **路线 A（推荐，官方）**：作为 DSH bundle 用 `dsh plugin add` 安装 —— 26 个
   `figure_*` 工具直接注册进 DSH 的 tool registry，agent 原生可调用；可视化双栏工作台
   通过 `figure_open_viewer` 工具（或 `start-native-viewer.bat`）打开。

@@ -15,7 +15,8 @@
     "preferred_formats": "投稿首选格式，按优先级排序",
     "raster_formats": "允许的位图格式",
     "max_file_mb": "单文件大小上限；null 未限定",
-    "notes": "补充说明"
+    "notes": "补充说明",
+    "rules": "R07 逐条规则证据（journal_ids 关联预设；verification: verified=官方页面原文核对 / unverified_secondary=第三方转述且官方页不可达 / unknown=待核对）"
   },
   "presets": [
     {
@@ -23,13 +24,25 @@
       "name": "Nature 单栏",
       "publisher": "Springer Nature",
       "category": "journal",
-      "width_mm": 89, "height_mm": 170,
-      "font_family": "Arial", "base_font_pt": 7, "min_font_pt": 5,
-      "dpi_min": 300, "dpi_recommended": 600,
+      "width_mm": 89,
+      "height_mm": 170,
+      "font_family": "Arial",
+      "base_font_pt": 7,
+      "min_font_pt": 5,
+      "dpi_min": 300,
+      "dpi_recommended": 600,
       "line_width_pt": 0.75,
       "panel_label": "8pt bold 小写 a/b/c",
       "color_mode": "RGB",
-      "preferred_formats": ["AI", "EPS", "PDF"], "raster_formats": ["TIFF", "JPEG"],
+      "preferred_formats": [
+        "AI",
+        "EPS",
+        "PDF"
+      ],
+      "raster_formats": [
+        "TIFF",
+        "JPEG"
+      ],
       "max_file_mb": null,
       "notes": "线条与文字保持可编辑；位图正文 300dpi，照片建议 450dpi。",
       "source": "nature-skills references/nature-article-requirements.md（声称核对于 2026-08-08）；Nature 官网 Figure guidelines——待核对"
@@ -39,13 +52,25 @@
       "name": "Nature 双栏",
       "publisher": "Springer Nature",
       "category": "journal",
-      "width_mm": 183, "height_mm": 170,
-      "font_family": "Arial", "base_font_pt": 7, "min_font_pt": 5,
-      "dpi_min": 300, "dpi_recommended": 600,
+      "width_mm": 183,
+      "height_mm": 170,
+      "font_family": "Arial",
+      "base_font_pt": 7,
+      "min_font_pt": 5,
+      "dpi_min": 300,
+      "dpi_recommended": 600,
       "line_width_pt": 0.75,
       "panel_label": "8pt bold 小写 a/b/c",
       "color_mode": "RGB",
-      "preferred_formats": ["AI", "EPS", "PDF"], "raster_formats": ["TIFF", "JPEG"],
+      "preferred_formats": [
+        "AI",
+        "EPS",
+        "PDF"
+      ],
+      "raster_formats": [
+        "TIFF",
+        "JPEG"
+      ],
       "max_file_mb": null,
       "notes": "整栏宽；高度上限 170mm。",
       "source": "同 nature-single——待核对"
@@ -55,13 +80,25 @@
       "name": "Nature Machine Intelligence",
       "publisher": "Springer Nature",
       "category": "journal",
-      "width_mm": 183, "height_mm": 200,
-      "font_family": "Arial", "base_font_pt": 7, "min_font_pt": 5,
-      "dpi_min": 300, "dpi_recommended": 300,
+      "width_mm": 183,
+      "height_mm": 200,
+      "font_family": "Arial",
+      "base_font_pt": 7,
+      "min_font_pt": 5,
+      "dpi_min": 300,
+      "dpi_recommended": 300,
       "line_width_pt": 0.75,
       "panel_label": "8pt bold 小写 a/b/c",
       "color_mode": "RGB",
-      "preferred_formats": ["PDF", "EPS", "AI"], "raster_formats": ["TIFF", "JPEG"],
+      "preferred_formats": [
+        "PDF",
+        "EPS",
+        "AI"
+      ],
+      "raster_formats": [
+        "TIFF",
+        "JPEG"
+      ],
       "max_file_mb": 10,
       "notes": "主图 6 项、Extended Data 最多 10 项。",
       "source": "nature-skills journal-formats/nature-machine-intelligence.md——待核对"
@@ -71,13 +108,26 @@
       "name": "Nature Communications",
       "publisher": "Springer Nature",
       "category": "journal",
-      "width_mm": 183, "height_mm": 247,
-      "font_family": "Arial", "base_font_pt": 7, "min_font_pt": 5,
-      "dpi_min": 300, "dpi_recommended": 600,
+      "width_mm": 183,
+      "height_mm": 247,
+      "font_family": "Arial",
+      "base_font_pt": 7,
+      "min_font_pt": 5,
+      "dpi_min": 300,
+      "dpi_recommended": 600,
       "line_width_pt": 0.75,
       "panel_label": "8pt bold 小写 a/b/c",
       "color_mode": "RGB",
-      "preferred_formats": ["PDF", "EPS", "AI"], "raster_formats": ["TIFF", "JPEG", "PNG"],
+      "preferred_formats": [
+        "PDF",
+        "EPS",
+        "AI"
+      ],
+      "raster_formats": [
+        "TIFF",
+        "JPEG",
+        "PNG"
+      ],
       "max_file_mb": null,
       "notes": "开放式排版，单栏约 88mm。",
       "source": "nature-skills journal-formats/nature-communications.md——待核对"
@@ -87,13 +137,24 @@
       "name": "Science 单栏",
       "publisher": "AAAS",
       "category": "journal",
-      "width_mm": 55, "height_mm": 240,
-      "font_family": "Helvetica", "base_font_pt": 6, "min_font_pt": 5,
-      "dpi_min": 300, "dpi_recommended": 600,
+      "width_mm": 55,
+      "height_mm": 240,
+      "font_family": "Helvetica",
+      "base_font_pt": 6,
+      "min_font_pt": 5,
+      "dpi_min": 300,
+      "dpi_recommended": 600,
       "line_width_pt": 0.5,
       "panel_label": "bold 小写 a/b/c",
       "color_mode": "RGB",
-      "preferred_formats": ["AI", "PDF", "EPS"], "raster_formats": ["TIFF"],
+      "preferred_formats": [
+        "AI",
+        "PDF",
+        "EPS"
+      ],
+      "raster_formats": [
+        "TIFF"
+      ],
       "max_file_mb": null,
       "notes": "Science 栏宽较窄（1 栏 5.5cm、2 栏 12cm、3 栏 18.4cm）。",
       "source": "Science Author Guidelines（一般公开值）——待核对"
@@ -103,13 +164,24 @@
       "name": "Science 双栏",
       "publisher": "AAAS",
       "category": "journal",
-      "width_mm": 120, "height_mm": 240,
-      "font_family": "Helvetica", "base_font_pt": 6, "min_font_pt": 5,
-      "dpi_min": 300, "dpi_recommended": 600,
+      "width_mm": 120,
+      "height_mm": 240,
+      "font_family": "Helvetica",
+      "base_font_pt": 6,
+      "min_font_pt": 5,
+      "dpi_min": 300,
+      "dpi_recommended": 600,
       "line_width_pt": 0.5,
       "panel_label": "bold 小写 a/b/c",
       "color_mode": "RGB",
-      "preferred_formats": ["AI", "PDF", "EPS"], "raster_formats": ["TIFF"],
+      "preferred_formats": [
+        "AI",
+        "PDF",
+        "EPS"
+      ],
+      "raster_formats": [
+        "TIFF"
+      ],
       "max_file_mb": null,
       "source": "Science Author Guidelines——待核对"
     },
@@ -118,13 +190,24 @@
       "name": "Science 整页 (3栏)",
       "publisher": "AAAS",
       "category": "journal",
-      "width_mm": 184, "height_mm": 240,
-      "font_family": "Helvetica", "base_font_pt": 6, "min_font_pt": 5,
-      "dpi_min": 300, "dpi_recommended": 600,
+      "width_mm": 184,
+      "height_mm": 240,
+      "font_family": "Helvetica",
+      "base_font_pt": 6,
+      "min_font_pt": 5,
+      "dpi_min": 300,
+      "dpi_recommended": 600,
       "line_width_pt": 0.5,
       "panel_label": "bold 小写 a/b/c",
       "color_mode": "RGB",
-      "preferred_formats": ["AI", "PDF", "EPS"], "raster_formats": ["TIFF"],
+      "preferred_formats": [
+        "AI",
+        "PDF",
+        "EPS"
+      ],
+      "raster_formats": [
+        "TIFF"
+      ],
       "max_file_mb": null,
       "source": "Science Author Guidelines——待核对"
     },
@@ -133,13 +216,25 @@
       "name": "Cell",
       "publisher": "Elsevier/Cell Press",
       "category": "journal",
-      "width_mm": 174, "height_mm": 234,
-      "font_family": "Arial", "base_font_pt": 7, "min_font_pt": 6,
-      "dpi_min": 300, "dpi_recommended": 300,
+      "width_mm": 174,
+      "height_mm": 234,
+      "font_family": "Arial",
+      "base_font_pt": 7,
+      "min_font_pt": 6,
+      "dpi_min": 300,
+      "dpi_recommended": 300,
       "line_width_pt": 0.75,
       "panel_label": "bold 大写 A/B/C",
       "color_mode": "RGB",
-      "preferred_formats": ["PDF", "EPS", "AI"], "raster_formats": ["TIFF", "JPEG"],
+      "preferred_formats": [
+        "PDF",
+        "EPS",
+        "AI"
+      ],
+      "raster_formats": [
+        "TIFF",
+        "JPEG"
+      ],
       "max_file_mb": null,
       "notes": "Cell Press 一般要求 Arial、最小 6pt。",
       "source": "Cell Press Figure Guidelines——待核对"
@@ -149,13 +244,24 @@
       "name": "IEEE 单栏",
       "publisher": "IEEE",
       "category": "journal",
-      "width_mm": 88, "height_mm": null,
-      "font_family": "Times New Roman", "base_font_pt": 8, "min_font_pt": 6,
-      "dpi_min": 300, "dpi_recommended": 600,
+      "width_mm": 88,
+      "height_mm": null,
+      "font_family": "Times New Roman",
+      "base_font_pt": 8,
+      "min_font_pt": 6,
+      "dpi_min": 300,
+      "dpi_recommended": 600,
       "line_width_pt": 0.5,
       "panel_label": "(a) 8pt",
       "color_mode": "RGB",
-      "preferred_formats": ["PDF", "EPS"], "raster_formats": ["TIFF", "PNG"],
+      "preferred_formats": [
+        "PDF",
+        "EPS"
+      ],
+      "raster_formats": [
+        "TIFF",
+        "PNG"
+      ],
       "max_file_mb": null,
       "notes": "IEEE 单栏约 3.5in（88.9mm）。",
       "source": "IEEE Author Center Graphics Guide——待核对"
@@ -165,13 +271,24 @@
       "name": "IEEE 双栏",
       "publisher": "IEEE",
       "category": "journal",
-      "width_mm": 182, "height_mm": null,
-      "font_family": "Times New Roman", "base_font_pt": 8, "min_font_pt": 6,
-      "dpi_min": 300, "dpi_recommended": 600,
+      "width_mm": 182,
+      "height_mm": null,
+      "font_family": "Times New Roman",
+      "base_font_pt": 8,
+      "min_font_pt": 6,
+      "dpi_min": 300,
+      "dpi_recommended": 600,
       "line_width_pt": 0.5,
       "panel_label": "(a) 8pt",
       "color_mode": "RGB",
-      "preferred_formats": ["PDF", "EPS"], "raster_formats": ["TIFF", "PNG"],
+      "preferred_formats": [
+        "PDF",
+        "EPS"
+      ],
+      "raster_formats": [
+        "TIFF",
+        "PNG"
+      ],
       "max_file_mb": null,
       "source": "IEEE Author Center Graphics Guide——待核对"
     },
@@ -180,13 +297,25 @@
       "name": "Elsevier 单栏 (1 column)",
       "publisher": "Elsevier",
       "category": "journal",
-      "width_mm": 90, "height_mm": null,
-      "font_family": "Arial", "base_font_pt": 7, "min_font_pt": 5,
-      "dpi_min": 300, "dpi_recommended": 500,
+      "width_mm": 90,
+      "height_mm": null,
+      "font_family": "Arial",
+      "base_font_pt": 7,
+      "min_font_pt": 5,
+      "dpi_min": 300,
+      "dpi_recommended": 500,
       "line_width_pt": 0.5,
       "panel_label": "a / A",
       "color_mode": "RGB",
-      "preferred_formats": ["EPS", "PDF", "TIFF"], "raster_formats": ["TIFF", "JPEG"],
+      "preferred_formats": [
+        "EPS",
+        "PDF",
+        "TIFF"
+      ],
+      "raster_formats": [
+        "TIFF",
+        "JPEG"
+      ],
       "max_file_mb": null,
       "notes": "Elsevier 常用 90 / 140 / 190 mm 三档。",
       "source": "Elsevier Artwork Guidelines——待核对"
@@ -196,13 +325,25 @@
       "name": "Elsevier 1.5 栏",
       "publisher": "Elsevier",
       "category": "journal",
-      "width_mm": 140, "height_mm": null,
-      "font_family": "Arial", "base_font_pt": 7, "min_font_pt": 5,
-      "dpi_min": 300, "dpi_recommended": 500,
+      "width_mm": 140,
+      "height_mm": null,
+      "font_family": "Arial",
+      "base_font_pt": 7,
+      "min_font_pt": 5,
+      "dpi_min": 300,
+      "dpi_recommended": 500,
       "line_width_pt": 0.5,
       "panel_label": "a / A",
       "color_mode": "RGB",
-      "preferred_formats": ["EPS", "PDF", "TIFF"], "raster_formats": ["TIFF", "JPEG"],
+      "preferred_formats": [
+        "EPS",
+        "PDF",
+        "TIFF"
+      ],
+      "raster_formats": [
+        "TIFF",
+        "JPEG"
+      ],
       "max_file_mb": null,
       "source": "Elsevier Artwork Guidelines——待核对"
     },
@@ -211,13 +352,25 @@
       "name": "Elsevier 双栏 (2 column)",
       "publisher": "Elsevier",
       "category": "journal",
-      "width_mm": 190, "height_mm": null,
-      "font_family": "Arial", "base_font_pt": 7, "min_font_pt": 5,
-      "dpi_min": 300, "dpi_recommended": 500,
+      "width_mm": 190,
+      "height_mm": null,
+      "font_family": "Arial",
+      "base_font_pt": 7,
+      "min_font_pt": 5,
+      "dpi_min": 300,
+      "dpi_recommended": 500,
       "line_width_pt": 0.5,
       "panel_label": "a / A",
       "color_mode": "RGB",
-      "preferred_formats": ["EPS", "PDF", "TIFF"], "raster_formats": ["TIFF", "JPEG"],
+      "preferred_formats": [
+        "EPS",
+        "PDF",
+        "TIFF"
+      ],
+      "raster_formats": [
+        "TIFF",
+        "JPEG"
+      ],
       "max_file_mb": null,
       "source": "Elsevier Artwork Guidelines——待核对"
     },
@@ -226,13 +379,24 @@
       "name": "Springer 单栏",
       "publisher": "Springer",
       "category": "journal",
-      "width_mm": 84, "height_mm": 234,
-      "font_family": "Arial", "base_font_pt": 8, "min_font_pt": 6,
-      "dpi_min": 300, "dpi_recommended": 600,
+      "width_mm": 84,
+      "height_mm": 234,
+      "font_family": "Arial",
+      "base_font_pt": 8,
+      "min_font_pt": 6,
+      "dpi_min": 300,
+      "dpi_recommended": 600,
       "line_width_pt": 0.5,
       "panel_label": "a / A",
       "color_mode": "RGB",
-      "preferred_formats": ["EPS", "PDF"], "raster_formats": ["TIFF", "PNG"],
+      "preferred_formats": [
+        "EPS",
+        "PDF"
+      ],
+      "raster_formats": [
+        "TIFF",
+        "PNG"
+      ],
       "max_file_mb": null,
       "source": "Springer Artwork Guidelines——待核对"
     },
@@ -241,13 +405,24 @@
       "name": "Springer 双栏",
       "publisher": "Springer",
       "category": "journal",
-      "width_mm": 174, "height_mm": 234,
-      "font_family": "Arial", "base_font_pt": 8, "min_font_pt": 6,
-      "dpi_min": 300, "dpi_recommended": 600,
+      "width_mm": 174,
+      "height_mm": 234,
+      "font_family": "Arial",
+      "base_font_pt": 8,
+      "min_font_pt": 6,
+      "dpi_min": 300,
+      "dpi_recommended": 600,
       "line_width_pt": 0.5,
       "panel_label": "a / A",
       "color_mode": "RGB",
-      "preferred_formats": ["EPS", "PDF"], "raster_formats": ["TIFF", "PNG"],
+      "preferred_formats": [
+        "EPS",
+        "PDF"
+      ],
+      "raster_formats": [
+        "TIFF",
+        "PNG"
+      ],
       "max_file_mb": null,
       "source": "Springer Artwork Guidelines——待核对"
     },
@@ -256,13 +431,25 @@
       "name": "ACS 单栏",
       "publisher": "American Chemical Society",
       "category": "journal",
-      "width_mm": 82, "height_mm": 240,
-      "font_family": "Arial", "base_font_pt": 7, "min_font_pt": 4.5,
-      "dpi_min": 300, "dpi_recommended": 600,
+      "width_mm": 82,
+      "height_mm": 240,
+      "font_family": "Arial",
+      "base_font_pt": 7,
+      "min_font_pt": 4.5,
+      "dpi_min": 300,
+      "dpi_recommended": 600,
       "line_width_pt": 0.5,
       "panel_label": "bold 小写 a/b/c",
       "color_mode": "RGB",
-      "preferred_formats": ["TIFF", "EPS", "PDF"], "raster_formats": ["TIFF", "PNG"],
+      "preferred_formats": [
+        "TIFF",
+        "EPS",
+        "PDF"
+      ],
+      "raster_formats": [
+        "TIFF",
+        "PNG"
+      ],
       "max_file_mb": null,
       "notes": "ACS 单栏约 3.25in、双栏约 7in；字号可到 4.5pt。",
       "source": "ACS Guidelines for Preparing Graphics——待核对"
@@ -272,13 +459,25 @@
       "name": "ACS 双栏",
       "publisher": "American Chemical Society",
       "category": "journal",
-      "width_mm": 178, "height_mm": 240,
-      "font_family": "Arial", "base_font_pt": 7, "min_font_pt": 4.5,
-      "dpi_min": 300, "dpi_recommended": 600,
+      "width_mm": 178,
+      "height_mm": 240,
+      "font_family": "Arial",
+      "base_font_pt": 7,
+      "min_font_pt": 4.5,
+      "dpi_min": 300,
+      "dpi_recommended": 600,
       "line_width_pt": 0.5,
       "panel_label": "bold 小写 a/b/c",
       "color_mode": "RGB",
-      "preferred_formats": ["TIFF", "EPS", "PDF"], "raster_formats": ["TIFF", "PNG"],
+      "preferred_formats": [
+        "TIFF",
+        "EPS",
+        "PDF"
+      ],
+      "raster_formats": [
+        "TIFF",
+        "PNG"
+      ],
       "max_file_mb": null,
       "source": "ACS Guidelines for Preparing Graphics——待核对"
     },
@@ -287,13 +486,26 @@
       "name": "PNAS",
       "publisher": "NAS",
       "category": "journal",
-      "width_mm": 87, "height_mm": 234,
-      "font_family": "Arial", "base_font_pt": 7, "min_font_pt": 5,
-      "dpi_min": 300, "dpi_recommended": 600,
+      "width_mm": 87,
+      "height_mm": 234,
+      "font_family": "Arial",
+      "base_font_pt": 7,
+      "min_font_pt": 5,
+      "dpi_min": 300,
+      "dpi_recommended": 600,
       "line_width_pt": 0.5,
       "panel_label": "10pt bold 小写 a/b/c",
       "color_mode": "RGB",
-      "preferred_formats": ["TIFF", "EPS", "PDF"], "raster_formats": ["TIFF", "JPEG", "PNG"],
+      "preferred_formats": [
+        "TIFF",
+        "EPS",
+        "PDF"
+      ],
+      "raster_formats": [
+        "TIFF",
+        "JPEG",
+        "PNG"
+      ],
       "max_file_mb": 10,
       "notes": "PNAS 单栏 8.7cm、双栏 17.8cm，子图字母 10pt。",
       "source": "PNAS Information for Authors——待核对"
@@ -303,13 +515,26 @@
       "name": "PNAS 双栏",
       "publisher": "NAS",
       "category": "journal",
-      "width_mm": 178, "height_mm": 234,
-      "font_family": "Arial", "base_font_pt": 7, "min_font_pt": 5,
-      "dpi_min": 300, "dpi_recommended": 600,
+      "width_mm": 178,
+      "height_mm": 234,
+      "font_family": "Arial",
+      "base_font_pt": 7,
+      "min_font_pt": 5,
+      "dpi_min": 300,
+      "dpi_recommended": 600,
       "line_width_pt": 0.5,
       "panel_label": "10pt bold 小写 a/b/c",
       "color_mode": "RGB",
-      "preferred_formats": ["TIFF", "EPS", "PDF"], "raster_formats": ["TIFF", "JPEG", "PNG"],
+      "preferred_formats": [
+        "TIFF",
+        "EPS",
+        "PDF"
+      ],
+      "raster_formats": [
+        "TIFF",
+        "JPEG",
+        "PNG"
+      ],
       "max_file_mb": 10,
       "source": "PNAS Information for Authors——待核对"
     },
@@ -318,13 +543,25 @@
       "name": "PLOS ONE",
       "publisher": "PLOS",
       "category": "journal",
-      "width_mm": 173, "height_mm": 233,
-      "font_family": "Arial", "base_font_pt": 8, "min_font_pt": 6,
-      "dpi_min": 300, "dpi_recommended": 300,
+      "width_mm": 173,
+      "height_mm": 233,
+      "font_family": "Arial",
+      "base_font_pt": 8,
+      "min_font_pt": 6,
+      "dpi_min": 300,
+      "dpi_recommended": 300,
       "line_width_pt": 0.5,
       "panel_label": "bold 小写 a/b/c",
       "color_mode": "RGB",
-      "preferred_formats": ["EPS", "PDF", "TIFF"], "raster_formats": ["TIFF", "PNG"],
+      "preferred_formats": [
+        "EPS",
+        "PDF",
+        "TIFF"
+      ],
+      "raster_formats": [
+        "TIFF",
+        "PNG"
+      ],
       "max_file_mb": 10,
       "notes": "宽度 789–2250 px，300–600 dpi。",
       "source": "PLOS Figure Guidelines——待核对"
@@ -334,13 +571,25 @@
       "name": "Wiley 双栏",
       "publisher": "Wiley",
       "category": "journal",
-      "width_mm": 174, "height_mm": 240,
-      "font_family": "Arial", "base_font_pt": 7, "min_font_pt": 5,
-      "dpi_min": 300, "dpi_recommended": 600,
+      "width_mm": 174,
+      "height_mm": 240,
+      "font_family": "Arial",
+      "base_font_pt": 7,
+      "min_font_pt": 5,
+      "dpi_min": 300,
+      "dpi_recommended": 600,
       "line_width_pt": 0.5,
       "panel_label": "小写 a/b/c",
       "color_mode": "RGB",
-      "preferred_formats": ["EPS", "PDF", "TIFF"], "raster_formats": ["TIFF", "PNG"],
+      "preferred_formats": [
+        "EPS",
+        "PDF",
+        "TIFF"
+      ],
+      "raster_formats": [
+        "TIFF",
+        "PNG"
+      ],
       "max_file_mb": null,
       "source": "Wiley Data & Figure Guidelines——待核对"
     },
@@ -349,13 +598,25 @@
       "name": "RSC 双栏",
       "publisher": "Royal Society of Chemistry",
       "category": "journal",
-      "width_mm": 170, "height_mm": 233,
-      "font_family": "Arial", "base_font_pt": 8, "min_font_pt": 6,
-      "dpi_min": 300, "dpi_recommended": 600,
+      "width_mm": 170,
+      "height_mm": 233,
+      "font_family": "Arial",
+      "base_font_pt": 8,
+      "min_font_pt": 6,
+      "dpi_min": 300,
+      "dpi_recommended": 600,
       "line_width_pt": 0.5,
       "panel_label": "小写 a/b/c",
       "color_mode": "RGB",
-      "preferred_formats": ["TIFF", "EPS", "PDF"], "raster_formats": ["TIFF", "PNG"],
+      "preferred_formats": [
+        "TIFF",
+        "EPS",
+        "PDF"
+      ],
+      "raster_formats": [
+        "TIFF",
+        "PNG"
+      ],
       "max_file_mb": null,
       "source": "RSC Author Guidelines (Artwork)——待核对"
     },
@@ -364,13 +625,25 @@
       "name": "MDPI 整页",
       "publisher": "MDPI",
       "category": "journal",
-      "width_mm": 174, "height_mm": 234,
-      "font_family": "Arial", "base_font_pt": 8, "min_font_pt": 6,
-      "dpi_min": 300, "dpi_recommended": 300,
+      "width_mm": 174,
+      "height_mm": 234,
+      "font_family": "Arial",
+      "base_font_pt": 8,
+      "min_font_pt": 6,
+      "dpi_min": 300,
+      "dpi_recommended": 300,
       "line_width_pt": 0.5,
       "panel_label": "小写 a/b/c",
       "color_mode": "RGB",
-      "preferred_formats": ["PDF", "TIFF"], "raster_formats": ["TIFF", "PNG", "JPEG"],
+      "preferred_formats": [
+        "PDF",
+        "TIFF"
+      ],
+      "raster_formats": [
+        "TIFF",
+        "PNG",
+        "JPEG"
+      ],
       "max_file_mb": null,
       "source": "MDPI Instructions for Authors——待核对"
     },
@@ -379,13 +652,26 @@
       "name": "学位论文 A4 版心",
       "publisher": "generic",
       "category": "thesis",
-      "width_mm": 150, "height_mm": 220,
-      "font_family": "Times New Roman", "base_font_pt": 9, "min_font_pt": 7,
-      "dpi_min": 300, "dpi_recommended": 400,
+      "width_mm": 150,
+      "height_mm": 220,
+      "font_family": "Times New Roman",
+      "base_font_pt": 9,
+      "min_font_pt": 7,
+      "dpi_min": 300,
+      "dpi_recommended": 400,
       "line_width_pt": 0.75,
       "panel_label": "小写 a/b/c",
       "color_mode": "RGB",
-      "preferred_formats": ["PDF", "TIFF", "PNG"], "raster_formats": ["TIFF", "PNG", "JPEG"],
+      "preferred_formats": [
+        "PDF",
+        "TIFF",
+        "PNG"
+      ],
+      "raster_formats": [
+        "TIFF",
+        "PNG",
+        "JPEG"
+      ],
       "max_file_mb": null,
       "notes": "中文报告常与宋体/黑体搭配；此处给通用安全值。",
       "source": "通用排版惯例（非期刊官方）"
@@ -395,13 +681,25 @@
       "name": "海报 A0",
       "publisher": "generic",
       "category": "poster",
-      "width_mm": 841, "height_mm": 1189,
-      "font_family": "Arial", "base_font_pt": 28, "min_font_pt": 18,
-      "dpi_min": 150, "dpi_recommended": 300,
+      "width_mm": 841,
+      "height_mm": 1189,
+      "font_family": "Arial",
+      "base_font_pt": 28,
+      "min_font_pt": 18,
+      "dpi_min": 150,
+      "dpi_recommended": 300,
       "line_width_pt": 3,
       "panel_label": "bold 大写 A/B/C",
       "color_mode": "RGB",
-      "preferred_formats": ["PDF", "PNG"], "raster_formats": ["PNG", "JPEG", "TIFF"],
+      "preferred_formats": [
+        "PDF",
+        "PNG"
+      ],
+      "raster_formats": [
+        "PNG",
+        "JPEG",
+        "TIFF"
+      ],
       "max_file_mb": null,
       "source": "通用海报惯例（非期刊官方）"
     },
@@ -410,13 +708,24 @@
       "name": "杂志 A4 整页",
       "publisher": "generic",
       "category": "magazine",
-      "width_mm": 210, "height_mm": 297,
-      "font_family": "Helvetica", "base_font_pt": 10, "min_font_pt": 8,
-      "dpi_min": 300, "dpi_recommended": 300,
+      "width_mm": 210,
+      "height_mm": 297,
+      "font_family": "Helvetica",
+      "base_font_pt": 10,
+      "min_font_pt": 8,
+      "dpi_min": 300,
+      "dpi_recommended": 300,
       "line_width_pt": 1,
       "panel_label": "小写 a/b/c",
       "color_mode": "CMYK",
-      "preferred_formats": ["PDF", "TIFF"], "raster_formats": ["TIFF", "JPEG"],
+      "preferred_formats": [
+        "PDF",
+        "TIFF"
+      ],
+      "raster_formats": [
+        "TIFF",
+        "JPEG"
+      ],
       "max_file_mb": null,
       "notes": "印刷杂志通常需要 CMYK 与 3mm 出血。",
       "source": "通用印刷惯例（非期刊官方）"
@@ -426,13 +735,24 @@
       "name": "幻灯片 16:9",
       "publisher": "generic",
       "category": "presentation",
-      "width_mm": 338.7, "height_mm": 190.5,
-      "font_family": "Arial", "base_font_pt": 18, "min_font_pt": 12,
-      "dpi_min": 96, "dpi_recommended": 192,
+      "width_mm": 338.7,
+      "height_mm": 190.5,
+      "font_family": "Arial",
+      "base_font_pt": 18,
+      "min_font_pt": 12,
+      "dpi_min": 96,
+      "dpi_recommended": 192,
       "line_width_pt": 2,
       "panel_label": "bold 大写 A/B/C",
       "color_mode": "RGB",
-      "preferred_formats": ["PNG", "PDF"], "raster_formats": ["PNG", "JPEG"],
+      "preferred_formats": [
+        "PNG",
+        "PDF"
+      ],
+      "raster_formats": [
+        "PNG",
+        "JPEG"
+      ],
       "max_file_mb": null,
       "source": "1920x1080 px @96dpi 换算"
     },
@@ -441,15 +761,409 @@
       "name": "自定义空白",
       "publisher": "generic",
       "category": "custom",
-      "width_mm": 120, "height_mm": 90,
-      "font_family": "Arial", "base_font_pt": 8, "min_font_pt": 6,
-      "dpi_min": 300, "dpi_recommended": 300,
+      "width_mm": 120,
+      "height_mm": 90,
+      "font_family": "Arial",
+      "base_font_pt": 8,
+      "min_font_pt": 6,
+      "dpi_min": 300,
+      "dpi_recommended": 300,
       "line_width_pt": 0.75,
       "panel_label": "小写 a/b/c",
       "color_mode": "RGB",
-      "preferred_formats": ["PNG", "SVG", "PDF"], "raster_formats": ["PNG", "JPEG", "TIFF"],
+      "preferred_formats": [
+        "PNG",
+        "SVG",
+        "PDF"
+      ],
+      "raster_formats": [
+        "PNG",
+        "JPEG",
+        "TIFF"
+      ],
       "max_file_mb": null,
       "source": "generic"
+    }
+  ],
+  "rules": [
+    {
+      "id": "nature-fig-width-single",
+      "journal_ids": [
+        "nature-single"
+      ],
+      "property": "figure_width",
+      "level": "required",
+      "appliesTo": {
+        "figureType": "any",
+        "stage": "final_submission"
+      },
+      "operator": "equal",
+      "value": 89,
+      "unit": "mm",
+      "tolerance": 1.0,
+      "verification": "verified",
+      "sourceUrl": "https://www.nature.com/nature/for-authors/final-submission",
+      "checkedAt": "2026-11-12",
+      "evidence": "Nature's standard figure sizes are 89 mm wide (single column) and 183 mm wide (double column).（官方 Final submission 页原文）"
+    },
+    {
+      "id": "nature-fig-width-double",
+      "journal_ids": [
+        "nature-double"
+      ],
+      "property": "figure_width",
+      "level": "required",
+      "appliesTo": {
+        "figureType": "any",
+        "stage": "final_submission"
+      },
+      "operator": "equal",
+      "value": 183,
+      "unit": "mm",
+      "tolerance": 1.0,
+      "verification": "verified",
+      "sourceUrl": "https://www.nature.com/nature/for-authors/final-submission",
+      "checkedAt": "2026-11-12",
+      "evidence": "同上：183 mm 双栏"
+    },
+    {
+      "id": "nature-fig-max-height",
+      "journal_ids": [
+        "nature-single",
+        "nature-double"
+      ],
+      "property": "figure_height",
+      "level": "required",
+      "appliesTo": {
+        "figureType": "any",
+        "stage": "final_submission"
+      },
+      "operator": "max",
+      "value": 247,
+      "unit": "mm",
+      "verification": "verified",
+      "sourceUrl": "https://www.nature.com/nature/for-authors/final-submission",
+      "checkedAt": "2026-11-12",
+      "evidence": "The full depth of a Nature page is 247 mm.（官方原文）"
+    },
+    {
+      "id": "nature-font-min",
+      "journal_ids": [
+        "nature-single",
+        "nature-double"
+      ],
+      "property": "min_font_size",
+      "level": "required",
+      "appliesTo": {
+        "figureType": "any",
+        "stage": "final_submission"
+      },
+      "operator": "min",
+      "value": 5,
+      "unit": "pt",
+      "verification": "verified",
+      "sourceUrl": "https://www.nature.com/documents/Final_guide_to_authors.pdf",
+      "checkedAt": "2026-11-12",
+      "evidence": "Text sizes: minimum 5 pt, maximum 7 pt at final printed size；panel labels 8 pt bold（Final guide to authors）"
+    },
+    {
+      "id": "nature-font-max",
+      "journal_ids": [
+        "nature-single",
+        "nature-double"
+      ],
+      "property": "max_font_size",
+      "level": "recommended",
+      "appliesTo": {
+        "figureType": "any",
+        "stage": "final_submission"
+      },
+      "operator": "max",
+      "value": 7,
+      "unit": "pt",
+      "verification": "verified",
+      "sourceUrl": "https://www.nature.com/documents/Final_guide_to_authors.pdf",
+      "checkedAt": "2026-11-12",
+      "evidence": "maximum 7 pt（同上）"
+    },
+    {
+      "id": "nature-dpi-color",
+      "journal_ids": [
+        "nature-single",
+        "nature-double"
+      ],
+      "property": "raster_dpi",
+      "level": "required",
+      "appliesTo": {
+        "figureType": "halftone_color",
+        "stage": "final_submission"
+      },
+      "operator": "min",
+      "value": 300,
+      "unit": "dpi",
+      "verification": "verified",
+      "sourceUrl": "https://www.nature.com/nature/for-authors/final-submission",
+      "checkedAt": "2026-11-12",
+      "evidence": "官方要求位图不低于 300 dpi（线稿更高）"
+    },
+    {
+      "id": "science-fig-width-1col",
+      "journal_ids": [
+        "science-single"
+      ],
+      "property": "figure_width",
+      "level": "required",
+      "appliesTo": {
+        "figureType": "any",
+        "stage": "initial_submission"
+      },
+      "operator": "equal",
+      "value": 57,
+      "unit": "mm",
+      "tolerance": 1.0,
+      "verification": "unverified_secondary",
+      "sourceUrl": "https://www.science.org/content/page/instructions-preparing-initial-manuscript",
+      "checkedAt": "2026-11-12",
+      "evidence": "官方页 HTTP 403 无法直接核对；5.7/12.1/18.4 cm 来自第三方对官方说明的转述，投稿前须自行核对 science.org"
+    },
+    {
+      "id": "science-fig-width-2col",
+      "journal_ids": [
+        "science-double"
+      ],
+      "property": "figure_width",
+      "level": "required",
+      "appliesTo": {
+        "figureType": "any",
+        "stage": "initial_submission"
+      },
+      "operator": "equal",
+      "value": 121,
+      "unit": "mm",
+      "tolerance": 1.0,
+      "verification": "unverified_secondary",
+      "sourceUrl": "https://www.science.org/content/page/instructions-preparing-initial-manuscript",
+      "checkedAt": "2026-11-12",
+      "evidence": "同上（未直接核对）"
+    },
+    {
+      "id": "science-font-min",
+      "journal_ids": [
+        "science-single",
+        "science-double",
+        "science-full"
+      ],
+      "property": "min_font_size",
+      "level": "recommended",
+      "appliesTo": {
+        "figureType": "any",
+        "stage": "initial_submission"
+      },
+      "operator": "min",
+      "value": 6,
+      "unit": "pt",
+      "verification": "unverified_secondary",
+      "sourceUrl": "https://www.science.org/content/page/instructions-preparing-initial-manuscript",
+      "checkedAt": "2026-11-12",
+      "evidence": "第三方转述 ≥6pt Helvetica/Arial；官方页未直接核对"
+    },
+    {
+      "id": "science-dpi-halftone",
+      "journal_ids": [
+        "science-single",
+        "science-double",
+        "science-full"
+      ],
+      "property": "raster_dpi",
+      "level": "required",
+      "appliesTo": {
+        "figureType": "halftone_color",
+        "stage": "initial_submission"
+      },
+      "operator": "min",
+      "value": 300,
+      "unit": "dpi",
+      "verification": "unverified_secondary",
+      "sourceUrl": "https://www.science.org/content/page/instructions-preparing-initial-manuscript",
+      "checkedAt": "2026-11-12",
+      "evidence": "第三方转述 300/500/1000 dpi 分层；官方页未直接核对"
+    },
+    {
+      "id": "acsnano-width-single",
+      "journal_ids": [
+        "acs-single"
+      ],
+      "property": "figure_width",
+      "level": "required",
+      "appliesTo": {
+        "figureType": "any",
+        "stage": "submission"
+      },
+      "operator": "max",
+      "value": 84.7,
+      "unit": "mm",
+      "verification": "verified",
+      "sourceUrl": "https://researcher-resources.acs.org/publish/author_guidelines?coden=ancac3",
+      "checkedAt": "2026-11-12",
+      "evidence": "Single-column: sized up to 240 points wide (3.33 in.)（240pt=84.7mm，官方原文）"
+    },
+    {
+      "id": "acsnano-width-double-range-min",
+      "journal_ids": [
+        "acs-double"
+      ],
+      "property": "figure_width",
+      "level": "required",
+      "appliesTo": {
+        "figureType": "any",
+        "stage": "submission"
+      },
+      "operator": "min",
+      "value": 105.8,
+      "unit": "mm",
+      "verification": "verified",
+      "sourceUrl": "https://researcher-resources.acs.org/publish/author_guidelines?coden=ancac3",
+      "checkedAt": "2026-11-12",
+      "evidence": "Double-column: sized between 300 and 504 points (4.167 in. and 7 in.)（300pt=105.8mm）"
+    },
+    {
+      "id": "acsnano-width-double-range-max",
+      "journal_ids": [
+        "acs-double"
+      ],
+      "property": "figure_width",
+      "level": "required",
+      "appliesTo": {
+        "figureType": "any",
+        "stage": "submission"
+      },
+      "operator": "max",
+      "value": 177.8,
+      "unit": "mm",
+      "verification": "verified",
+      "sourceUrl": "https://researcher-resources.acs.org/publish/author_guidelines?coden=ancac3",
+      "checkedAt": "2026-11-12",
+      "evidence": "504 points (7 in.)=177.8mm（同上）"
+    },
+    {
+      "id": "acsnano-max-depth",
+      "journal_ids": [
+        "acs-single",
+        "acs-double"
+      ],
+      "property": "figure_height",
+      "level": "required",
+      "appliesTo": {
+        "figureType": "any",
+        "stage": "submission"
+      },
+      "operator": "max",
+      "value": 232.7,
+      "unit": "mm",
+      "verification": "verified",
+      "sourceUrl": "https://researcher-resources.acs.org/publish/author_guidelines?coden=ancac3",
+      "checkedAt": "2026-11-12",
+      "evidence": "The maximum depth for all graphics is 660 points (9.167 in.) including the caption（官方原文）"
+    },
+    {
+      "id": "acsnano-font-min",
+      "journal_ids": [
+        "acs-single",
+        "acs-double"
+      ],
+      "property": "min_font_size",
+      "level": "required",
+      "appliesTo": {
+        "figureType": "any",
+        "stage": "submission"
+      },
+      "operator": "min",
+      "value": 4.5,
+      "unit": "pt",
+      "verification": "verified",
+      "sourceUrl": "https://researcher-resources.acs.org/publish/author_guidelines?coden=ancac3",
+      "checkedAt": "2026-11-12",
+      "evidence": "Lettering should be no smaller than 4.5 points in the final published format. Helvetica or Arial（官方原文）"
+    },
+    {
+      "id": "acsnano-line-width-min",
+      "journal_ids": [
+        "acs-single",
+        "acs-double"
+      ],
+      "property": "line_width",
+      "level": "recommended",
+      "appliesTo": {
+        "figureType": "any",
+        "stage": "submission"
+      },
+      "operator": "min",
+      "value": 0.5,
+      "unit": "pt",
+      "verification": "verified",
+      "sourceUrl": "https://researcher-resources.acs.org/publish/author_guidelines?coden=ancac3",
+      "checkedAt": "2026-11-12",
+      "evidence": "Lines should be no thinner than 0.5 point.（官方原文）"
+    },
+    {
+      "id": "acsnano-dpi-lineart",
+      "journal_ids": [
+        "acs-single",
+        "acs-double"
+      ],
+      "property": "raster_dpi",
+      "level": "required",
+      "appliesTo": {
+        "figureType": "line_art",
+        "stage": "submission"
+      },
+      "operator": "min",
+      "value": 1200,
+      "unit": "dpi",
+      "verification": "verified",
+      "sourceUrl": "https://researcher-resources.acs.org/publish/author_guidelines?coden=ancac3",
+      "checkedAt": "2026-11-12",
+      "evidence": "Black and white line art, 1200 dpi（官方原文）"
+    },
+    {
+      "id": "acsnano-dpi-grayscale",
+      "journal_ids": [
+        "acs-single",
+        "acs-double"
+      ],
+      "property": "raster_dpi",
+      "level": "required",
+      "appliesTo": {
+        "figureType": "grayscale",
+        "stage": "submission"
+      },
+      "operator": "min",
+      "value": 600,
+      "unit": "dpi",
+      "verification": "verified",
+      "sourceUrl": "https://researcher-resources.acs.org/publish/author_guidelines?coden=ancac3",
+      "checkedAt": "2026-11-12",
+      "evidence": "Grayscale art, 600 dpi（官方原文）"
+    },
+    {
+      "id": "acsnano-dpi-color",
+      "journal_ids": [
+        "acs-single",
+        "acs-double"
+      ],
+      "property": "raster_dpi",
+      "level": "required",
+      "appliesTo": {
+        "figureType": "halftone_color",
+        "stage": "submission"
+      },
+      "operator": "min",
+      "value": 300,
+      "unit": "dpi",
+      "verification": "verified",
+      "sourceUrl": "https://researcher-resources.acs.org/publish/author_guidelines?coden=ancac3",
+      "checkedAt": "2026-11-12",
+      "evidence": "Color art, 300 dpi（官方原文）"
     }
   ]
 }

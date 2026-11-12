@@ -118,6 +118,15 @@ AI 与 UI 的唯一变更入口。**所有编辑都产出 `EditOp[]`，经校验
 
 ```js
 FigOps.OP_TYPES -> string[]        // 与 edit-op.schema.json 的 enum 一致
+FigOps.OP_SPECS -> {<op>: {usage, fields?, enums?, notes?, requiresType?}}
+//   R01 操作描述注册表：usage 为中文说明；enums 直接引用运行时校验白名单
+//   常量（CP_*/SC_*），保证「暴露给模型的操作确实可校验」。ai.js 优先
+//   读取本表生成提示词，FigOps 未加载时才用 ai.js 静态回退文本。
+FigOps.describeCapabilities({doc, selection?}) -> {
+//   scope:"selection"|"document", selectionCount, types, chartIds,
+//   ops:[{op, applies, reason?, usage, fields?, enums?, notes?}] }
+//   供 AI/UI 询问当前对象可做什么；requiresType 的 op 在选择范围不含该
+//   类型时 applies=false 并给出 reason。
 FigOps.validate(op, doc) -> {ok, errors}      // 单条校验，含 target 是否存在
 FigOps.validateAll(ops, doc) -> {ok, errors}
 FigOps.apply(doc, op) -> {doc, changed: boolean}
@@ -248,13 +257,25 @@ FigPresets.recommend(columnStats, {n=5}) -> [{template_id, score, reasons: strin
 //   columnStats: FigData.columnStats(data) 的返回；同分按模板表顺序。
 //   任何 status=unsupported 的模板一律在返回列表前剔除、不参与排序，因此 ROC/volcano/PCA/示意图等
 //   未实现本地 renderer 的候选不会以高分进入默认推荐，也不承诺 60 个模板都可真实生成。
-FigPresets.templateFromStats(templateId, data, {journal_id, palette_id}) -> {
+FigPresets.templateFromStats(templateId, data, {journal_id, palette_id, mapping?}) -> {
 //   elements, chart, warnings, capability, data_bound
 // }
 //   先执行 validateTemplateCapability，不可应用时抛 Error，不产生元素。
+//   R02：opts.mapping 为用户确认的字段映射 {槽位: 列名|null}。规则＝
+//   「用户确认值优先；未提供才使用既有推断」。槽位必须是模板
+//   default_mapping 声明的槽；字符串值必须是数据中真实存在的列名；
+//   null 显式清空该槽；违规立即抛错（不静默回退推断，保证向导所见
+//   与实际生成一致）。
 //   full 无 data/rows 时仍允许显式空骨架，data_bound=false 并明确提示“未绑定数据”，不代表已生成图表。
 //   layout 只产生 chart={} 的空白复合骨架，data_bound=false；即使传 data 也不自动填图。
 //   每个图表模板含 panel 容器、一个或多个 chart 元素及可选标题文本。
+FigPresets.mappingSlots(templateId) -> [{slot, description, optional, numeric}]
+//   R02：模板声明的映射槽位（向导据此渲染可编辑下拉）。optional 按
+//   default_mapping 描述的「可选」标记或空描述判定。
+FigPresets.RENDERER_SEMANTICS -> {
+//   <chart_type>: {required:[槽位], aggregation, note} }
+//   与 lib/data.js RENDERS 实际聚合行为对应（bar/bar_grouped=均值、
+//   pie=求和、line/scatter=不聚合等）；改渲染聚合必须同步本表。
 ```
 
 ---
@@ -375,6 +396,11 @@ FigAI.enabled() -> boolean
 FigAI.buildEditMessages({doc, instruction, anchors, selection, historyTail}) -> messages
 //   system 里内嵌：edit-op.schema 的精简说明 + 当前元素清单(表格:id/type/bbox_mm/text 摘要)
 //   + 锚点清单(表格:id/label/bbox_mm/note)；user 里是自然语言指令。
+//   R01：操作说明优先由 FigOps.describeCapabilities 动态生成（枚举与
+//   运行时校验白名单同源）；有选中图表时附图表结构摘要
+//   （chartType/mapping/axes/characterization 当前值、列名与缺失计数、
+//   统计声明状态），不含原始数据行；axes 的 linear|log 与表征
+//   x_scale 的 linear|log10 在说明中明确区分。
 //   要求模型只输出 {"ops":[...],"explanation":"..."} JSON。
 FigAI.buildReviewMessages({doc, imageDataUrl, journalPreset, checkResult}) -> messages
 //   要求输出 [{"severity":"high|medium|low","target":"<element_id|anchor_id>",

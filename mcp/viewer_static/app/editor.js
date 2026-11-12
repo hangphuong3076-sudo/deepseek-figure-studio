@@ -802,10 +802,61 @@
       } else if (!already) {
         A.select([el.id]);
       }
+      // R04：图表部件命中（系列/图例/轴标题/峰标注）→ 记录语义部件引用，
+      // 供属性面板做局部样式编辑；整体拖动仍以 chart 元素为对象。
+      setChartPartRef(el, evt.target);
       beginMove(p);
       return;
     }
+    clearChartPartRef();
     beginMarquee(p, evt, false);
+  }
+
+  // R04：从点击目标向上找 data-chart-part / data-series-key / data-peak-id
+  // 与所属 chart 的 data-fig-id；仅当命中的顶层元素是 chart 时生效。
+  function setChartPartRef(chartEl, targetNode) {
+    var A = global.App;
+    if (!A.ui || typeof A.ui !== 'object') A.ui = {};
+    if (!chartEl || chartEl.type !== 'chart') {
+      clearChartPartRef();
+      return null;
+    }
+    var node = targetNode, part = null, key = null, peakId = null, figId = null;
+    var guard = 0;
+    while (node && node !== S.svg && guard++ < 40) {
+      if (node.getAttribute) {
+        if (!part) part = node.getAttribute('data-chart-part');
+        if (!key) key = node.getAttribute('data-series-key');
+        if (!peakId) peakId = node.getAttribute('data-peak-id');
+        if (!figId) figId = node.getAttribute('data-fig-id');
+      }
+      node = node.parentNode;
+    }
+    if (!figId || figId !== chartEl.id) {
+      // 部件未携带所属 chart 标识（如旧渲染输出）：视为整图选择
+      clearChartPartRef();
+      return null;
+    }
+    if (!part) {
+      clearChartPartRef();
+      return null;
+    }
+    A.ui.chartPart = {
+      chartId: chartEl.id,
+      part: part,
+      seriesKey: key || null,
+      peakId: peakId || null
+    };
+    if (typeof A.emit === 'function') A.emit('ui:changed', { chartPart: A.ui.chartPart });
+    return A.ui.chartPart;
+  }
+
+  function clearChartPartRef() {
+    var A = global.App;
+    if (A && A.ui && A.ui.chartPart) {
+      A.ui.chartPart = null;
+      if (typeof A.emit === 'function') A.emit('ui:changed', { chartPart: null });
+    }
   }
 
   function beginMarquee(p, evt, isAnchor) {

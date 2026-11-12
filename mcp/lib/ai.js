@@ -174,7 +174,12 @@
     "- add_anchor: {anchor:{id?, label, bbox_mm 或 bbox_norm}}；update_anchor: {anchor:{id,...}}；remove_anchor: {anchor:{id}}",
     "- apply_template: {template_id}；apply_journal: {journal_preset_id}",
     "- apply_schematic: {contract:{id,nodes,relations,sources,canvas?,layout?},auto_layout?:false}（来源链接的严格声明式示意图；禁止猜实验体/方向）",
-    "- set_chart_data: {targets:[chartId],approved:true,data:{columns,rows,source_ref?,version?,raw_source_sha256?,source_info?},source_ref,version}（显式批准后换数据，旧来源完整入 data_history；无新 raw 证明则不继承旧 hash）",
+    "- layout_schematic: {diagram_id, auto_layout:true}（按已保存合同显式重排）",
+    "- set_scientific_contract: {contract:{schema_version?,results_question?,figure_claim?,falsifier?,archetype?,hero_panel?,panels?,statistics?}}（科学论证合同；statistics 存于各 chart，逐图申报）",
+    "- set_chart_properties: {targets:[chartId], properties:{axes?, characterization?}}（图表属性唯一入口；不改 chartType 与原始数据行）",
+    "    axes 键：xLabel/yLabel（字符串）、xScale/yScale（linear|log）、gridlines（布尔）",
+    "    characterization 键：technique、x_reverse（布尔）、x_scale（linear|log10，注意与 axes 的 log 不同写法）、x_label/y_label、curves[{role:fit|component|baseline, column, label?}]（column 必须是内联数据真实列名）、fit_model、fit_source（固定 provided_by_user_fit）、peak_annotations[{x, label}]、normalize（none|max_to_unity）、offset_each_series（数字，仅视觉偏移）、equal_aspect（布尔）；null 清除表征",
+    "- set_chart_data: {targets:[chartId],approved:true,data:{columns,rows,source_ref?,version?,raw_source_sha256?,source_info?},source_ref,version}（approved 只能来自用户明确批准的替换流程，模型输出不构成授权；替换后统计声明强制重审）",
     "- recolor: {palette_id, recolor_strategy?: byHue|byOrder|byRole}",
     "- panel_layout: {targets, panel:{cols, rows, gap_mm, padding_mm, ...}}",
     "- set_canvas: {canvas:{width_mm, height_mm, dpi, background, ...}}",
@@ -182,6 +187,153 @@
     "targets 项格式：元素 id 字符串；\"@<锚点id>\" 表示锚点内的元素；{kind:\"all\"} 表示全部元素；{kind:\"type\", type:\"text\"} 表示某类元素。锚点 id 指 anchors 清单中的 id。",
     "每个 op 可附带 reason 字段（中文）说明理由。"
   ].join("\n");
+
+  // ------------------------------------------------------------------
+  // R01：动态操作说明与图表上下文
+  //
+  // opHelpLines 优先用 FigOps.describeCapabilities（运行时校验白名单的
+  // 同一常量）生成，保证「暴露给模型的操作确实可校验」；FigOps 未加载
+  // 时回退上方静态文本（两者由测试保持一致的关键枚举对齐）。
+  // ------------------------------------------------------------------
+
+  function enumsText(enums) {
+    if (!enums) return [];
+    return Object.keys(enums).map(function (k) {
+      var v = enums[k];
+      return "    " + k + (Array.isArray(v) ? ": " + v.join("|") : ": " + String(v));
+    });
+  }
+
+  function opHelpLines(doc, selection) {
+    var F = global.FigOps;
+    if (F && typeof F.describeCapabilities === "function" && F.OP_SPECS) {
+      try {
+        var caps = F.describeCapabilities({ doc: doc, selection: selection });
+        var lines = ["可用 EditOp 类型与关键字段（op 字段只能取这些值；枚举与运行时校验白名单同源）："];
+        caps.ops.forEach(function (o) {
+          if (o.op === "add_anchor" || o.op === "update_anchor" || o.op === "remove_anchor") {
+            return; // 与锚点说明行合并，避免重复
+          }
+          lines.push("- " + o.usage);
+          if (o.enums) enumsText(o.enums).forEach(function (t) { lines.push(t); });
+          if (o.notes) o.notes.forEach(function (n) { lines.push("    注意：" + n); });
+        });
+        lines.push("- add_anchor: {anchor:{id?, label, bbox_mm 或 bbox_norm}}；" +
+          "update_anchor: {anchor:{id,...}}；remove_anchor: {anchor:{id}}");
+        var notApplicable = caps.ops.filter(function (o) { return !o.applies; });
+        if (notApplicable.length) {
+          lines.push("当前选择范围不适用（仅供了解，不要对当前选择使用）：");
+          notApplicable.forEach(function (o) {
+            lines.push("- " + o.op + "：" + (o.reason || "不适用"));
+          });
+        }
+        lines.push("targets 项格式：元素 id 字符串；\"@<锚点id>\" 表示锚点内的元素；" +
+          "{kind:\"all\"} 表示全部元素；{kind:\"type\", type:\"text\"} 表示某类元素。");
+        lines.push("每个 op 可附带 reason 字段（中文）说明理由。");
+        return lines.join("\n");
+      } catch (e) { /* fall through to static text */ }
+    }
+    return OP_HELP;
+  }
+
+  // 图表结构摘要（R01/R03 图表上下文）：chartType、mapping、axes、
+  // characterization 当前值、可用列名与缺失计数、统计声明状态。
+  // 只输出元数据与计数，绝不包含原始数据行。
+  function chartContextLines(el) {
+    var c = el.chart;
+    if (!c || typeof c !== "object") return null;
+    var lines = ["### " + el.id + "（" + (c.chartType || "未知图型") + "）"];
+    if (c.mapping && Object.keys(c.mapping).length) {
+      lines.push("- mapping: " + JSON.stringify(c.mapping));
+    }
+    if (c.axes && Object.keys(c.axes).length) {
+      lines.push("- axes: " + JSON.stringify(c.axes));
+    } else {
+      lines.push("- axes: {}（未设置；xScale/yScale 可用 linear|log）");
+    }
+    if (c.characterization && Object.keys(c.characterization).length) {
+      lines.push("- characterization: " + JSON.stringify(c.characterization));
+    }
+    if (c.legend) lines.push("- legend: " + c.legend);
+    if (c.paletteId) lines.push("- paletteId: " + c.paletteId);
+    var inline = c.data && c.data.inline;
+    if (inline && Array.isArray(inline.columns)) {
+      var rows = Array.isArray(inline.rows) ? inline.rows : [];
+      var scan = Math.min(rows.length, 5000);
+      var missing = inline.columns.map(function () { return 0; });
+      for (var r = 0; r < scan; r++) {
+        var row = rows[r];
+        if (!Array.isArray(row)) continue;
+        for (var ci = 0; ci < inline.columns.length; ci++) {
+          var v = row[ci];
+          if (v === null || v === undefined || v === "") missing[ci]++;
+        }
+      }
+      lines.push("- 数据列（" + inline.columns.length + " 列 / " + rows.length +
+        " 行，缺失计数）：");
+      inline.columns.forEach(function (name, i) {
+        lines.push("    - " + name + (missing[i] ? "（缺失 " + missing[i] + "）" : ""));
+      });
+    } else {
+      lines.push("- 数据：未内联绑定（data_bound=false）");
+    }
+    if (c.statistics && Object.keys(c.statistics).length) {
+      lines.push("- statistics: 已申报 " + Object.keys(c.statistics).length + " 项（改数据后需重审）");
+    } else {
+      lines.push("- statistics: 未申报");
+    }
+    if (global.FigData && typeof global.FigData.seriesIdentity === "function") {
+      try {
+        var ident = global.FigData.seriesIdentity(c);
+        if (ident && ident.length) {
+          lines.push("- 可编辑系列（稳定键，presentation.series 按此覆盖）：" +
+            ident.slice(0, 12).map(function (s) {
+              return s.key + (s.label && s.label !== s.key ? "(" + trunc(s.label, 20) + ")" : "");
+            }).join("、") + (ident.length > 12 ? " 等" : ""));
+        }
+      } catch (e) { /* 身份计算失败不阻塞上下文 */ }
+    }
+    if (c.presentation && Object.keys(c.presentation).length) {
+      var presBits = [];
+      if (c.presentation.series) {
+        presBits.push("series:" + Object.keys(c.presentation.series).length + " 项覆盖");
+      }
+      if (c.presentation.legend) presBits.push("legend 已覆盖");
+      if (c.presentation.axes) presBits.push("axes 已覆盖");
+      if (c.presentation.peaks) presBits.push("peaks:" + Object.keys(c.presentation.peaks).length + " 项");
+      if (presBits.length) lines.push("- presentation: " + presBits.join("；"));
+    }
+    if (c.data && c.data.source_ref) {
+      lines.push("- source_ref: " + trunc(oneLine(c.data.source_ref), 80));
+    }
+    return lines.join("\n");
+  }
+
+  function renderChartContext(doc, selection) {
+    var els = (doc && doc.elements) || [];
+    var charts = els.filter(function (el) { return el && el.type === "chart"; });
+    if (!charts.length) return "";
+    var scoped = charts;
+    if (Array.isArray(selection) && selection.length) {
+      var picked = charts.filter(function (el) {
+        return selection.indexOf(el.id) >= 0;
+      });
+      // 默认范围＝选中对象；选中非图表时仍给全文档图表摘要的最小清单
+      // （仅 id 与图型），不发送整图细节。
+      if (picked.length) scoped = picked;
+      else return charts.slice(0, 8).map(function (el) {
+        return "- " + el.id + "（" + ((el.chart && el.chart.chartType) || "?") +
+          "；未选中，如需修改请在指令中写该 chart id）";
+      }).join("\n");
+    }
+    var cap = 8;
+    var shown = scoped.slice(0, cap);
+    var lines = shown.map(chartContextLines).filter(Boolean);
+    if (scoped.length > cap) {
+      lines.push("（其余 " + (scoped.length - cap) + " 个图表未展开；请按元素 id 指定）");
+    }
+    return lines.join("\n");
+  }
 
   function renderElementTable(doc) {
     var els = (doc && doc.elements) || [];
@@ -242,16 +394,24 @@
     requireInstruction(opts.instruction, "buildEditMessages");
     var doc = opts.doc;
     var anchors = Array.isArray(opts.anchors) ? opts.anchors : (doc.anchors || []);
+    var selection = Array.isArray(opts.selection) ? opts.selection : [];
     var parts = [
       "你是一个科研绘图编辑器的 AI 助手。你只能通过输出 EditOp 操作来修改文档，绝不能直接声称已修改。",
-      OP_HELP,
+      opHelpLines(doc, selection),
       "当前文档元素清单：",
       renderElementTable(doc),
       "锚点清单：",
       renderAnchorTable(anchors)
     ];
-    if (Array.isArray(opts.selection) && opts.selection.length) {
-      parts.push("当前选中元素：" + opts.selection.join(", "));
+    var chartCtx = renderChartContext(doc, selection);
+    if (chartCtx) {
+      parts.push(selection.length
+        ? "选中图表的结构摘要（当前值；不含原始数据行）："
+        : "文档图表结构摘要（默认全部列出；不含原始数据行）：");
+      parts.push(chartCtx);
+    }
+    if (selection.length) {
+      parts.push("当前选中元素：" + selection.join(", "));
     }
     var hist = renderHistoryTail(opts.historyTail);
     if (hist) parts.push(hist);
@@ -302,8 +462,12 @@
           (w.element_id ? "（元素 " + w.element_id + "）" : ""));
       });
     }
-    parts.push("EditOp 关键字段说明：", OP_HELP);
+    parts.push("EditOp 关键字段说明：", opHelpLines(doc, []));
     parts.push("当前文档元素清单：", renderElementTable(doc));
+    var reviewChartCtx = renderChartContext(doc, []);
+    if (reviewChartCtx) {
+      parts.push("文档图表结构摘要（不含原始数据行）：", reviewChartCtx);
+    }
     parts.push("锚点清单：", renderAnchorTable(anchors));
     parts.push(
       "输出要求：只输出一个 JSON 数组：[{\"severity\":\"high|medium|low\",\"target\":\"<element_id|anchor_id>\"," +

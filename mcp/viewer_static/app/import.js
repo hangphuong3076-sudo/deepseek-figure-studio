@@ -573,6 +573,213 @@
     return ops;
   }
 
+  // ---- R02 数据映射向导 ------------------------------------------------
+  //
+  // 统一「数据预览 → 字段映射 → 图表和画布预览 → 创建」流程。DataWizard
+  // 动态加载（与 svg-import 同模式）；不可用时回退旧 recommendDialog，
+  // 保证旧入口与环境仍可用。构建（buildDraft）与提交（onCreate）共用
+  // templateFromStats + fitBuiltIntoCanvas：预览与最终创建来自同一构建结果。
+
+  var dataWizardPromise = null;
+
+  function ensureDataWizard() {
+    if (global.DataWizard && typeof global.DataWizard.open === 'function') {
+      return Promise.resolve(global.DataWizard);
+    }
+    if (!dataWizardPromise) {
+      dataWizardPromise = new Promise(function (resolve, reject) {
+        var s = document.createElement('script');
+        s.src = 'app/data-wizard.js';
+        s.onload = function () {
+          if (global.DataWizard && typeof global.DataWizard.open === 'function') {
+            resolve(global.DataWizard);
+          } else {
+            reject(new Error('data-wizard.js 加载后缺少 DataWizard'));
+          }
+        };
+        s.onerror = function () { reject(new Error('无法加载 app/data-wizard.js')); };
+        (document.head || document.body).appendChild(s);
+      });
+    }
+    return dataWizardPromise;
+  }
+
+  // 画布选择 → effective canvas + 需要额外提交的 apply_journal op。
+  // keep：当前画布不动；explicit_preset：用户确认套模板期刊预设；
+  // explicit_size：用户输入 W×H。
+  function canvasChoiceResult(app, choice) {
+    var canvas = (app.doc && app.doc.canvas) || { width_mm: 120, height_mm: 90, dpi: 300 };
+    var ops = [];
+    var effective = canvas;
+    if (choice && choice.mode === 'explicit_preset' && choice.preset && choice.preset.id) {
+      try {
+        var ap = global.FigPresets.applyCanvas(choice.preset.id, app.doc);
+        if (ap && ap.op) {
+          ops.push(ap.op);
+          effective = ap.doc.canvas;
+        }
+      } catch (e) { /* 保留当前画布并回退缩放 */ }
+    } else if (choice && choice.mode === 'explicit_size') {
+      var w = Math.max(10, Math.min(2000, Number(choice.width_mm) || 120));
+      var hgt = Math.max(10, Math.min(2000, Number(choice.height_mm) || 90));
+      var op = { op: 'set_canvas', canvas: { width_mm: w, height_mm: hgt } };
+      ops.push(op);
+      effective = Object.assign({}, canvas, { width_mm: w, height_mm: hgt });
+    }
+    return { ops: ops, canvas: effective };
+  }
+
+  function openDataWizard(app, data, filename, recs, provenance, cb) {
+    var appName = baseName(filename);
+    // 预览与最终创建共用同一构建函数：同一 draft 状态 → 同一几何/映射/
+    // 有效画布（元素 id 因构建而不同，但提交后即固定进历史）。
+    function buildDraftShared(templateId, mapping, canvasChoice, title) {
+      var applicability = templateApplicability(templateId);
+      if (!applicability.ok) fail('模板不可应用：' + applicability.errors.join('；'));
+      var canvasRes = canvasChoiceResult(app, canvasChoice);
+      var opts = {
+        journal_id: null, // 画布选择独立处理；模板默认仅在用户确认后生效
+        palette_id: null,
+        title: title || undefined
+      };
+      if (mapping && Object.keys(mapping).length) opts.mapping = mapping;
+      var built = global.FigPresets.templateFromStats(templateId, data, opts);
+      fitBuiltIntoCanvas(built, canvasRes.canvas);
+      built.effectiveCanvas = canvasRes.canvas;
+      built._canvasOps = canvasRes.ops;
+      return built;
+    }
+    function openWith(DW) {
+      var handle = DW.open({
+        filename: filename,
+        data: data,
+        recommendations: recs,
+        appName: appName,
+        sourceInfo: provenance || null,
+        currentCanvas: (app.doc && app.doc.canvas) || { width_mm: 120, height_mm: 90, dpi: 300 },
+        buildDraft: buildDraftShared,
+        onCreate: function (templateId, mapping, canvasChoice, title) {
+          return Promise.resolve().then(function () {
+            // 与预览共用同一 buildDraft：提交的就是预览看到的构建结果
+            // （元素、几何、映射、有效画布一致；同一 draft 状态确定性重建）。
+            var buildResult = buildDraftShared(templateId, mapping, canvasChoice, title);
+            var ops = (buildResult._canvasOps || []).concat(
+              buildTableOps(buildResult, filename, templateId, provenance));
+            return app.commit(ops, { label: '导入数据：' + filename, source: 'import' })
+              .then(function (res) {
+                if (!res || !res.applied) {
+                  if (cb) cb(new Error('操作未应用'));
+                  return false;
+                }
+                var ids = buildResult.elements.map(function (el) { return el.id; });
+                (buildResult.warnings || []).forEach(function (w) { toast(w, { type: 'info' }); });
+                toast('已导入 ' + filename + '（模板 ' + templateId + '，' +
+                  buildResult.elements.length + ' 个元素）', { type: 'success' });
+                try {
+                  if (typeof app.select === 'function') app.select(ids);
+                } catch (e) { /* selection is cosmetic */ }
+                if (cb) cb(null, { template_id: templateId, element_ids: ids,
+                  source_info: provenance || null, warnings: buildResult.warnings || [] });
+                return true;
+              });
+          }).catch(function (err) {
+            toastError('导入失败：' + err.message);
+            if (cb) cb(err);
+            return false;
+          });
+        }
+      });
+      return handle;
+    }
+    // DataWizard 已加载时同步打开（浏览器 index.html 预载 / 测试 require）。
+    // 未加载时：真实浏览器（script onload 可用）动态加载；headless/受限
+    // 环境不等待永不触发的 onload，直接回退旧推荐对话框保持可用。
+    if (global.DataWizard && typeof global.DataWizard.open === 'function') {
+      return openWith(global.DataWizard);
+    }
+    function canDynamicLoad() {
+      try {
+        return typeof document === 'object' && !!document.head &&
+          typeof document.createElement === 'function' &&
+          'onload' in document.createElement('script');
+      } catch (e) { return false; }
+    }
+    if (canDynamicLoad()) {
+      ensureDataWizard().then(openWith).catch(fallbackToLegacy);
+      return null;
+    }
+    fallbackToLegacy(new Error('当前环境不支持动态脚本加载'));
+    return null;
+
+    function fallbackToLegacy(err) {
+      // data-wizard.js 不可用（如脱离服务的静态页）：回退旧推荐对话框
+      toast('数据映射向导不可用（' + (err && err.message || '加载失败') +
+        '），回退到简单模板选择', { type: 'info' });
+      recommendDialog(filename, recs, function (templateId, title) {
+        return legacyCreateFromTemplate(app, data, filename, templateId, title, provenance, cb);
+      });
+    }
+  }
+
+  // 旧路径（无向导）：沿用既有「空文档自动套期刊 + 缩放」行为。
+  function legacyCreateFromTemplate(app, data, filename, templateId, title, provenance, cb) {
+    var built;
+    try {
+      var applicability = templateApplicability(templateId);
+      if (!applicability.ok) fail('模板不可应用：' + applicability.errors.join('；'));
+      built = global.FigPresets.templateFromStats(templateId, data, {
+        journal_id: null,
+        palette_id: null,
+        title: title || undefined
+      });
+    } catch (err) {
+      toastError('生成模板失败：' + err.message);
+      if (cb) cb(err);
+      return Promise.resolve(false);
+    }
+    var ops = [];
+    var tpl = null;
+    try {
+      tpl = global.FigPresets.template(templateId);
+    } catch (e) { /* template lookup is optional */ }
+    var canvas = (app.doc && app.doc.canvas) || { width_mm: 120, height_mm: 90 };
+    var emptyDoc = !(app.doc && app.doc.elements && app.doc.elements.length);
+    var journalId = tpl && tpl.journal_default;
+    if (emptyDoc && journalId && !canvas.journal_preset_id) {
+      try {
+        var ap = global.FigPresets.applyCanvas(journalId, app.doc);
+        if (ap && ap.op) {
+          ops.push(ap.op);
+          canvas = ap.doc.canvas;
+        }
+      } catch (e) { /* keep the current canvas and fall back to scaling */ }
+    }
+    fitBuiltIntoCanvas(built, canvas);
+    ops = ops.concat(buildTableOps(built, filename, templateId, provenance));
+    return Promise.resolve().then(function () {
+      return app.commit(ops, { label: '导入数据：' + filename, source: 'import' });
+    }).then(function (res) {
+      if (!res || !res.applied) {
+        if (cb) cb(new Error('操作未应用'));
+        return false;
+      }
+      var ids = built.elements.map(function (el) { return el.id; });
+      (built.warnings || []).forEach(function (w) { toast(w, { type: 'info' }); });
+      toast('已导入 ' + filename + '（模板 ' + templateId + '，' +
+        built.elements.length + ' 个元素）', { type: 'success' });
+      try {
+        if (typeof app.select === 'function') app.select(ids);
+      } catch (e) { /* selection is cosmetic */ }
+      if (cb) cb(null, { template_id: templateId, element_ids: ids,
+        source_info: provenance || null, warnings: built.warnings || [] });
+      return true;
+    }).catch(function (err) {
+      toastError('导入失败：' + err.message);
+      if (cb) cb(err);
+      return false;
+    });
+  }
+
   function applyParsedDataTable(data, filename, cb, provenance) {
     var app = requireApp();
     var stats, recs;
@@ -589,71 +796,7 @@
       if (cb) cb(new Error('没有可推荐的模板'));
       return;
     }
-    recommendDialog(filename, recs, function (templateId, title) {
-      var built;
-      try {
-        var applicability = templateApplicability(templateId);
-        if (!applicability.ok) fail('模板不可应用：' + applicability.errors.join('；'));
-        built = global.FigPresets.templateFromStats(templateId, data, {
-          journal_id: null, // let the template decide (journal_default)
-          palette_id: null,
-          title: title || undefined
-        });
-      } catch (err) {
-        toastError('生成模板失败：' + err.message);
-        if (cb) cb(err);
-        return Promise.resolve(false);
-      }
-      // Adopt the template's journal when the canvas is still untouched, so the
-      // figure keeps its designed size and typography; otherwise scale the
-      // generated content down so it cannot overflow the current canvas.
-      var ops = [];
-      var tpl = null;
-      try {
-        tpl = global.FigPresets.template(templateId);
-      } catch (e) { /* template lookup is optional */ }
-      var canvas = (app.doc && app.doc.canvas) || { width_mm: 120, height_mm: 90 };
-      var emptyDoc = !(app.doc && app.doc.elements && app.doc.elements.length);
-      var journalId = tpl && tpl.journal_default;
-      if (emptyDoc && journalId && !canvas.journal_preset_id) {
-        try {
-          var ap = global.FigPresets.applyCanvas(journalId, app.doc);
-          if (ap && ap.op) {
-            ops.push(ap.op);
-            canvas = ap.doc.canvas;
-          }
-        } catch (e) { /* keep the current canvas and fall back to scaling */ }
-      }
-      fitBuiltIntoCanvas(built, canvas);
-      ops = ops.concat(buildTableOps(built, filename, templateId, provenance));
-      // App.commit is async (APP-API.md): validate-failure keeps the doc
-      // untouched and resolves to {applied: 0}; anything else throws.
-      return Promise.resolve().then(function () {
-        return app.commit(ops, { label: '导入数据：' + filename, source: 'import' });
-      }).then(function (res) {
-        if (!res || !res.applied) {
-          // App.commit already reported the first validation error.
-          if (cb) cb(new Error('操作未应用'));
-          return false; // keep the dialog open so the user can retry
-        }
-        // Source bytes/value fingerprints and the import note share the same
-        // commit as the elements. res.doc must never be mutated here.
-        var ids = built.elements.map(function (el) { return el.id; });
-        (built.warnings || []).forEach(function (w) { toast(w, { type: 'info' }); });
-        toast('已导入 ' + filename + '（模板 ' + templateId + '，' +
-          built.elements.length + ' 个元素）', { type: 'success' });
-        try {
-          if (typeof app.select === 'function') app.select(ids);
-        } catch (e) { /* selection is cosmetic */ }
-        if (cb) cb(null, { template_id: templateId, element_ids: ids,
-          source_info: provenance || null, warnings: built.warnings || [] });
-        return true;
-      }).catch(function (err) {
-        toastError('导入失败：' + err.message);
-        if (cb) cb(err);
-        return false;
-      });
-    });
+    openDataWizard(app, data, filename, recs, provenance, cb);
   }
 
   function applyDataTable(text, filename, cb, rawBytes) {
@@ -1020,7 +1163,11 @@
         transform: { x: box.x, y: box.y, w: box.w, h: box.h, rotation: 0 },
         style: { imageFit: 'contain' },
         src: dataUrl,
-        asBackground: false
+        asBackground: false,
+        // R07：原始像素尺寸（导入时实测），供有效 DPI 检查；
+        // 缺失时检查器如实给 unknown，不用 dpi 标签冒充。
+        pxWidth: px.width,
+        pxHeight: px.height
       };
     }
     var ops = [{ op: 'add_element', element: el }];

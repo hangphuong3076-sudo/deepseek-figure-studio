@@ -78,6 +78,101 @@
   var SPREAD_TYPES = ["SD", "SEM", "95CI", "range"];
   var UNCERTAINTY_SOURCES = ["replicates", "column"];
 
+  /* ====================================================================
+   * R04: presentation 语义样式（chart.presentation）
+   *
+   * 渲染器仍按 mapping/原始数据/科学参数生成几何；presentation 只叠加
+   * 展示覆盖（系列颜色/线型/标记、轴标题与刻度文字、图例位置与字号、
+   * 峰标注样式）。样式按【稳定语义键】保存，不按 SVG 节点序或数组下标：
+   * - 分组系列键  group|<分组字段>|<类型>:<分组值>（line_multi/bar_grouped）
+   * - 表征曲线键  curve|<role>|<数据列>（fit/component/baseline）
+   * - 原始序列键  raw|<y 列>（表征图 raw 系列）/ series|<y 列>（普通单系列）
+   * - 颜色系列键  color|<字段>|<类型>:<值>（scatter color 映射）
+   * 数据替换/行序变化后同分组值仍匹配同键 → 局部样式保留；不再匹配的
+   * 覆盖保留在 presentation 里（标记暂不适用），不转移给其他系列。
+   * ==================================================================== */
+
+  var PRES_VERSION = 1;
+
+  function stableSeriesKey(prefix, field, value) {
+    var t = (value === null || value === undefined) ? "n"
+      : (typeof value === "number" ? "n" : "s");
+    return prefix + "|" + (field || "") + "|" + t + ":" + String(value);
+  }
+
+  function presOf(chartSpec) {
+    var p = chartSpec && chartSpec.presentation;
+    return (p && typeof p === "object" && !Array.isArray(p)) ? p : null;
+  }
+
+  // 有效文本样式：默认 ← presentation 覆盖（fontSizePt/color/fontWeight）
+  function effTextStyle(base, override) {
+    if (!override) return base;
+    var out = {};
+    Object.keys(base || {}).forEach(function (k) { out[k] = base[k]; });
+    Object.keys(override).forEach(function (k) {
+      if (override[k] !== undefined && override[k] !== null) out[k] = override[k];
+    });
+    return out;
+  }
+
+  function presAxisStyle(ctx, axisName) {
+    var p = presOf(ctx.chartSpec);
+    var ax = p && p.axes && p.axes[axisName];
+    return {
+      title: (ax && ax.title) || null,
+      tick: (ax && ax.tick) || null
+    };
+  }
+
+  // 系列有效样式：调色板默认 ← presentation.series[key]。曲线与图例色块
+  // 共用本函数（同一有效样式来源，禁止两处各算各的）。
+  function effSeriesStyle(ctx, key, paletteIndex) {
+    var p = presOf(ctx.chartSpec);
+    var o = p && p.series && p.series[key] ? p.series[key] : null;
+    return {
+      stroke: (o && o.stroke) ? o.stroke : ctx.palette[paletteIndex % ctx.palette.length],
+      strokeWidthPt: (o && typeof o.strokeWidthPt === "number") ? o.strokeWidthPt : null,
+      dash: (o && o.dash) ? o.dash : null,
+      marker: (o && o.marker) ? o.marker : null
+    };
+  }
+
+  function presLegendStyle(ctx) {
+    var p = presOf(ctx.chartSpec);
+    var l = p && p.legend;
+    return {
+      position: (l && l.position) || null,
+      fontSizePt: (l && typeof l.fontSizePt === "number") ? l.fontSizePt : null,
+      color: (l && l.color) || null
+    };
+  }
+
+  // 峰标注稳定 id：同 (x,label) 得同 id；冲突追加序号（确定性补全，
+  // 旧记录无 id 时按此规则获得，之后保持不变）。
+  function peakId(x, label, seen) {
+    var raw = "pk:" + (typeof x === "number" ? x : String(x)) + "|" + String(label == null ? "" : label);
+    var h = 0;
+    for (var i = 0; i < raw.length; i++) {
+      h = (h * 31 + raw.charCodeAt(i)) >>> 0;
+    }
+    var base = "pk-" + h.toString(36);
+    if (!seen[base]) { seen[base] = 1; return base; }
+    var n = 2;
+    while (seen[base + "-" + n]) n++;
+    seen[base + "-" + n] = 1;
+    return base + "-" + n;
+  }
+
+  function presPeakStyle(ctx, id) {
+    var p = presOf(ctx.chartSpec);
+    var pk = p && p.peaks && p.peaks[id] ? p.peaks[id] : null;
+    return {
+      color: (pk && pk.color) || null,
+      fontSizePt: (pk && typeof pk.fontSizePt === "number") ? pk.fontSizePt : null
+    };
+  }
+
   var NUM_RE = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
 
   // case-insensitive tokens treated as missing cells on CSV import
@@ -1065,6 +1160,12 @@
   }
 
   function legendPos(ctx) {
+    // R04：presentation.legend.position 为受控覆盖（none/right/top/bottom）；
+    // 未设置时沿用 chartSpec.legend。
+    var pres = presLegendStyle(ctx);
+    if (pres.position && ["none", "right", "top", "bottom"].indexOf(pres.position) >= 0) {
+      return pres.position;
+    }
     var l = ctx.chartSpec.legend;
     return (l === "none" || l === "right" || l === "top" || l === "bottom") ? l : "right";
   }
@@ -1088,6 +1189,9 @@
     if (o.weight) a += ' font-weight="' + o.weight + '"';
     if (o.opacity != null) a += ' fill-opacity="' + o.opacity + '"';
     if (o.transform) a += ' transform="' + o.transform + '"';
+    if (o.part) a += ' data-chart-part="' + esc(o.part) + '"';
+    if (o.seriesKey) a += ' data-series-key="' + esc(o.seriesKey) + '"';
+    if (o.peakId) a += ' data-peak-id="' + esc(o.peakId) + '"';
     return "<text " + a + ">" + esc(s) + "</text>";
   }
 
@@ -1176,6 +1280,14 @@
     var yb = y0 + ph;
     var i, t;
 
+    // R04：轴标题/刻度展示覆盖（只改字号/颜色/字重，不改几何与数据）
+    var presX = presAxisStyle(ctx, "x");
+    var presY = presAxisStyle(ctx, "y");
+    var tickStyleX = effTextStyle({}, presX.tick);
+    var tickStyleY = effTextStyle({}, presY.tick);
+    var titleStyleX = effTextStyle({}, presX.title);
+    var titleStyleY = effTextStyle({}, presY.title);
+
     if (ctx.axes.gridlines) {
       for (i = 0; i < o.yTicks.length; i++) {
         t = o.yTicks[i];
@@ -1193,24 +1305,42 @@
     for (i = 0; i < o.yTicks.length; i++) {
       t = o.yTicks[i];
       parts.push(lineEl(x0 - 4, t.px, x0, t.px, "#000000", ' stroke-width="1"'));
-      parts.push(text(x0 - 6, t.px + f * 0.35, t.label, { anchor: "end", size: f }));
+      parts.push(text(x0 - 6, t.px + f * 0.35, t.label, {
+        anchor: "end",
+        size: (typeof tickStyleY.fontSizePt === "number") ? fontPx(tickStyleY.fontSizePt, ctx.dpi) : f,
+        fill: tickStyleY.color || undefined
+      }));
     }
 
     var xt = thinTicks(o.xTicks, f);
     for (i = 0; i < xt.length; i++) {
       t = xt[i];
       parts.push(lineEl(t.px, yb, t.px, yb + 4, "#000000", ' stroke-width="1"'));
-      parts.push(text(t.px, yb + f * 1.25, t.label, { anchor: "middle", size: f }));
+      parts.push(text(t.px, yb + f * 1.25, t.label, {
+        anchor: "middle",
+        size: (typeof tickStyleX.fontSizePt === "number") ? fontPx(tickStyleX.fontSizePt, ctx.dpi) : f,
+        fill: tickStyleX.color || undefined
+      }));
     }
 
     if (ctx.axes.xLabel) {
-      parts.push(text(x0 + pw / 2, yb + f * 1.25 + fr.titleF, ctx.axes.xLabel, { anchor: "middle", size: fr.titleF }));
+      parts.push(text(x0 + pw / 2, yb + f * 1.25 + fr.titleF, ctx.axes.xLabel, {
+        anchor: "middle",
+        size: (typeof titleStyleX.fontSizePt === "number") ? fontPx(titleStyleX.fontSizePt, ctx.dpi) : fr.titleF,
+        fill: titleStyleX.color || undefined,
+        weight: titleStyleX.fontWeight || undefined,
+        part: "axis-title-x"
+      }));
     }
     if (ctx.axes.yLabel) {
       var lx = x0 - fr.yTickMaxW - 10, ly = y0 + ph / 2;
       parts.push(text(lx, ly, ctx.axes.yLabel, {
-        anchor: "middle", size: fr.titleF,
-        transform: "rotate(-90 " + px(lx) + " " + px(ly) + ")"
+        anchor: "middle",
+        size: (typeof titleStyleY.fontSizePt === "number") ? fontPx(titleStyleY.fontSizePt, ctx.dpi) : fr.titleF,
+        fill: titleStyleY.color || undefined,
+        weight: titleStyleY.fontWeight || undefined,
+        transform: "rotate(-90 " + px(lx) + " " + px(ly) + ")",
+        part: "axis-title-y"
       }));
     }
     if (ctx.axes.title) {
@@ -1231,23 +1361,29 @@
     if (!items.length || legendPos(ctx) === "none") return "";
     var f = fr.tickF, parts = [];
     var pos = legendPos(ctx);
+    // R04：图例展示覆盖（字号/颜色），与系列共用 legendPos 单一来源
+    var lp = presLegendStyle(ctx);
+    var size = (typeof lp.fontSizePt === "number") ? fontPx(lp.fontSizePt, ctx.dpi) : f;
+    var fill = lp.color || undefined;
     var i, it;
     if (pos === "right") {
       var y = fr.y0 + f;
       for (i = 0; i < items.length; i++) {
         it = items[i];
-        parts.push(legendSwatch(it, fr.legendX, y, f));
-        parts.push(text(fr.legendX + 16, y + f * 0.35, it.label, { size: f }));
-        y += f * 1.7;
+        parts.push(legendSwatch(it, fr.legendX, y, size));
+        parts.push(text(fr.legendX + 16, y + size * 0.35, it.label,
+          { size: size, fill: fill, part: "legend", seriesKey: it.key }));
+        y += size * 1.7;
       }
     } else {
       var x = fr.x0;
       var yy = pos === "top" ? fr.y0 - f * 1.3 : fr.y0 + fr.ph + f * 2.4;
       for (i = 0; i < items.length; i++) {
         it = items[i];
-        parts.push(legendSwatch(it, x, yy, f));
-        parts.push(text(x + 16, yy + f * 0.35, it.label, { size: f }));
-        x += 16 + textW(it.label, f) + 14;
+        parts.push(legendSwatch(it, x, yy, size));
+        parts.push(text(x + 16, yy + size * 0.35, it.label,
+          { size: size, fill: fill, part: "legend", seriesKey: it.key }));
+        x += 16 + textW(it.label, size) + 14;
       }
     }
     return parts.join("");
@@ -1409,6 +1545,9 @@
     if (pas !== undefined && pas !== null && !Array.isArray(pas)) {
       errors.push("characterization.peak_annotations 必须是数组");
     } else if (Array.isArray(pas)) {
+      // R04：峰标注可选稳定 id（presentation.peaks 按此引用）。缺省时按
+      // (x,label) 确定性补全——同值同 id，旧记录无需迁移即获得稳定身份。
+      var seenPeakIds = {};
       for (var p = 0; p < pas.length; p++) {
         var pa = pas[p];
         if (!pa || typeof pa !== "object" || Array.isArray(pa)) {
@@ -1417,12 +1556,30 @@
         }
         var pk = Object.keys(pa);
         for (var r = 0; r < pk.length; r++) {
-          if (pk[r] !== "x" && pk[r] !== "label") errors.push("peak_annotations[" + p + "] 含未知字段：" + pk[r]);
+          if (pk[r] !== "x" && pk[r] !== "label" && pk[r] !== "id") {
+            errors.push("peak_annotations[" + p + "] 含未知字段：" + pk[r]);
+          }
         }
         if (typeof pa.x !== "number" || !isFinite(pa.x)) {
           errors.push("peak_annotations[" + p + "].x 必须是有限数字");
         }
-        char.peak_annotations.push({ x: pa.x, label: strOrNull(pa.label) });
+        if (pa.id !== undefined && pa.id !== null &&
+            (typeof pa.id !== "string" || !/^pk-[A-Za-z0-9-]{1,40}$/.test(pa.id))) {
+          errors.push("peak_annotations[" + p + "].id 必须是 pk- 前缀的稳定 id");
+        }
+        var explicitId = typeof pa.id === "string" && /^pk-[A-Za-z0-9-]{1,40}$/.test(pa.id);
+        var pid;
+        if (explicitId) {
+          if (seenPeakIds[pa.id]) {
+            errors.push("peak_annotations[" + p + "].id 重复：" + pa.id);
+            continue;
+          }
+          pid = pa.id;
+        } else {
+          pid = peakId(pa.x, pa.label, seenPeakIds); // 自动分配自维护去重
+        }
+        seenPeakIds[pid] = true;
+        char.peak_annotations.push({ x: pa.x, label: strOrNull(pa.label), id: pid });
       }
     }
     return { ok: errors.length === 0, errors: errors, warnings: [], char: char };
@@ -1551,7 +1708,8 @@
       var res0 = charCollectPoints(ctx, idx.x, idx.y, char);
       excludedLog += res0.excludedLog;
       skippedNonFinite += res0.skippedNonFinite;
-      rawSeries.push({ label: ctx.mapping.y, points: res0.points, kind: "raw" });
+      rawSeries.push({ label: ctx.mapping.y, points: res0.points, kind: "raw",
+        key: stableSeriesKey("raw", ctx.mapping.y, ctx.mapping.y) });
     } else {
       var gIdx = ctx.columns.indexOf(ctx.mapping.group);
       if (gIdx < 0) {
@@ -1575,7 +1733,8 @@
         buckets[k].points.push({ x: xv, y: yv });
       }
       for (i = 0; i < buckets.length; i++) {
-        rawSeries.push({ label: buckets[i].key, points: charSortSeries(buckets[i].points, char), kind: "raw" });
+        rawSeries.push({ label: buckets[i].key, points: charSortSeries(buckets[i].points, char), kind: "raw",
+          key: stableSeriesKey("group", ctx.mapping.group, buckets[i].key) });
       }
     }
 
@@ -1591,7 +1750,8 @@
       var res1 = charCollectPoints(ctx, idx.x, ci, char);
       excludedLog += res1.excludedLog;
       skippedNonFinite += res1.skippedNonFinite;
-      curveSeries.push({ label: cu.label || cu.column, points: res1.points, kind: cu.role });
+      curveSeries.push({ label: cu.label || cu.column, points: res1.points, kind: cu.role,
+        key: stableSeriesKey("curve", cu.role, cu.column) });
     }
 
     if (!rawSeries.length && !curveSeries.length) {
@@ -1610,12 +1770,16 @@
     // Colors: raw series take the palette head so raw keeps the leading
     // visual role; curve series get following palette entries but are drawn
     // thinner/beneath — components never override the raw/fit hierarchy.
+    // R04：颜色经 effSeriesStyle（presentation.series[稳定键] 优先，曲线
+    // 与图例同源），线宽/虚线覆盖一并生效。
     var s;
     for (s = 0; s < rawSeries.length; s++) {
-      rawSeries[s].color = ctx.palette[s % ctx.palette.length];
+      rawSeries[s].style = effSeriesStyle(ctx, rawSeries[s].key, s);
+      rawSeries[s].color = rawSeries[s].style.stroke;
     }
     for (s = 0; s < curveSeries.length; s++) {
-      curveSeries[s].color = ctx.palette[(rawSeries.length + s) % ctx.palette.length];
+      curveSeries[s].style = effSeriesStyle(ctx, curveSeries[s].key, rawSeries.length + s);
+      curveSeries[s].color = curveSeries[s].style.stroke;
     }
     var series = rawSeries.concat(curveSeries);
 
@@ -1673,7 +1837,8 @@
 
     var legendItems = [];
     for (s = 0; s < series.length; s++) {
-      legendItems.push({ label: series[s].label, color: series[s].color, kind: "line" });
+      legendItems.push({ label: series[s].label, color: series[s].color, kind: "line",
+        key: series[s].key });
     }
     var fr = cartesianFrame(ctx, { yTickLabels: yTicks.map(fmtNum), legend: legendItems });
     var sy = linScale(dom.min, dom.max, fr.y0 + fr.ph, fr.y0);
@@ -1711,20 +1876,28 @@
         pts.push([sx(xT(se3.points[j].x)), sy(se3.points[j].y * se3.scale + se3.yShift)]);
       }
       var w = se3.kind === "raw" ? strokeWidth : strokeWidth * 0.65;
+      if (se3.style && typeof se3.style.strokeWidthPt === "number") {
+        w = Math.max(0.5, fontPx(se3.style.strokeWidthPt, ctx.dpi));
+      }
       var extra = "";
       if (se3.kind === "fit") extra = ' stroke-dasharray="6 3"';
       else if (se3.kind === "baseline") extra = ' stroke-dasharray="2 3"';
       else if (se3.kind === "component") extra = ' stroke-opacity="0.85"';
+      if (se3.style && se3.style.dash) extra = ' stroke-dasharray="' + esc(se3.style.dash) + '"';
+      if (se3.style && se3.style.marker === "none") extra += ' data-no-marker="1"';
       parts.push('<polyline points="' +
         pts.map(function (p) { return px(p[0]) + "," + px(p[1]); }).join(" ") +
         '" fill="none" stroke="' + se3.color + '" stroke-width="' + px(w) +
-        '" stroke-linejoin="round" stroke-linecap="round"' + extra + "/>");
-      if (se3.kind === "raw" && pts.length <= 400) {
+        '" stroke-linejoin="round" stroke-linecap="round" data-chart-part="series"' +
+        ' data-series-key="' + esc(se3.key) + '"' + extra + "/>");
+      if (se3.kind === "raw" && pts.length <= 400 && !(se3.style && se3.style.marker === "none")) {
         for (j = 0; j < pts.length; j++) parts.push(circleEl(pts[j][0], pts[j][1], r, se3.color));
       }
     }
 
     // --- peak markers: ONLY from peak_annotations, no default peak names ---
+    // R04：峰标注带稳定 id（normalizeCharacterization 确定性补全），
+    // presentation.peaks[id] 覆盖标签颜色/字号。
     var drawnPeaks = 0, skippedPeaks = 0;
     var f = fr.tickF;
     for (i = 0; i < char.peak_annotations.length; i++) {
@@ -1733,10 +1906,18 @@
       var pt = xT(pa.x);
       if (pt < tMin || pt > tMax) { skippedPeaks++; continue; }
       var ppx = sx(pt);
+      var pkStyle = presPeakStyle(ctx, pa.id);
       parts.push(lineEl(ppx, fr.y0, ppx, fr.y0 + fr.ph, "#888888",
-        ' stroke-width="0.8" stroke-dasharray="4 3"'));
+        ' stroke-width="0.8" stroke-dasharray="4 3" data-chart-part="peak"' +
+        (pa.id ? ' data-peak-id="' + esc(pa.id) + '"' : "")));
       if (pa.label) {
-        parts.push(text(ppx, fr.y0 + f * 1.2, pa.label, { anchor: "middle", size: f, fill: "#555555" }));
+        parts.push(text(ppx, fr.y0 + f * 1.2, pa.label, {
+          anchor: "middle",
+          size: (typeof pkStyle.fontSizePt === "number") ? fontPx(pkStyle.fontSizePt, ctx.dpi) : f,
+          fill: pkStyle.color || "#555555",
+          part: "peak",
+          peakId: pa.id
+        }));
       }
       drawnPeaks++;
     }
@@ -1938,7 +2119,16 @@
     var strokeWidth = Math.max(1, ctx.dpi / 90);
 
     for (var s = 0; s < o.series.length; s++) {
-      var color = o.colors[s % o.colors.length];
+      // R04：系列样式经稳定键从 presentation 解析；默认沿用 colors 序。
+      // series[s].key 为分组值（单系列时为 ""），groupKeyed 标记分组来源。
+      var seKey = o.groupKeyed
+        ? stableSeriesKey("group", ctx.mapping.group, o.series[s].key)
+        : stableSeriesKey("series", ctx.mapping.y, ctx.mapping.y);
+      var sStyle = effSeriesStyle({ palette: o.colors, chartSpec: ctx.chartSpec }, seKey, s);
+      var color = sStyle.stroke;
+      var strokeW = (typeof sStyle.strokeWidthPt === "number")
+        ? Math.max(0.5, fontPx(sStyle.strokeWidthPt, ctx.dpi)) : strokeWidth;
+      var dashAttr = sStyle.dash ? ' stroke-dasharray="' + esc(sStyle.dash) + '"' : "";
       var pts = [];
       for (i = 0; i < o.series[s].points.length; i++) {
         pts.push([sx(o.series[s].points[i].x), sy(o.series[s].points[i].y)]);
@@ -1950,15 +2140,18 @@
         var d = "M " + pts.map(function (p) { return px(p[0]) + " " + px(p[1]); }).join(" L ") +
           " L " + px(pts[pts.length - 1][0]) + " " + px(base) +
           " L " + px(pts[0][0]) + " " + px(base) + " Z";
-        parts.push('<path d="' + d + '" fill="' + color + '" fill-opacity="0.3" stroke="none"/>');
+        parts.push('<path d="' + d + '" fill="' + color + '" fill-opacity="0.3" stroke="none"' +
+          ' data-chart-part="series" data-series-key="' + esc(seKey) + '"/>');
       }
       if (pts.length > 1) {
         parts.push('<polyline points="' +
           pts.map(function (p) { return px(p[0]) + "," + px(p[1]); }).join(" ") +
-          '" fill="none" stroke="' + color + '" stroke-width="' + px(strokeWidth) +
-          '" stroke-linejoin="round" stroke-linecap="round"/>');
+          '" fill="none" stroke="' + color + '" stroke-width="' + px(strokeW) +
+          '" stroke-linejoin="round" stroke-linecap="round"' + dashAttr +
+          ' data-chart-part="series" data-series-key="' + esc(seKey) + '"/>');
       }
-      if (pts.length === 1 || (o.drawPoints && pts.length <= 400)) {
+      if (!(sStyle.marker === "none") &&
+          (pts.length === 1 || (o.drawPoints && pts.length <= 400))) {
         for (i = 0; i < pts.length; i++) parts.push(circleEl(pts[i][0], pts[i][1], r, color));
       }
     }
@@ -2011,14 +2204,18 @@
     var ebStroke = Math.max(1, ctx.dpi / 150);
 
     var parts = [], xTicks = [];
+    // R04：单系列柱色可被 presentation.series["series|<y列>|<y列>"] 覆盖
+    var barKey = stableSeriesKey("series", ctx.mapping.y, ctx.mapping.y);
+    var barPosColor = effSeriesStyle(ctx, barKey, 0).stroke;
     for (var i = 0; i < agg.cats.length; i++) {
       var cx = fr.x0 + band * (i + 0.5);
       var v = agg.vals[i];
       var yVal = sy(v);
       var top = Math.min(zeroY, yVal);
       var hpx = Math.max(0.5, Math.abs(yVal - zeroY));
-      var fill = v >= 0 ? ctx.palette[0] : (ctx.palette[1] || ctx.palette[0]);
-      parts.push(rectEl(cx - barW / 2, top, barW, hpx, fill));
+      var fill = v >= 0 ? barPosColor : (ctx.palette[1] || ctx.palette[0]);
+      parts.push(rectEl(cx - barW / 2, top, barW, hpx, fill,
+        ' data-chart-part="series" data-series-key="' + esc(barKey) + '"'));
       if (cells[i].ok) {
         var lo = v + cells[i].lower, hi = v + cells[i].upper;
         errorBarEl(parts, cx, sy(Math.min(lo, hi)), sy(Math.max(lo, hi)), capW, ebStroke);
@@ -2093,8 +2290,12 @@
     dom.max = Math.max(dom.max, yTicks[yTicks.length - 1]);
 
     var legendItems = [];
+    // R04：分组系列稳定键（group|<分组列>|<类型>:<组名>），图例与柱色同源
+    var groupKeys = [];
     for (i = 0; i < groups.length; i++) {
-      legendItems.push({ label: groups[i], color: ctx.palette[i % ctx.palette.length], kind: "rect" });
+      groupKeys.push(stableSeriesKey("group", ctx.mapping.group, groups[i]));
+      legendItems.push({ label: groups[i], kind: "rect", key: groupKeys[i],
+        color: effSeriesStyle(ctx, groupKeys[i], i).stroke });
     }
     var fr = cartesianFrame(ctx, { yTickLabels: yTicks.map(fmtNum), legend: legendItems });
     var sy = linScale(dom.min, dom.max, fr.y0 + fr.ph, fr.y0);
@@ -2118,7 +2319,9 @@
         var top = Math.min(zeroY, yVal);
         var hpx = Math.max(0.5, Math.abs(yVal - zeroY));
         var bx = center - barW * groups.length / 2 + gj * barW;
-        parts.push(rectEl(bx, top, barW * 0.92, hpx, ctx.palette[gj % ctx.palette.length]));
+        parts.push(rectEl(bx, top, barW * 0.92, hpx,
+          effSeriesStyle(ctx, groupKeys[gj], gj).stroke,
+          ' data-chart-part="series" data-series-key="' + esc(groupKeys[gj]) + '"'));
         if (cErr.ok) {
           // error bars sit on the bar's own center, not the group center
           var bxm = bx + barW * 0.92 / 2;
@@ -2160,15 +2363,19 @@
     var prep = prepareXY(ctx, idx.x, idx.y, idx.group);
     if (!prep.points.length) throw new Error("renderChartSVG：line_multi 没有可绘制的数据点");
     var series = groupPoints(prep.points, "g");
+    // R04：图例与曲线共用稳定键 + effSeriesStyle（同一有效样式来源）
     var legendItems = [];
     for (var i = 0; i < series.length; i++) {
-      legendItems.push({ label: series[i].key, color: ctx.palette[i % ctx.palette.length], kind: "line" });
+      var k = stableSeriesKey("group", ctx.mapping.group, series[i].key);
+      legendItems.push({ label: series[i].key, kind: "line", key: k,
+        color: effSeriesStyle(ctx, k, i).stroke });
     }
     var parts = drawSeriesChart(ctx, prep, {
       series: series,
       colors: ctx.palette,
       legendItems: legendItems,
-      drawPoints: true
+      drawPoints: true,
+      groupKeyed: true
     });
     return wrap(ctx, parts);
   };
@@ -2211,10 +2418,14 @@
 
     var series = [{ key: "", points: pts }];
     var legendItems = [];
-    if (colorIdx >= 0) {
+    var colorKeyed = colorIdx >= 0;
+    if (colorKeyed) {
       series = groupPoints(pts, "g");
       for (i = 0; i < series.length; i++) {
-        legendItems.push({ label: series[i].key, color: ctx.palette[i % ctx.palette.length], kind: "rect" });
+        // R04：颜色分组系列用 color|<字段>|<值> 稳定键（与点绘制同源）
+        var ck = stableSeriesKey("color", ctx.mapping.color, series[i].key);
+        legendItems.push({ label: series[i].key, kind: "rect", key: ck,
+          color: effSeriesStyle(ctx, ck, i).stroke });
       }
     }
 
@@ -2238,9 +2449,13 @@
     var parts = [];
     var r = Math.max(1.4, ctx.dpi / 150);
     for (i = 0; i < series.length; i++) {
-      var color = ctx.palette[i % ctx.palette.length];
+      var sk = colorKeyed
+        ? stableSeriesKey("color", ctx.mapping.color, series[i].key)
+        : stableSeriesKey("series", ctx.mapping.y, ctx.mapping.y);
+      var color = effSeriesStyle(ctx, sk, i).stroke;
       for (var j = 0; j < series[i].points.length; j++) {
-        parts.push(circleEl(sx(series[i].points[j].x), sy(series[i].points[j].y), r, color, ' fill-opacity="0.85"'));
+        parts.push(circleEl(sx(series[i].points[j].x), sy(series[i].points[j].y), r, color,
+          ' fill-opacity="0.85" data-chart-part="series" data-series-key="' + esc(sk) + '"'));
       }
     }
     parts.push(drawFrameAxes(ctx, fr, {
@@ -3071,6 +3286,70 @@
   }
 
   /* ====================================================================
+   * R04: seriesIdentity — 稳定系列身份清单（UI/AI/校验共用）
+   *
+   * 返回渲染顺序的系列：[{key, label, kind}]。key 与渲染器内部的
+   * stableSeriesKey 规则一致；数据替换后分组值不变则 key 不变。
+   * 不渲染几何，只读 mapping/characterization/inline 数据。
+   * ==================================================================== */
+  function seriesIdentity(chartSpec) {
+    if (!chartSpec || typeof chartSpec !== "object") {
+      throw new Error("seriesIdentity：需要 chartSpec 对象");
+    }
+    var type = chartSpec.chartType;
+    var mapping = chartSpec.mapping || {};
+    var inline = chartSpec.data && chartSpec.data.inline;
+    var out = [];
+    function uniqValues(colName) {
+      var seen = {}, vals = [];
+      if (!inline || !Array.isArray(inline.rows) || !Array.isArray(inline.columns)) return vals;
+      var at = inline.columns.indexOf(colName);
+      if (at < 0) return vals;
+      for (var i = 0; i < inline.rows.length; i++) {
+        var row = inline.rows[i];
+        if (!Array.isArray(row)) continue;
+        var v = catLabel(row[at]);
+        if (v === null) continue;
+        if (!seen[v]) { seen[v] = true; vals.push(v); }
+      }
+      return vals;
+    }
+    if (chartSpec.characterization) {
+      var ch = normalizeCharacterization(chartSpec.characterization,
+        inline && inline.columns || []);
+      var char = ch.ok ? ch.char : normalizeCharacterization(
+        { technique: null, x_reverse: false, x_scale: "linear", curves: [], peak_annotations: [] }, []);
+      if (type === "line_multi") {
+        uniqValues(mapping.group).forEach(function (g) {
+          out.push({ key: stableSeriesKey("group", mapping.group, g), label: String(g), kind: "raw" });
+        });
+      } else {
+        out.push({ key: stableSeriesKey("raw", mapping.y, mapping.y), label: mapping.y, kind: "raw" });
+      }
+      (char.curves || []).forEach(function (cu) {
+        out.push({ key: stableSeriesKey("curve", cu.role, cu.column),
+          label: cu.label || cu.column, kind: cu.role });
+      });
+      return out;
+    }
+    if (type === "line_multi" || type === "bar_grouped") {
+      uniqValues(mapping.group).forEach(function (g) {
+        out.push({ key: stableSeriesKey("group", mapping.group, g), label: String(g), kind: "group" });
+      });
+      return out;
+    }
+    if (type === "scatter" && mapping.color) {
+      uniqValues(mapping.color).forEach(function (g) {
+        out.push({ key: stableSeriesKey("color", mapping.color, g), label: String(g), kind: "color" });
+      });
+      if (out.length) return out;
+    }
+    out.push({ key: stableSeriesKey("series", mapping.y, mapping.y),
+      label: mapping.y || "", kind: "series" });
+    return out;
+  }
+
+  /* ====================================================================
    * Export
    * ==================================================================== */
 
@@ -3088,6 +3367,8 @@
     makeChartElement: makeChartElement,
     renderChartSVG: renderChartSVG,
     getChartPoints: getChartPoints,
+    seriesIdentity: seriesIdentity,
+    stableSeriesKey: stableSeriesKey,
     SPREAD_TYPES: SPREAD_TYPES,
     UNCERTAINTY_SOURCES: UNCERTAINTY_SOURCES,
     studentT975: studentT975,

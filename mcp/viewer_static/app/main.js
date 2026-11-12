@@ -2642,6 +2642,10 @@
                 var el = pickEl(["stage"]);
                 if (!el) throw new Error("找不到画布挂载点 #stage");
                 Editor.mount(el);
+                // R03：空文档任务入口覆盖层（文档有元素即隐藏）
+                if (has("TaskEntry") && typeof TaskEntry.mount === "function") {
+                    TaskEntry.mount(el);
+                }
             }],
             ["Import", function () {
                 // Mount only into the dedicated panel; a toolbar/panel-templates
@@ -3385,6 +3389,23 @@
         bindClick("zoom-out", function () { zoomBy(1 / ZOOM_STEP); });
         bindClick("zoom-in", function () { zoomBy(ZOOM_STEP); });
         bindClick("zoom-level", onZoomReset);
+        bindClick("zoom-fit", function () {
+            if (has("Editor") && typeof Editor.fit === "function") {
+                Editor.fit();
+                if (has("App") && typeof App.status === "function") {
+                    App.status("已适合窗口显示（显示比例与输出 DPI 无关）");
+                }
+            }
+        });
+        bindClick("zoom-physical", function () {
+            // 96 CSS px/in 的排版尺寸近似；未做屏幕校准，不代表实物毫米
+            if (has("Editor") && typeof Editor.setZoom === "function") {
+                Editor.setZoom(96 / 25.4);
+                if (has("App") && typeof App.status === "function") {
+                    App.status("按排版尺寸查看（96 CSS px/in 近似）；屏幕未校准，不代表实物毫米");
+                }
+            }
+        });
         bindToggle("toggle-guides", "showGuides", renderOverlaySafe);
         bindToggle("toggle-snap", "snap", null);
         if (missingButtons.length) {

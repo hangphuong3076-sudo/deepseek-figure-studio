@@ -1,0 +1,20 @@
+{
+  "note": "教学示例全部为合成演示数据（demo），不代表真实实验结果。",
+  "items": [
+    {
+      "file": "teaching-c01-statistics.figureproj.json",
+      "label": "统计柱图（重复观测+误差）",
+      "description": "C01 教学：分组柱图、重复观测均值、SD 误差线、缺失值排除；下一步试试替换数据或改轴标签"
+    },
+    {
+      "file": "teaching-c02-xps.figureproj.json",
+      "label": "XPS 高分辨谱",
+      "description": "C02 教学：反向结合能轴、用户拟合/基线列、峰标注；下一步试试修改峰标注或归一化"
+    },
+    {
+      "file": "teaching-c03-four-panel.figureproj.json",
+      "label": "四面板图版",
+      "description": "C03 教学：两表征+统计+多系列折线；下一步试试只更新 (d) 子图数据或统一实验组颜色"
+    }
+  ]
+}

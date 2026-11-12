@@ -88,12 +88,15 @@ SHARED_PRESETS_DIR = next(
     (p for p in _SHARED_PRESETS_CANDIDATES if (p / "journals.json").is_file()),
     _SHARED_PRESETS_CANDIDATES[-1],
 )
-PROJECT_DIR = PLUGIN_DIR / "projects"
-CURRENT_PROJECT_PATH = PROJECT_DIR / "current.figureproj.json"
-
 PRESET_FILES = ("journals.json", "templates.json", "palettes.json")
 
 sys.path.insert(0, str(PY_DIR))
+
+try:
+    import figpaths as FIGPATHS  # noqa: E402  (py/figpaths.py，R08 用户数据目录)
+except Exception as _exc:  # pragma: no cover
+    FIGPATHS = None
+    _FIGPATHS_IMPORT_ERROR = _exc
 
 try:
     import docio as DOCIO  # noqa: E402  (py/docio.py，shared/py 语义)
@@ -106,6 +109,18 @@ try:
 except Exception as _exc:  # pragma: no cover
     FIGRASTER = None
     _FIGRASTER_IMPORT_ERROR = _exc
+
+# R08：用户工程与插件代码分离。数据目录解析唯一来源是 py/figpaths.py：
+# 显式 FIGURE_DATA_DIR 环境变量优先，否则平台用户数据目录。旧
+# mcp/projects 仅探测待迁移清单（启动提示 + /api/data-dirs），不自动迁移。
+if FIGPATHS is not None:
+    PROJECT_DIR = FIGPATHS.project_dir()
+else:  # pragma: no cover — figpaths 缺失时回退旧行为并提示
+    PROJECT_DIR = PLUGIN_DIR / "projects"
+CURRENT_PROJECT_PATH = PROJECT_DIR / "current.figureproj.json"
+
+# R03 教学示例目录（examples/teaching；只经 /teaching/*.json 白名单提供）
+TEACHING_DIR = PLUGIN_DIR.parent / "examples" / "teaching"
 
 from server import MAX_SPREADSHEET_BYTES, BridgeCallError, ToolError, \
     _export_filename, _render_svg, _spreadsheet_preview, \
@@ -480,6 +495,12 @@ class ViewerHandler(BaseHTTPRequestHandler):
             # viewer_static 没有内核副本；/lib/* 映射到 v3-agent-plugin/lib
             # （shared/lib 的逐字节副本，只读服务，不写回）。
             target = self._resolve_under(path[len("/lib/"):], LIB_DIR)
+        elif path.startswith("/teaching/"):
+            # R03 教学示例：只服务插件 examples/teaching 下的 .json
+            # （index.json 与 *.figureproj.json），无目录列举、无其他扩展名。
+            rel = path[len("/teaching/"):]
+            if rel.lower().endswith(".json"):
+                target = self._resolve_under(rel, TEACHING_DIR)
         elif path.startswith("/shared/presets/"):
             if not path.lower().endswith(".json"):
                 target = None
@@ -532,6 +553,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 "doc": _doc_summary(doc) if doc else None,
                 "project_path": str(CURRENT_PROJECT_PATH),
                 "project_exists": CURRENT_PROJECT_PATH.is_file(),
+                "data_dirs": FIGPATHS.status() if FIGPATHS is not None else None,
                 "presets": _preset_counts(),
                 "static_dir": str(STATIC_DIR),
                 "lib_dir": str(LIB_DIR),
@@ -560,6 +582,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self._handle_ai_progress()
         elif path == "/api/presets":
             self._handle_presets()
+        elif path == "/api/data-dirs":
+            self._handle_data_dirs()
         else:
             self._send_json({"ok": False, "error": "未知 API 路径：%s" % path}, 404)
 
@@ -582,6 +606,56 @@ class ViewerHandler(BaseHTTPRequestHandler):
             return
         self._send_json({"ok": True, **out})
 
+    def _handle_data_dirs(self):
+        """R08：数据目录与旧工程迁移状态（只读探测，不迁移）。"""
+        if FIGPATHS is None:
+            self._send_json({
+                "ok": False,
+                "error": "py/figpaths.py 不可用（%s）" % _FIGPATHS_IMPORT_ERROR,
+            }, 500)
+            return
+        self._send_json({"ok": True, **FIGPATHS.status()})
+
+    def _handle_projects_migrate(self, body):
+        """R08：显式复制迁移旧 mcp/projects 工程到用户数据目录。
+
+        请求体：{"overwrite": bool}（默认 false：目标冲突时跳过并返回
+        conflicts 清单，不覆盖、不合并；原文件始终保留）。
+        """
+        if FIGPATHS is None:
+            self._send_json({
+                "ok": False,
+                "error": "py/figpaths.py 不可用（%s）" % _FIGPATHS_IMPORT_ERROR,
+            }, 500)
+            return
+        if self.client_address[0] not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+            self.close_connection = True
+            self._send_json({"ok": False, "error": "工程迁移仅允许本机 loopback 请求"}, 403)
+            return
+        if not isinstance(body, dict):
+            raise ValueError("迁移请求体必须是 JSON 对象")
+        overwrite = body.get("overwrite") is True
+        result = FIGPATHS.migrate_legacy(docio=DOCIO, overwrite=overwrite)
+        migrated_current = any(
+            e.get("name") == FIGPATHS.CURRENT_PROJECT_NAME
+            for e in result.get("copied", [])
+        )
+        if migrated_current:
+            restored = _load_current_from_disk()
+            if restored is not None:
+                with _STATE_LOCK:
+                    if _STATE["doc"] is None:
+                        _STATE["doc"] = restored
+        self._send_json({
+            "ok": True,
+            "overwrite": overwrite,
+            "copied": len(result["copied"]),
+            "skipped_identical": len(result["skipped_identical"]),
+            "conflicts": result["conflicts"],
+            "invalid": result["invalid"],
+            "plan": result["plan"],
+        })
+
     # ---- POST --------------------------------------------------------------
 
     def do_POST(self):
@@ -599,6 +673,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._handle_save(body, path)
             elif path == "/api/export":
                 self._handle_export(body)
+            elif path == "/api/projects/migrate":
+                self._handle_projects_migrate(body)
             else:
                 self._send_json(
                     {"ok": False, "error": "不支持的 POST 路径：%s" % path}, 404)
@@ -937,6 +1013,19 @@ def serve(port=DEFAULT_PORT, host="127.0.0.1"):
           % (host, port,
              "已有" if _get_current_doc() is not None else "暂无，工程文件 " +
              str(CURRENT_PROJECT_PATH)), flush=True)
+    # R08：旧插件内工程目录只探测提示，迁移由用户显式发起（UI/HTTP 均可）。
+    try:
+        if FIGPATHS is not None:
+            status = FIGPATHS.status()
+            pending = status.get("legacy_pending_migration") or []
+            if pending:
+                print("[v3 viewer] 检测到旧目录 %s 有 %d 个工程未迁移到 %s；"
+                      "保留原文件，可在工作台「历史」页或 POST /api/projects/migrate "
+                      "显式复制迁移（不覆盖冲突）。"
+                      % (status["legacy_project_dir"], len(pending),
+                         status["data_dir"]), flush=True)
+    except Exception as exc:  # noqa: BLE001 — 提示失败不阻断启动
+        print("[v3 viewer] 旧工程目录探测失败：%s" % exc, flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
