@@ -1,0 +1,28 @@
+test_illegal_field_rejects_whole_batch (test_ai_capabilities.ChartOpsApplyReal.test_illegal_field_rejects_whole_batch) ... ok
+test_legal_ops_apply_and_rows_unchanged (test_ai_capabilities.ChartOpsApplyReal.test_legal_ops_apply_and_rows_unchanged) ... ok
+test_describe_capabilities_scope (test_ai_capabilities.OpSpecConsistency.test_describe_capabilities_scope) ... ok
+test_enums_match_runtime_validation (test_ai_capabilities.OpSpecConsistency.test_enums_match_runtime_validation) ... ok
+test_specs_cover_and_match_op_types (test_ai_capabilities.OpSpecConsistency.test_specs_cover_and_match_op_types) ... ok
+test_build_edit_messages_chart_context_without_rows (test_ai_capabilities.PromptChartContext.test_build_edit_messages_chart_context_without_rows) ... ok
+test_fallback_help_mentions_chart_ops_without_ops_js (test_ai_capabilities.PromptChartContext.test_fallback_help_mentions_chart_ops_without_ops_js) ... ok
+test_bar_semantics_and_preset_canvas (test_data_wizard.DataWizardFlow.test_bar_semantics_and_preset_canvas) ... ok
+test_full_wizard_flow (test_data_wizard.DataWizardFlow.test_full_wizard_flow) ... ok
+test_import_entry_routes_to_wizard_and_cancel_keeps_doc (test_data_wizard.DataWizardFlow.test_import_entry_routes_to_wizard_and_cancel_keeps_doc) ... ok
+test_canonical_render_deterministic (test_ai_visual_preview.VisualPreviewTests.test_canonical_render_deterministic) ... ok
+test_empty_ops_error (test_ai_visual_preview.VisualPreviewTests.test_empty_ops_error) ... ok
+test_invalid_batch_rejected (test_ai_visual_preview.VisualPreviewTests.test_invalid_batch_rejected) ... ok
+test_materialized_ids_frozen_on_apply (test_ai_visual_preview.VisualPreviewTests.test_materialized_ids_frozen_on_apply) ... ok
+test_preview_leaves_baseline_untouched (test_ai_visual_preview.VisualPreviewTests.test_preview_leaves_baseline_untouched) ... ok
+test_data_replace_preserves_styles_by_stable_key (test_chart_presentation.PresentationApplyTests.test_data_replace_preserves_styles_by_stable_key) ... ok
+test_invalid_presentation_rejected_and_null_clears (test_chart_presentation.PresentationApplyTests.test_invalid_presentation_rejected_and_null_clears) ... ok
+test_peak_stable_id_and_presentation (test_chart_presentation.PresentationApplyTests.test_peak_stable_id_and_presentation) ... ok
+test_series_style_legend_axes_reflect_in_svg_and_rows_unchanged (test_chart_presentation.PresentationApplyTests.test_series_style_legend_axes_reflect_in_svg_and_rows_unchanged) ... ok
+test_undo_redo_and_json_roundtrip (test_chart_presentation.PresentationApplyTests.test_undo_redo_and_json_roundtrip) ... ok
+test_stats_chart_flow (test_c_workflows.C01Workflow.test_stats_chart_flow) ... ok
+test_xps_flow (test_c_workflows.C02Workflow.test_xps_flow) ... ok
+test_four_panel_flow (test_c_workflows.C03Workflow.test_four_panel_flow) ... ok
+
+----------------------------------------------------------------------
+Ran 23 tests in 1.995s
+
+OK

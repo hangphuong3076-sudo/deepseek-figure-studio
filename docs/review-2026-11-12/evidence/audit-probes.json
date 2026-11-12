@@ -1,0 +1,91 @@
+{
+  "generated_at": "2026-11-12T06:34:13.813Z",
+  "note": "Synthetic read-only counterexamples, not full GUI or scientific validation.",
+  "vertical_dpi": {
+    "expected_min_dpi": 75,
+    "observed": [
+      {
+        "rule": "nature-dpi-color",
+        "status": "pass",
+        "measured": 600
+      }
+    ]
+  },
+  "mixed_known_unknown_dpi": {
+    "expected": "unknown coverage, not full pass",
+    "observed": [
+      {
+        "rule": "nature-dpi-color",
+        "status": "pass",
+        "measured": 600
+      }
+    ]
+  },
+  "acs_color_300dpi": {
+    "expected": "only applicable color rule; type absent should remain unknown",
+    "observed": [
+      {
+        "rule": "acsnano-dpi-lineart",
+        "status": "fail",
+        "measured": 300
+      },
+      {
+        "rule": "acsnano-dpi-grayscale",
+        "status": "fail",
+        "measured": 300
+      },
+      {
+        "rule": "acsnano-dpi-color",
+        "status": "pass",
+        "measured": 300
+      }
+    ]
+  },
+  "max_font": {
+    "actual_axis_title_pt": 40,
+    "observed": {
+      "rule_id": "nature-font-max",
+      "property": "max_font_size",
+      "level": "recommended",
+      "status": "pass",
+      "measured": 6,
+      "required": 7,
+      "unit": "pt",
+      "operator": "max",
+      "verification": "verified",
+      "source_url": "https://www.nature.com/documents/Final_guide_to_authors.pdf",
+      "checked_at": "2026-11-12",
+      "evidence": "maximum 7 pt（同上）",
+      "suggestion": null
+    }
+  },
+  "peak_ui_adapter": {
+    "before": [
+      {
+        "id": "pk-user",
+        "x": 284.8,
+        "label": "C1s"
+      }
+    ],
+    "after": {
+      "draft": [
+        {
+          "x": 284.8,
+          "label": "C1s"
+        }
+      ],
+      "patch": {
+        "x_label": "",
+        "y_label": "",
+        "fit_model": "",
+        "x_reverse": true,
+        "peak_annotations": [
+          {
+            "x": 284.8,
+            "label": "C1s"
+          }
+        ]
+      }
+    }
+  }
+}

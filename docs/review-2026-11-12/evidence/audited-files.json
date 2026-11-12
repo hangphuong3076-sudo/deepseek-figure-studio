@@ -1,0 +1,20 @@
+{
+  "date": "2026-11-12",
+  "base_commit": "3f92b247cc2011d2f222a0b83033b61d2e8bec6d",
+  "scope": "current uncommitted working tree, selected audited files",
+  "sha256": {
+    "mcp/lib/presets.js": "d613f0b823d03fee53be14bd8ea4f933c2aa6569859a55d78e8cde9309de0d96",
+    "mcp/viewer_static/app/props.js": "97023be94517481ad33271018b3dd31d364e0185fae8ecb5a80fb24045c9078e",
+    "mcp/lib/ops.js": "08a3a2d91eb2acc8187387cae3c1b55cc1d30f736c77eb2b41c44c824e7c5f46",
+    "index.js": "de67ded2b1c8eca7f325d6571d444035eca4c34e4990507c84757c2025f5c584",
+    "plugin.json": "9b30adede0dbe1e43ad896ee9e4a8bdec9ccc63979508ab4643cc27adb6ebb21",
+    "package.json": "6ba2ff0b861b3ead9e4109b530e98ac8ce6166bbf4168ea7d4105aa055d5a698",
+    "pyproject.toml": "451f10c11d29bbf9d27a31baf6411fbcd457cfedb1bbe434c15d4ed1d67fd09f",
+    "uv.lock": "fa079c13624d06bd253021b21069e9fba22ae9921f0cac4b1410590c6775f374",
+    "start-viewer.bat": "4bfbd40e6e7185c7624b136a8e2704701feb0495d4a363f00efa39c1a019072d",
+    "start-native-viewer.bat": "e8ca6190f05a6bcd5f6c5ac441d91161d53006c6cb8c0074aa16e3cc0d6487f9",
+    "scripts/doctor.py": "e03aae8fcb39a2b52b0bc41108979e733eceeee60a0989ba400ff36ba0f187f5",
+    "INSTALL.md": "2b7c4ac7d9a53aa9c039e236d7c40948544879111a818a3dcdba5c9548b4fa72",
+    "mcp/test_c_workflows.py": "493b6e090b1afd434e96487db9051724ab3cc901ccb8a0c011f8c044dea58724"
+  }
+}
