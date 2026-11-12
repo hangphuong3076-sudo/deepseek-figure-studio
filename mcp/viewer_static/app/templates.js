@@ -460,11 +460,17 @@
       status: "unsupported", label: "能力未知 · 不可应用", can_apply: false,
       reason: applicability.errors.join("；")
     };
-    var meta = [];
-    if (t.chart_type) meta.push(String(t.chart_type));
-    if (Array.isArray(t.panels) && (t.panels[0] > 1 || t.panels[1] > 1)) {
-      meta.push(t.panels[0] + "×" + t.panels[1] + " 面板");
+    // R03：主面只保留用户语言（用途/输入需求/预览/动作）；
+    // 内部能力标记（full/layout/unsupported）、renderer 名、面板数与
+    // 元数据移入 <details>，保留真实能力边界不删除。
+    var inputNeeds = [];
+    if (t.default_mapping && typeof t.default_mapping === "object") {
+      Object.keys(t.default_mapping).forEach(function (slot) {
+        var desc = t.default_mapping[slot];
+        if (desc) inputNeeds.push(String(desc));
+      });
     }
+    if (t.category === "diagram") inputNeeds = ["实体关系合同（节点/关系/来源，不猜科学内容）"];
     var preview = null;
     if (_hasPreview()) {
       try {
@@ -479,6 +485,32 @@
         .then(function () { _renderList(); })
         .catch(function () { /* App.error already informed the user */ });
     }
+    var usageLine = capability.status === "layout"
+      ? "只创建空白复合版式，不自动填图；适合先定行列再放图。"
+      : (capability.status === "unsupported"
+        ? "仅示意预览，暂不能生成真实图表。"
+        : (t.notes || "按所选数据列生成真实图表。"));
+    var details = _h("details", {
+      style: "font-size:11px;color:#666;margin-top:2px;"
+    }, [
+      _h("summary", {
+        text: "详情（能力与内部参数）",
+        style: "cursor:pointer;color:#475569;"
+      }),
+      _h("div", {
+        text: "能力：" + capability.status + "（" + capability.label + "）",
+        style: "color:" + (capability.status === "full" ? "#166534" :
+          (capability.status === "layout" ? "#1d4ed8" : "#b91c1c")) + ";"
+      }),
+      _h("div", { text: "说明：" + capability.reason }),
+      _h("div", {
+        text: "内部参数：" + [t.chart_type ? ("renderer " + t.chart_type) : null,
+          (Array.isArray(t.panels) && (t.panels[0] > 1 || t.panels[1] > 1))
+            ? (t.panels[0] + "×" + t.panels[1] + " 面板") : null,
+          t.journal_default ? ("期刊默认 " + t.journal_default) : null]
+          .filter(Boolean).join(" · ") || "—"
+      })
+    ]);
     var infoCol = _h("div", {
       class: "template-info",
       style: "flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;"
@@ -497,14 +529,12 @@
           onclick: capability.can_apply ? applyFromCard : null
         })
       ]),
-      _h("div", {
-        text: capability.label,
-        style: "font-weight:bold;color:" + (capability.status === "full" ? "#166534" :
-          (capability.status === "layout" ? "#1d4ed8" : "#b91c1c")) + ";"
-      }),
-      meta.length ? _h("div", { text: meta.join(" · "), style: "color:#666;" }) : null,
-      _h("div", { text: capability.reason, style: "color:#555;" }),
-      t.notes ? _h("div", { text: t.notes, style: "color:#888;" }) : null
+      _h("div", { text: usageLine, style: "color:#374151;" }),
+      inputNeeds.length ? _h("div", {
+        text: "输入需求：" + inputNeeds.join("、"),
+        style: "color:#6b7280;"
+      }) : null,
+      details
     ]);
     if (preview) {
       return _h("div", {

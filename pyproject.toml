@@ -1,0 +1,23 @@
+[project]
+name = "deepseek-figure-studio"
+version = "1.1.0"
+description = "科研绘图插件：FigureDocument/EditOp/canonical SVG 单一事实链 + 可视化工作台（DSH bundle / MCP / 独立运行共用同一核心）"
+requires-python = ">=3.10"
+# 依赖版本以本机实测为准（2026-11-12：Python 3.13.5 / PyMuPDF 1.27.2.2 /
+# Pillow 11.1.0 / openpyxl 3.1.5 / xlrd 2.0.2）。锁文件见 uv.lock。
+dependencies = [
+    "PyMuPDF>=1.24,<2",
+    "Pillow>=10,<12",
+    "openpyxl>=3.1,<4",
+    "xlrd>=2,<3",
+]
+
+[project.optional-dependencies]
+# 原生窗口最佳体验；缺失时回退 Chrome/Edge --app 或浏览器（见 native_viewer.py）
+desktop = [
+    "pywebview>=5,<6",
+]
+
+[tool.uv]
+# 仅约束 uv 行为；核心导出不依赖 desktop 组
+default-groups = []

@@ -2451,6 +2451,7 @@ global.fetch = function (_relative, options) {
   return nativeFetch(endpoint, options);
 };
 require('./viewer_static/app/import.js');
+require('./viewer_static/app/data-wizard.js');
 const raw = Buffer.from(process.env.FIGURE_TEST_SPREADSHEET_BYTES, 'base64');
 const copyBuffer = () => raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength);
 const xlsmFile = {name: '<img src=x onerror=alert(1)>.xlsm', arrayBuffer: async () => copyBuffer()};
@@ -2528,7 +2529,7 @@ function lastAction(label) {
   await test('用户确认后经真实FigOps/App.commit一次导入并记录file/sheet/header/sha', async () => {
     const continueResult = lastAction('继续：选择模板').onClick();
     if (continueResult && continueResult.then) await continueResult;
-    await lastAction('生成图表').onClick();
+    await lastAction('创建图表').onClick();
     assert.strictEqual(App.commits, 1);
     assert.strictEqual(App.doc.history.length, 1);
     const chart = App.doc.elements.find(element => element.type === 'chart');
@@ -2566,7 +2567,7 @@ function lastAction(label) {
     const secondPreview = await Import._applySpreadsheetFile(xlsmFile);
     try {
       lastAction('继续：选择模板').onClick();
-      const outcome = await lastAction('生成图表').onClick();
+      const outcome = await lastAction('创建图表').onClick();
       assert.strictEqual(outcome, false);
       assert.strictEqual(JSON.stringify(App.doc), docBefore);
     } finally {
@@ -2575,7 +2576,7 @@ function lastAction(label) {
     }
     const before = App.commits;
     Import._applyDataTable('group,value\nctrl,1\nmu,2', 'still-works.csv');
-    await lastAction('生成图表').onClick();
+    await lastAction('创建图表').onClick();
     assert.strictEqual(App.commits, before + 1);
     assert.strictEqual(App.doc.history.length >= 2, true);
   });

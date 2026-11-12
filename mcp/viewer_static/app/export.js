@@ -703,8 +703,28 @@
       if (presetNow && typeof presetNow.dpi_min === "number" && dpi > 0 && dpi < presetNow.dpi_min) {
         warnings.push("当前 DPI " + dpi + " 低于期刊「" + presetNow.name + "」的最低要求 " + presetNow.dpi_min + " DPI，投稿前请提高分辨率。");
       }
+      // R07：逐条期刊规则检查（区分 必须修复/建议/待人工确认；允许带
+      // 建议/未知项继续导出，硬性 fail 明确标出）
+      try {
+        if (G.FigPresets && typeof G.FigPresets.checkJournalRules === "function") {
+          var ruleRes = G.FigPresets.checkJournalRules(probe);
+          var failText = ruleRes.results.filter(function (r) { return r.status === "fail"; })
+            .map(function (r) {
+              return "【必须修复】" + r.rule_id + "：" + (r.suggestion || r.property);
+            });
+          var warnText = ruleRes.results.filter(function (r) { return r.status === "warning"; })
+            .map(function (r) {
+              return "【建议调整】" + r.rule_id + "：" + (r.suggestion || r.property);
+            });
+          var unkText = ruleRes.results.filter(function (r) { return r.status === "unknown"; })
+            .map(function (r) {
+              return "【待人工确认】" + r.rule_id + (r.verification !== "verified" ? "（规则未经官方页核对）" : "");
+            });
+          warnings = warnings.concat(failText, warnText, unkText);
+        }
+      } catch (e3) { /* 规则检查失败不阻断导出对话框 */ }
       if (warnings.length) {
-        warnLine.textContent = warnings.join(" ");
+        warnLine.textContent = warnings.join("  ");
         warnLine.style.display = "block";
       } else {
         warnLine.style.display = "none";

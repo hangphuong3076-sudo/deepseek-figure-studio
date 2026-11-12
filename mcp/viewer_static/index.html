@@ -67,6 +67,8 @@
       <button id="zoom-out" title="缩小">−</button>
       <span id="zoom-level" title="当前缩放比例">100%</span>
       <button id="zoom-in" title="放大">＋</button>
+      <button id="zoom-fit" title="适合窗口：整图恰好显示在画布区（显示比例与输出 DPI 无关）">适合窗口</button>
+      <button id="zoom-physical" title="按排版尺寸查看：以 96 CSS px/in 近似显示最终物理尺寸；未做屏幕校准，不保证屏幕毫米等于实物毫米">按排版尺寸</button>
       <button id="toggle-guides" title="显示锚点参考线" aria-pressed="true">参考线</button>
       <button id="toggle-snap" title="吸附到网格与元素边缘" aria-pressed="true">吸附</button>
     </header>
@@ -187,6 +189,10 @@
   <script src="app/chart-render.js"></script>
   <script src="app/editor.js"></script>
   <script src="app/import.js"></script>
+  <!-- R02 数据映射向导（import.js 也会在缺失时动态加载；此处提前加载避免首用延迟） -->
+  <script src="app/data-wizard.js"></script>
+  <!-- R03 空文档任务入口（main.js 挂载到画布区） -->
+  <script src="app/task-entry.js"></script>
   <!-- Excel API 与旧导入入口的兼容适配；原生“导入数据”统一处理 CSV/JSON/Excel -->
   <script src="app/spreadsheet-import.js"></script>
   <script src="app/template-preview.js"></script>

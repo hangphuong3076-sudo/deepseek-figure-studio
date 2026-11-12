@@ -60,6 +60,7 @@
     pendingStale: false,
     pendingMode: null,       // 本批预览自己的模式，不受后续问答/审阅覆盖
     pendingSegments: [],     // 多编号分组的逐段 mode/error
+    pendingPreview: null,    // R05 图形预览（buildVisualPreview 结果，仅内存）
     applying: null,          // pending 与单条 review 共用的在途应用 Promise
     documentEpoch: 0,        // 每次 doc:changed 都递增；不以 rev 充当变更锁
     anchorLedgerDocId: null,
@@ -468,6 +469,192 @@
       version.historyStamp === current.historyStamp;
   }
 
+  // ------------------------------------------------------------------
+  // R05：可视化修改预览（真实渲染链，不用简化渲染器）
+  //
+  // 读取既有文档 → 深拷贝基线 → validateAll → applyAll（副本）→
+  // FigRender 生成前后 SVG → 冻结物化操作（副本历史中的新 ID/模板物化
+  // 结果）→ 展示；应用时核对版本签名后提交同一批物化操作。副本写入的
+  // 历史只留在副本里，不连自动保存，不污染撤销栈。
+  // ------------------------------------------------------------------
+
+  function cloneJson(v) {
+    return JSON.parse(JSON.stringify(v));
+  }
+
+  function affectedIdsOf(ops, baseDoc, afterDoc) {
+    var ids = [];
+    var push = function (id) { if (id && ids.indexOf(id) < 0) ids.push(id); };
+    (ops || []).forEach(function (op) {
+      if (!op) return;
+      if (Array.isArray(op.targets)) {
+        try {
+          g.FigOps.resolveTargets(baseDoc, op.targets).forEach(push);
+        } catch (e) { /* 原样保留 */ op.targets.forEach(function (t) {
+          if (typeof t === "string") push(t.charAt(0) === "@" ? t.slice(1) : t);
+        }); }
+      }
+      if (op.op === "add_element" && op.element && op.element.id) push(op.element.id);
+      if (op.op === "group" && op.id) push(op.id);
+      if (op.op === "add_anchor" && op.anchor && op.anchor.id) push(op.anchor.id);
+    });
+    return ids;
+  }
+
+  function overlayBoxes(svg, doc, ids) {
+    // 在 after SVG 尾部追加受影响对象的虚线高亮框（mm 坐标系与根 viewBox 一致）
+    if (!svg || !ids || !ids.length) return svg;
+    var parts = [];
+    ids.forEach(function (id) {
+      var el = g.FigDoc && typeof g.FigDoc.get === "function" ? g.FigDoc.get(doc, id) : null;
+      if (!el) return;
+      try {
+        var b = g.FigDoc.bbox(doc, id, { recursive: true });
+        if (!b) return;
+        parts.push('<rect x="' + (b.x - 0.6) + '" y="' + (b.y - 0.6) + '" width="' +
+          (b.w + 1.2) + '" height="' + (b.h + 1.2) +
+          '" fill="none" stroke="#f59e0b" stroke-width="0.5" stroke-dasharray="2 1.2" ' +
+          'data-preview-affected="' + id + '"/>');
+      } catch (e) { /* 无 bbox 的对象跳过 */ }
+    });
+    if (!parts.length) return svg;
+    var at = svg.lastIndexOf("</svg>");
+    if (at < 0) return svg;
+    return svg.slice(0, at) + parts.join("") + svg.slice(at);
+  }
+
+  /** AiPanel.buildVisualPreview(doc, ops) -> 纯函数预览（不写正式文档） */
+  AiPanel.buildVisualPreview = function (doc, ops) {
+    if (!g.FigOps || !g.FigRender || !g.FigDoc) {
+      return { ok: false, error: "缺少 FigOps/FigRender/FigDoc，无法生成图形预览" };
+    }
+    if (!Array.isArray(ops) || !ops.length) {
+      return { ok: false, error: "没有待预览的操作" };
+    }
+    try {
+      var copy = g.FigDoc.clone(doc);
+      var v = g.FigOps.validateAll(ops, copy);
+      if (!v.ok) return { ok: false, error: "操作未通过校验：" + v.errors.join("；") };
+      var applied = g.FigOps.applyAll(copy, cloneJson(ops), {
+        label: "预览（不写入正式文档）", source: "ai-preview"
+      });
+      var afterDoc = applied.doc;
+      // 冻结物化操作：副本历史最后一条的 ops 已回写新 ID/物化模板；
+      // applied=0 时无历史，回退原 ops。
+      var hist = Array.isArray(afterDoc.history) ? afterDoc.history : [];
+      var entry = hist.length ? hist[hist.length - 1] : null;
+      var materialized = entry && Array.isArray(entry.ops) && entry.ops.length
+        ? cloneJson(entry.ops) : cloneJson(ops);
+      var affected = affectedIdsOf(materialized, doc, afterDoc);
+      return {
+        ok: true,
+        changed: applied.changed,
+        appliedCount: applied.applied,
+        beforeSvg: g.FigRender.toSVG(doc, { scale: 1, includeGuides: false }),
+        afterSvg: g.FigRender.toSVG(afterDoc, { scale: 1, includeGuides: false }),
+        afterDoc: afterDoc,
+        materializedOps: materialized,
+        affectedIds: affected
+      };
+    } catch (err) {
+      return { ok: false, error: err && err.message ? err.message : String(err) };
+    }
+  };
+
+  // 预览视图状态（仅本面板内存）
+  var previewView = { mode: "after", highlight: true };
+
+  function renderPendingVisual() {
+    if (!els.pendingVisual || !els.pendingVisualWrap) return;
+    els.pendingVisualWrap.style.display = "none";
+    els.pendingVisual.textContent = "";
+    var pv = state.pendingPreview;
+    if (!pv || !pv.ok || !pv.beforeSvg || !pv.afterSvg) {
+      if (pv && pv.error) {
+        els.pendingVisualWrap.style.display = "block";
+        els.pendingVisual.appendChild(h("div", {
+          style: "font-size:11px;color:#b45309;",
+          text: "图形预览不可用：" + pv.error + "（下方文字操作清单仍有效）"
+        }));
+      }
+      return;
+    }
+    els.pendingVisualWrap.style.display = "block";
+    var modeBtns = { before: null, after: null, side: null };
+    function makeModeBtn(mode, label) {
+      var b = h("button", {
+        text: label,
+        style: "padding:1px 8px;font-size:11px;cursor:pointer;" +
+          (previewView.mode === mode
+            ? "background:#1f6feb;color:#fff;border:1px solid #1f6feb;" : ""),
+        onClick: function () { previewView.mode = mode; renderPendingVisual(); }
+      });
+      return b;
+    }
+    var hl = h("input", { type: "checkbox" });
+    hl.checked = previewView.highlight;
+    hl.addEventListener("change", function () {
+      previewView.highlight = hl.checked;
+      renderPendingVisual();
+    });
+    var toolbar = h("div", {
+      style: "display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-bottom:4px;"
+    }, [
+      makeModeBtn("before", "修改前"),
+      makeModeBtn("after", "修改后"),
+      makeModeBtn("side", "并排"),
+      h("span", { style: "flex:1;" }),
+      h("label", { style: "display:flex;gap:3px;align-items:center;font-size:11px;" }, [
+        hl, document.createTextNode("高亮受影响对象")
+      ])
+    ]);
+    els.pendingVisual.appendChild(toolbar);
+
+    var affected = pv.affectedIds || [];
+    function svgPane(svgString, withHighlight, caption) {
+      var box = h("div", {
+        style: "border:1px solid #ddd;border-radius:4px;background:#fff;overflow:hidden;" +
+          (previewView.mode === "side" ? "flex:1 1 0;min-width:0;" : "")
+      });
+      if (caption) {
+        box.appendChild(h("div", {
+          style: "font-size:10px;color:#666;padding:1px 4px;background:#f3f5f7;",
+          text: caption
+        }));
+      }
+      var shown = withHighlight ? overlayBoxes(svgString, pv.afterDoc, affected) : svgString;
+      var holder = h("div", {
+        style: "width:100%;overflow:hidden;",
+        "data-preview-pane": caption || ""
+      });
+      holder.innerHTML = shown.replace(/^<svg /,
+        '<svg style="width:100%;height:auto;display:block;" ');
+      box.appendChild(holder);
+      return box;
+    }
+
+    if (previewView.mode === "side") {
+      var row = h("div", { style: "display:flex;gap:4px;max-height:240px;overflow:auto;" }, [
+        svgPane(pv.beforeSvg, false, "修改前"),
+        svgPane(pv.afterSvg, previewView.highlight, "修改后")
+      ]);
+      els.pendingVisual.appendChild(row);
+    } else if (previewView.mode === "before") {
+      els.pendingVisual.appendChild(h("div", { style: "max-height:240px;overflow:auto;" },
+        [svgPane(pv.beforeSvg, false, null)]));
+    } else {
+      els.pendingVisual.appendChild(h("div", { style: "max-height:240px;overflow:auto;" },
+        [svgPane(pv.afterSvg, previewView.highlight, null)]));
+    }
+    if (affected.length) {
+      els.pendingVisual.appendChild(h("div", {
+        style: "font-size:10px;color:#92400e;margin-top:2px;",
+        text: "受影响对象：" + affected.slice(0, 12).join("、") +
+          (affected.length > 12 ? " 等 " + affected.length + " 个" : "")
+      }));
+    }
+  }
+
   function renderPending() {
     if (!els.pendingBox || !els.pendingList) return;
     var hasPending = !!(state.pendingOps && state.pendingOps.length);
@@ -499,6 +686,7 @@
         ]));
       });
     }
+    renderPendingVisual();
     els.pendingBtnRow.style.display = hasPending ? "" : "none";
     if (els.applyBtn) {
       els.applyBtn.disabled = !hasPending || stale || !!state.applying;
@@ -516,6 +704,7 @@
     state.pendingStale = false;
     state.pendingMode = null;
     state.pendingSegments = [];
+    state.pendingPreview = null; // 放弃/应用即释放预览内存
     renderPending();
   }
 
@@ -1218,6 +1407,36 @@
     });
   }
 
+  // ------------------------------------------------------------------
+  // R05：停止等待
+  //
+  // 点击后使本次请求身份失效：在途/后续响应一律丢弃，不再生成可应用
+  // 预览；进行中的分组请求不再发出。后端没有取消接口时不声称「已取消
+  // 模型请求」，只如实显示「已停止等待」；模型请求可能仍在服务端完成，
+  // 但其结果不会再显示或应用。
+  // ------------------------------------------------------------------
+  AiPanel.stopWaiting = function () {
+    if (!state.busy && !state.applying) return false;
+    if (state.applying) {
+      // 正在写入文档的操作不可中断（原子提交），只停止等待模型结果。
+      toast("正在写入文档的操作不可中断；本次仅停止等待模型结果", { type: "info" });
+    }
+    askSeq += 1;   // 使 ask() 的生成身份失效：其 then/finally 检查后自弃
+    reviewSeq += 1;
+    var wasBusy = state.busy;
+    state.busy = false;
+    stopProgressPolling();
+    setActionsBusy(false);
+    setProgressBusy("");
+    if (wasBusy) {
+      setProgressPhase("offline", "已停止等待：模型结果（如仍在途）将被丢弃，不会显示或应用");
+      appendMessage({ role: "local", kind: "edit", status: "done",
+        text: "已停止等待模型结果。后端未提供取消接口时不声称已取消请求；在途结果已被丢弃。" });
+    }
+    renderPending();
+    return true;
+  };
+
   function boundedValue(value, depth) {
     if (value == null || typeof value === "boolean" || typeof value === "number") return value;
     if (typeof value === "string") return value.length > 500 ? value.slice(0, 499) + "…" : value;
@@ -1608,6 +1827,11 @@
       state.pendingStale = !documentVersionIsCurrent(requestVersion);
       state.pendingMode = res.mode;
       state.pendingSegments = segments.slice();
+      // R05：在基线副本上构建真实渲染的前后图形预览（不写正式文档）。
+      // 基线以 requestVersion.doc 为准（生成时的版本），与过期检查同源。
+      state.pendingPreview = state.pendingOps.length && !state.pendingStale
+        ? AiPanel.buildVisualPreview(requestVersion.doc, state.pendingOps)
+        : null;
       renderPending();
       if (state.pendingOps.length) {
         // intents 预览：绝不在「应用」前显示已完成/已写入。
@@ -1687,11 +1911,16 @@
       return Promise.reject(staleError);
     }
     var ops = state.pendingOps;
+    // R05：优先提交预览冻结的物化操作（新 ID/模板物化结果与预览一致）；
+    // 无图形预览（如空操作/预览失败）时回退原 ops，仍走同一校验。
+    var pv = state.pendingPreview;
+    var commitOps = pv && pv.ok && Array.isArray(pv.materializedOps) && pv.materializedOps.length
+      ? pv.materializedOps : ops;
     var label = "AI：" + (state.pendingInstruction || "编辑指令").slice(0, 40);
     return beginApply(function () {
       setProgressBusy("正在写入文档（App.commit）");
-      setProgressPhase("applying", "正在通过 App.commit 应用 " + ops.length + " 条操作");
-      return doCommit(ops, { label: label, source: "ai" }).then(function (r) {
+      setProgressPhase("applying", "正在通过 App.commit 应用 " + commitOps.length + " 条操作");
+      return doCommit(commitOps, { label: label, source: "ai" }).then(function (r) {
         if (r && r.applied > 0) {
           var n = r.applied;
           if (state.pendingOps === ops) clearPending();
@@ -1896,9 +2125,15 @@
       h("div", { className: "ai-busy-fill" })
     ]);
     els2.busyLabel = h("span", { style: "font-size:11px;color:#475569;white-space:nowrap;" });
+    els2.stopBtn = h("button", {
+      id: "ai-stop-waiting", text: "停止等待",
+      title: "停止接收模型结果：在途响应将被丢弃，不会生成可应用预览；后端未提供取消接口时不声称已取消请求",
+      style: "padding:1px 8px;font-size:11px;cursor:pointer;flex:0 0 auto;",
+      onClick: function () { AiPanel.stopWaiting(); }
+    });
     els2.busyRow = h("div", {
       style: "display:none;align-items:center;gap:8px;margin:5px 0 3px 0;flex:0 0 auto;"
-    }, [els2.busyBar, els2.busyLabel]);
+    }, [els2.busyBar, els2.busyLabel, els2.stopBtn]);
     els2.chip = h("span", { className: "ai-phase-chip", text: "" });
     els2.detail = h("span", { style: "font-size:11px;color:#64748b;", text: "" });
     els2.phaseRow = h("div", {
@@ -1924,17 +2159,17 @@
       });
     }
     els.chatBtn = h("button", {
-      id: "ai-discuss-btn", text: "问问这张图", title: "自然语言讨论；不会生成或应用编辑操作",
+      id: "ai-discuss-btn", text: "讨论", title: "讨论：自然语言问答；不会生成或应用编辑操作",
       style: "padding:4px 10px;cursor:pointer;white-space:nowrap;",
       onClick: function () { onAction(AiPanel.chat()); }
     });
     els.askBtn = h("button", {
-      id: "ai-edit-btn", text: "生成编辑操作", title: "请求 EditOp 预览，确认应用后才写入文档",
+      id: "ai-edit-btn", text: "修改", title: "修改：由指令生成编辑操作，先预览（含前后图形对比），确认应用后才写入文档",
       style: "padding:4px 10px;cursor:pointer;white-space:nowrap;",
       onClick: function () { onAction(AiPanel.ask()); }
     });
     els.reviewBtn = h("button", {
-      id: "ai-review-btn", text: "审阅当前图", title: "独立检查当前画布、布局、可读性与统计声明",
+      id: "ai-review-btn", text: "检查", title: "检查：独立审阅当前画布、布局、可读性与统计声明",
       style: "padding:4px 10px;cursor:pointer;white-space:nowrap;",
       onClick: function () { onAction(AiPanel.review()); }
     });
@@ -1950,6 +2185,12 @@
       style: "display:none;margin:3px 0;white-space:pre-wrap;font-size:11px;color:#7c2d12;"
     });
     els.pendingList = h("ol", { style: "margin:4px 0 4px 18px;padding:0;font-size:12px;" });
+    els.pendingVisualWrap = h("div", {
+      "data-pending-visual": "true",
+      style: "display:none;margin:4px 0;"
+    });
+    els.pendingVisual = h("div", {});
+    els.pendingVisualWrap.appendChild(els.pendingVisual);
     els.emptyHint = h("div", { style: "color:#888;font-size:12px;", text: "尚无待应用的 AI 操作。" });
     els.applyBtn = h("button", { text: "应用", style: "padding:3px 16px;cursor:pointer;font-weight:bold;",
       onClick: function () { onAction(AiPanel.applyPending()); } });
@@ -1959,6 +2200,7 @@
     els.pendingBox.appendChild(els.pendingModeEl);
     els.pendingBox.appendChild(els.pendingExpEl);
     els.pendingBox.appendChild(els.pendingSegmentsEl);
+    els.pendingBox.appendChild(els.pendingVisualWrap);
     els.pendingBox.appendChild(els.emptyHint);
     els.pendingBox.appendChild(els.pendingList);
     els.pendingBox.appendChild(els.pendingBtnRow);

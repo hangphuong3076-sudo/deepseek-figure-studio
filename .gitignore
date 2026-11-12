@@ -7,3 +7,4 @@ node_modules/
 *.log
 .devin-backup*/
 mcp/projects/
+dist/

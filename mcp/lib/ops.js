@@ -62,6 +62,21 @@
   // 来源申报固定值：拟合曲线必须来自用户已产生的拟合结果，而非本工具推断
   var CP_FIT_SOURCES = ["provided_by_user_fit"];
 
+  // R04：presentation 展示覆盖（chart.presentation）白名单。
+  // 只允许样式字段；null 语义＝删除该级覆盖（恢复继承）；
+  // series/peaks 的键为稳定语义键/峰 id，不校验其存在性（数据替换后
+  // 暂不匹配的覆盖保留，不转移）。
+  var CP_PRES_KEYS = ["version", "axes", "legend", "series", "peaks"];
+  var CP_PRES_TEXT_KEYS = ["fontSizePt", "color", "fontWeight"];
+  var CP_PRES_AXIS_KEYS = ["x", "y"];
+  var CP_PRES_AXIS_PART_KEYS = ["title", "tick"];
+  var CP_PRES_LEGEND_KEYS = ["position", "fontSizePt", "color"];
+  var CP_PRES_LEGEND_POS = ["none", "right", "top", "bottom"];
+  var CP_PRES_SERIES_KEYS = ["stroke", "strokeWidthPt", "dash", "marker"];
+  var CP_PRES_MARKERS = ["none", "circle"];
+  var CP_PRES_PEAK_KEYS = ["color", "fontSizePt"];
+  var CP_PRES_KEY_PATTERN = /^[A-Za-z0-9_|:.\-]{1,120}$/;
+
   var ID_PATTERN = /^[A-Za-z0-9_.:-]+$/;
 
   // ------------------------------------------------------------------
@@ -1765,6 +1780,26 @@
           }
         }
       }
+      if (props.presentation !== undefined) {
+        if (props.presentation === null) {
+          if (chart.presentation !== undefined) {
+            delete chart.presentation;
+            any = true;
+          }
+        } else {
+          var nextPres = cpPatchPresentation(chart.presentation, props.presentation);
+          if (nextPres === null) {
+            if (chart.presentation !== undefined) {
+              delete chart.presentation;
+              any = true;
+            }
+          } else if (nextPres !== chart.presentation &&
+              !deepEq(chart.presentation || {}, nextPres)) {
+            chart.presentation = nextPres;
+            any = true;
+          }
+        }
+      }
     }
     return any;
   }
@@ -2729,6 +2764,7 @@
           break;
         case "peak_annotations":
           if (!Array.isArray(v)) { errors.push("characterization.peak_annotations 必须是数组"); break; }
+          var seenPeakIds = {};
           for (var p = 0; p < v.length; p++) {
             var pv = v[p];
             if (!pv || typeof pv !== "object" || Array.isArray(pv)) {
@@ -2737,7 +2773,7 @@
             }
             var pks = Object.keys(pv);
             for (var pk = 0; pk < pks.length; pk++) {
-              if (pks[pk] !== "x" && pks[pk] !== "label") {
+              if (pks[pk] !== "x" && pks[pk] !== "label" && pks[pk] !== "id") {
                 errors.push("peak_annotations[" + p + "] 不允许的键: " + safeStr(pks[pk]));
               }
             }
@@ -2747,10 +2783,283 @@
             if (typeof pv.label !== "string" || !pv.label.trim()) {
               errors.push("peak_annotations[" + p + "].label 必须是非空字符串");
             }
+            if (pv.id !== undefined && pv.id !== null) {
+              if (typeof pv.id !== "string" || !/^pk-[A-Za-z0-9-]{1,40}$/.test(pv.id)) {
+                errors.push("peak_annotations[" + p + "].id 必须是 pk- 前缀的稳定 id");
+              } else if (seenPeakIds[pv.id]) {
+                errors.push("peak_annotations[" + p + "].id 重复：" + pv.id);
+              } else {
+                seenPeakIds[pv.id] = true;
+              }
+            }
           }
           break;
       }
     }
+  }
+
+  // R04：presentation 补丁逐键类型校验。样式值非法立即报错；series/peaks
+  // 键只需匹配稳定键模式（存在性由渲染时的匹配决定，缺数据时覆盖保留）。
+  function isHexColor(v) {
+    return typeof v === "string" && /^#[0-9a-fA-F]{3,8}$/.test(v);
+  }
+
+  function validatePresTextStyle(v, where, errors) {
+    if (v === null) return; // null = 恢复继承
+    if (typeof v !== "object" || Array.isArray(v)) {
+      errors.push(where + " 必须是对象或 null");
+      return;
+    }
+    Object.keys(v).forEach(function (k) {
+      if (CP_PRES_TEXT_KEYS.indexOf(k) < 0) errors.push(where + " 不允许的键: " + safeStr(k));
+    });
+    if (v.fontSizePt !== undefined && v.fontSizePt !== null &&
+        (typeof v.fontSizePt !== "number" || !(v.fontSizePt >= 1 && v.fontSizePt <= 200))) {
+      errors.push(where + ".fontSizePt 必须是 1–200 的数字");
+    }
+    if (v.color !== undefined && v.color !== null && !isHexColor(v.color)) {
+      errors.push(where + ".color 必须是 #hex 颜色");
+    }
+    if (v.fontWeight !== undefined && v.fontWeight !== null &&
+        ["normal", "bold"].indexOf(v.fontWeight) < 0) {
+      errors.push(where + ".fontWeight 必须是 normal/bold");
+    }
+  }
+
+  function validatePresentationPatch(patch, errors) {
+    if (patch === null) return; // 整块清除
+    if (typeof patch !== "object" || Array.isArray(patch)) {
+      errors.push("properties.presentation 必须是对象或 null");
+      return;
+    }
+    Object.keys(patch).forEach(function (k) {
+      if (CP_PRES_KEYS.indexOf(k) < 0) {
+        errors.push("presentation 不允许的键: " + safeStr(k));
+      }
+    });
+    if (patch.version !== undefined && patch.version !== 1) {
+      errors.push("presentation.version 只能是 1");
+    }
+    if (patch.axes !== undefined && patch.axes !== null) {
+      if (typeof patch.axes !== "object" || Array.isArray(patch.axes)) {
+        errors.push("presentation.axes 必须是对象");
+      } else {
+        Object.keys(patch.axes).forEach(function (ax) {
+          if (CP_PRES_AXIS_KEYS.indexOf(ax) < 0) {
+            errors.push("presentation.axes 不允许的轴: " + safeStr(ax));
+            return;
+          }
+          var axv = patch.axes[ax];
+          if (axv === null) return;
+          if (typeof axv !== "object" || Array.isArray(axv)) {
+            errors.push("presentation.axes." + ax + " 必须是对象或 null");
+            return;
+          }
+          Object.keys(axv).forEach(function (part) {
+            if (CP_PRES_AXIS_PART_KEYS.indexOf(part) < 0) {
+              errors.push("presentation.axes." + ax + " 不允许的键: " + safeStr(part));
+              return;
+            }
+            validatePresTextStyle(axv[part], "presentation.axes." + ax + "." + part, errors);
+          });
+        });
+      }
+    }
+    if (patch.legend !== undefined && patch.legend !== null) {
+      if (typeof patch.legend !== "object" || Array.isArray(patch.legend)) {
+        errors.push("presentation.legend 必须是对象或 null");
+      } else {
+        Object.keys(patch.legend).forEach(function (k) {
+          if (CP_PRES_LEGEND_KEYS.indexOf(k) < 0) {
+            errors.push("presentation.legend 不允许的键: " + safeStr(k));
+          }
+        });
+        if (patch.legend.position !== undefined && patch.legend.position !== null &&
+            CP_PRES_LEGEND_POS.indexOf(patch.legend.position) < 0) {
+          errors.push("presentation.legend.position 必须是 " + CP_PRES_LEGEND_POS.join("/"));
+        }
+        if (patch.legend.fontSizePt !== undefined && patch.legend.fontSizePt !== null &&
+            (typeof patch.legend.fontSizePt !== "number" ||
+              !(patch.legend.fontSizePt >= 1 && patch.legend.fontSizePt <= 200))) {
+          errors.push("presentation.legend.fontSizePt 必须是 1–200 的数字");
+        }
+        if (patch.legend.color !== undefined && patch.legend.color !== null &&
+            !isHexColor(patch.legend.color)) {
+          errors.push("presentation.legend.color 必须是 #hex 颜色");
+        }
+      }
+    }
+    if (patch.series !== undefined && patch.series !== null) {
+      if (typeof patch.series !== "object" || Array.isArray(patch.series)) {
+        errors.push("presentation.series 必须是 {稳定系列键: 样式|null}");
+      } else {
+        Object.keys(patch.series).forEach(function (key) {
+          if (!CP_PRES_KEY_PATTERN.test(key)) {
+            errors.push("presentation.series 的键不符合稳定键格式: " + safeStr(key));
+            return;
+          }
+          var sv = patch.series[key];
+          if (sv === null) return; // null = 恢复继承
+          if (typeof sv !== "object" || Array.isArray(sv)) {
+            errors.push("presentation.series." + key + " 必须是对象或 null");
+            return;
+          }
+          Object.keys(sv).forEach(function (k) {
+            if (CP_PRES_SERIES_KEYS.indexOf(k) < 0) {
+              errors.push("presentation.series." + key + " 不允许的键: " + safeStr(k));
+            }
+          });
+          if (sv.stroke !== undefined && sv.stroke !== null && !isHexColor(sv.stroke)) {
+            errors.push("presentation.series." + key + ".stroke 必须是 #hex 颜色");
+          }
+          if (sv.strokeWidthPt !== undefined && sv.strokeWidthPt !== null &&
+              (typeof sv.strokeWidthPt !== "number" ||
+                !(sv.strokeWidthPt >= 0.1 && sv.strokeWidthPt <= 20))) {
+            errors.push("presentation.series." + key + ".strokeWidthPt 必须是 0.1–20 的数字");
+          }
+          if (sv.dash !== undefined && sv.dash !== null &&
+              (typeof sv.dash !== "string" || sv.dash.length > 40 || !/^[\d\s.,]*$/.test(sv.dash))) {
+            errors.push("presentation.series." + key + ".dash 必须是如 \"4 2\" 的虚线样式");
+          }
+          if (sv.marker !== undefined && sv.marker !== null &&
+              CP_PRES_MARKERS.indexOf(sv.marker) < 0) {
+            errors.push("presentation.series." + key + ".marker 必须是 " + CP_PRES_MARKERS.join("/"));
+          }
+        });
+      }
+    }
+    if (patch.peaks !== undefined && patch.peaks !== null) {
+      if (typeof patch.peaks !== "object" || Array.isArray(patch.peaks)) {
+        errors.push("presentation.peaks 必须是 {峰标注id: 样式|null}");
+      } else {
+        Object.keys(patch.peaks).forEach(function (id) {
+          if (!/^pk-[A-Za-z0-9-]{1,40}$/.test(id)) {
+            errors.push("presentation.peaks 的键必须是 pk- 前缀的峰标注 id: " + safeStr(id));
+            return;
+          }
+          var pv = patch.peaks[id];
+          if (pv === null) return;
+          if (typeof pv !== "object" || Array.isArray(pv)) {
+            errors.push("presentation.peaks." + id + " 必须是对象或 null");
+            return;
+          }
+          Object.keys(pv).forEach(function (k) {
+            if (CP_PRES_PEAK_KEYS.indexOf(k) < 0) {
+              errors.push("presentation.peaks." + id + " 不允许的键: " + safeStr(k));
+            }
+          });
+          if (pv.color !== undefined && pv.color !== null && !isHexColor(pv.color)) {
+            errors.push("presentation.peaks." + id + ".color 必须是 #hex 颜色");
+          }
+          if (pv.fontSizePt !== undefined && pv.fontSizePt !== null &&
+              (typeof pv.fontSizePt !== "number" || !(pv.fontSizePt >= 1 && pv.fontSizePt <= 200))) {
+            errors.push("presentation.peaks." + id + ".fontSizePt 必须是 1–200 的数字");
+          }
+        });
+      }
+    }
+  }
+
+  // R04：presentation 深合并（null 删除语义）。返回是否变化。
+  function cpPatchPresentation(current, patch) {
+    var next = (current && typeof current === "object" && !Array.isArray(current))
+      ? deepCopy(current) : { version: 1 };
+    if (patch === null) {
+      return Object.keys(next).length ? null : next; // 整块清除
+    }
+    var changed = false;
+    if (patch.axes) {
+      next.axes = next.axes || {};
+      CP_PRES_AXIS_KEYS.forEach(function (ax) {
+        var pax = patch.axes[ax];
+        if (pax === undefined) return;
+        if (pax === null) {
+          if (next.axes[ax] !== undefined) { delete next.axes[ax]; changed = true; }
+          return;
+        }
+        var target = next.axes[ax] || {};
+        CP_PRES_AXIS_PART_KEYS.forEach(function (part) {
+          var pv = pax[part];
+          if (pv === undefined) return;
+          if (pv === null) {
+            if (target[part] !== undefined) { delete target[part]; changed = true; }
+            return;
+          }
+          var sub = target[part] || {};
+          CP_PRES_TEXT_KEYS.forEach(function (k) {
+            if (pv[k] === undefined) return;
+            if (pv[k] === null) {
+              if (sub[k] !== undefined) { delete sub[k]; changed = true; }
+            } else if (sub[k] !== pv[k]) {
+              sub[k] = pv[k]; changed = true;
+            }
+          });
+          if (Object.keys(sub).length) target[part] = sub;
+          else if (target[part] !== undefined) { delete target[part]; changed = true; }
+        });
+        if (Object.keys(target).length) next.axes[ax] = target;
+        else if (next.axes[ax] !== undefined) { delete next.axes[ax]; changed = true; }
+      });
+      if (!Object.keys(next.axes).length) delete next.axes;
+    }
+    if (patch.legend) {
+      next.legend = next.legend || {};
+      CP_PRES_LEGEND_KEYS.forEach(function (k) {
+        var v = patch.legend[k];
+        if (v === undefined) return;
+        if (v === null) {
+          if (next.legend[k] !== undefined) { delete next.legend[k]; changed = true; }
+        } else if (next.legend[k] !== v) {
+          next.legend[k] = v; changed = true;
+        }
+      });
+      if (!Object.keys(next.legend).length) delete next.legend;
+    }
+    if (patch.series) {
+      next.series = next.series || {};
+      Object.keys(patch.series).forEach(function (key) {
+        var v = patch.series[key];
+        if (v === null) {
+          if (next.series[key] !== undefined) { delete next.series[key]; changed = true; }
+          return;
+        }
+        var sub = next.series[key] || {};
+        CP_PRES_SERIES_KEYS.forEach(function (k) {
+          if (v[k] === undefined) return;
+          if (v[k] === null) {
+            if (sub[k] !== undefined) { delete sub[k]; changed = true; }
+          } else if (sub[k] !== v[k]) {
+            sub[k] = v[k]; changed = true;
+          }
+        });
+        if (Object.keys(sub).length) next.series[key] = sub;
+        else if (next.series[key] !== undefined) { delete next.series[key]; changed = true; }
+      });
+      if (!Object.keys(next.series).length) delete next.series;
+    }
+    if (patch.peaks) {
+      next.peaks = next.peaks || {};
+      Object.keys(patch.peaks).forEach(function (id) {
+        var v = patch.peaks[id];
+        if (v === null) {
+          if (next.peaks[id] !== undefined) { delete next.peaks[id]; changed = true; }
+          return;
+        }
+        var sub = next.peaks[id] || {};
+        CP_PRES_PEAK_KEYS.forEach(function (k) {
+          if (v[k] === undefined) return;
+          if (v[k] === null) {
+            if (sub[k] !== undefined) { delete sub[k]; changed = true; }
+          } else if (sub[k] !== v[k]) {
+            sub[k] = v[k]; changed = true;
+          }
+        });
+        if (Object.keys(sub).length) next.peaks[id] = sub;
+        else if (next.peaks[id] !== undefined) { delete next.peaks[id]; changed = true; }
+      });
+      if (!Object.keys(next.peaks).length) delete next.peaks;
+    }
+    return changed ? next : current;
   }
 
   function checkTargets(op, doc, errors) {
@@ -3059,7 +3368,8 @@
         }
         var cpTop = Object.keys(cp);
         for (var ct = 0; ct < cpTop.length; ct++) {
-          if (cpTop[ct] !== "axes" && cpTop[ct] !== "characterization") {
+          if (cpTop[ct] !== "axes" && cpTop[ct] !== "characterization" &&
+              cpTop[ct] !== "presentation") {
             errors.push("properties 不允许的键: " + safeStr(cpTop[ct]));
           }
         }
@@ -3091,6 +3401,9 @@
         }
         if (cp.characterization !== undefined && cp.characterization !== null) {
           validateCharPatch(cp.characterization, errors);
+        }
+        if (cp.presentation !== undefined) {
+          validatePresentationPatch(cp.presentation, errors);
         }
         try {
           var cids = resolveTargets(doc, op.targets);
@@ -3136,6 +3449,235 @@
       }
     }
     return { ok: errors.length === 0, errors: errors };
+  }
+
+  // ------------------------------------------------------------------
+  // R06：跨子图统一实验组颜色（显式动作，纯函数）
+  //
+  // 对文档内全部含数据绑定的 chart 计算 seriesIdentity；同一稳定键在
+  // 各子图统一为同一颜色（默认取该键首次出现子图的有效颜色，未覆盖时
+  // 按全局首次出现顺序分配调色板色）。返回一组 set_chart_properties
+  // （presentation.series 补丁）——由调用方经一次 commit 提交，不静默
+  // 改任何文档。同名但不同语义的键（分组列不同）不合并；色板不足时给
+  // 出 warnings，不静默循环合并。
+  // ------------------------------------------------------------------
+  function unifySeriesColors(doc, opts) {
+    opts = opts || {};
+    if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
+      throw new Error("unifySeriesColors 需要有效的 doc");
+    }
+    var FigDataNS = global.FigData;
+    if (!FigDataNS || typeof FigDataNS.seriesIdentity !== "function") {
+      throw new Error("unifySeriesColors 需要 FigData.seriesIdentity");
+    }
+    var FALLBACK = ["#3C5488", "#E64B35", "#00A087", "#4DBBD5", "#F39B7F",
+      "#8491B4", "#91D1C2", "#DC0000", "#7E6148", "#B09C85"];
+    var palette = FALLBACK;
+    if (opts.palette_id && global.FigPalette && typeof global.FigPalette.colors === "function") {
+      var pcs = global.FigPalette.colors(opts.palette_id);
+      if (pcs && pcs.length) palette = pcs;
+    }
+    var charts = [];
+    (doc.elements || []).forEach(function (el) {
+      if (el && el.type === "chart" && el.chart && el.chart.data &&
+          el.chart.data.inline && Array.isArray(el.chart.data.inline.rows) &&
+          el.chart.data.inline.rows.length) {
+        charts.push(el);
+      }
+    });
+    // 全局键序（首次出现）与各键的当前有效颜色
+    var keyOrder = [];
+    var keyColor = {};
+    var perChart = charts.map(function (el) {
+      var ident;
+      try { ident = FigDataNS.seriesIdentity(el.chart); } catch (e) { ident = []; }
+      var pres = (el.chart.presentation && el.chart.presentation.series) || {};
+      return { el: el, ident: ident, pres: pres };
+    });
+    perChart.forEach(function (pc) {
+      pc.ident.forEach(function (s, i) {
+        if (keyOrder.indexOf(s.key) < 0) {
+          keyOrder.push(s.key);
+          var o = pc.pres[s.key];
+          keyColor[s.key] = (o && o.stroke) ? o.stroke : palette[(keyOrder.length - 1) % palette.length];
+        }
+      });
+    });
+    var warnings = [];
+    if (keyOrder.length > palette.length) {
+      warnings.push("不同实验组键共 " + keyOrder.length + " 个，超过色板 " + palette.length +
+        " 色；已循环使用颜色。请补色或改用其他视觉编码（形状/线型），不要静默合并不同组");
+    }
+    var ops = [];
+    perChart.forEach(function (pc) {
+      var patch = {};
+      pc.ident.forEach(function (s) {
+        patch[s.key] = { stroke: keyColor[s.key] };
+      });
+      if (!Object.keys(patch).length) return;
+      ops.push({
+        op: "set_chart_properties",
+        targets: [pc.el.id],
+        properties: { presentation: { version: 1, series: patch } },
+        reason: "R06 统一实验组颜色：" + Object.keys(patch).length + " 个语义键"
+      });
+    });
+    return { ops: ops, warnings: warnings, keyOrder: keyOrder, keyColor: keyColor };
+  }
+
+  // ------------------------------------------------------------------
+  // Public: OP_SPECS + describeCapabilities（R01）
+  //
+  // 操作描述与运行时校验共用同一批字段常量（CP_*/SC_*），保证「暴露给
+  // 模型的操作确实可校验」：描述里的每个枚举都来自 validate 实际比对
+  // 的白名单，改白名单必同步这里（describeCapabilities 直接引用常量，
+  // 不复制字符串）。ai.js 优先读取本表生成提示词；FigOps 未加载时才用
+  // ai.js 自带的静态回退文本。
+  // ------------------------------------------------------------------
+
+  var STYLE_KEYS = ["fontSizePt", "fontWeight", "fontStyle", "textAlign",
+    "fill", "stroke", "strokeWidthPt", "opacity", "dash", "fontFamily", "lineHeight"];
+
+  var OP_SPECS = {
+    move: { usage: "move: {targets, dx, dy}（相对位移 mm）或 {targets, x, y}（绝对位置 mm）" },
+    resize: { usage: "resize: {targets, w, h}（mm，最小 0.1）" },
+    rotate: { usage: "rotate: {targets, rotation}（绝对角度）或 {targets, angle}（相对角度）" },
+    set_text: { usage: "set_text: {targets, text}（仅 type=text 元素）", requiresType: "text" },
+    set_style: {
+      usage: "set_style: {targets, style:{...}}（合并补丁）",
+      fields: STYLE_KEYS,
+      enums: { fontWeight: ["normal", "bold"], fontStyle: ["normal", "italic"],
+               textAlign: ["left", "center", "right"] }
+    },
+    set_color: { usage: "set_color: {targets, color, stroke?}（color→fill，stroke→描边色）" },
+    add_element: { usage: "add_element: {element:{id?, type, transform:{x,y,w,h}, ...}}" },
+    delete: { usage: "delete: {targets}" },
+    group: { usage: "group: {targets, id?}" },
+    ungroup: { usage: "ungroup: {targets}（须为 group/panel）" },
+    align: { usage: "align: {targets, mode}（多目标对齐共同包围盒；单目标对齐画布）",
+             enums: { mode: ALIGN_MODES } },
+    distribute: { usage: "distribute: {targets, orientation}（≥3 个目标）",
+                  enums: { orientation: ORIENTATIONS } },
+    z_order: { usage: "z_order: {targets, to}", enums: { to: Z_ORDER_TO } },
+    add_anchor: { usage: "add_anchor: {anchor:{id?, label, bbox_mm 或 bbox_norm}}" },
+    remove_anchor: { usage: "remove_anchor: {anchor:{id}}" },
+    update_anchor: { usage: "update_anchor: {anchor:{id,...}}" },
+    apply_template: { usage: "apply_template: {template_id, data?, options?}" },
+    apply_journal: { usage: "apply_journal: {journal_preset_id}" },
+    recolor: { usage: "recolor: {palette_id, recolor_strategy?}",
+               enums: { recolor_strategy: RECOLOR_STRATEGIES } },
+    panel_layout: { usage: "panel_layout: {targets, panel:{cols, rows, gap_mm, padding_mm, ...}}（目标须为 panel）" },
+    set_canvas: { usage: "set_canvas: {canvas:{width_mm, height_mm, dpi, background, ...}}" },
+    note: { usage: "note: {note}（无副作用说明）" },
+    set_scientific_contract: {
+      usage: "set_scientific_contract: {contract:{...}}（科学论证合同，可撤销）",
+      fields: SC_CONTRACT_KEYS,
+      enums: { archetype: SC_ARCHETYPES, evidence_role: SC_EVIDENCE_ROLES,
+               destination: SC_DESTINATIONS, spread: SC_SPREADS,
+               uncertainty_source: SC_SOURCES }
+    },
+    set_chart_properties: {
+      usage: "set_chart_properties: {targets:[chartId], properties:{axes?, characterization?, presentation?}}（图表属性唯一入口；不改 chartType 与原始数据行）",
+      requiresType: "chart",
+      fields: ["axes", "characterization", "presentation"],
+      enums: {
+        "axes.keys": CP_AXES_KEYS,
+        "axes.xScale/yScale": CP_AXES_SCALES,
+        "characterization.keys": CP_CHAR_KEYS,
+        "characterization.x_scale": CP_CHAR_X_SCALES,
+        "characterization.normalize": CP_CHAR_NORMALIZE,
+        "characterization.fit_source": CP_FIT_SOURCES,
+        "curves[].role": CP_CURVE_ROLES,
+        "presentation.keys": CP_PRES_KEYS,
+        "presentation.legend.position": CP_PRES_LEGEND_POS,
+        "presentation.series[键].keys": CP_PRES_SERIES_KEYS,
+        "presentation.series[键].marker": CP_PRES_MARKERS
+      },
+      notes: [
+        "通用轴对数：axes.xScale/yScale 取 " + CP_AXES_SCALES.join("/") +
+          "；表征参数对数：characterization.x_scale 取 " + CP_CHAR_X_SCALES.join("/") + "。两者是不同枚举，不能混写",
+        "反向 X 轴（XPS/NMR 等表征约定）用 characterization.x_reverse:true；axes 无反向键",
+        "curves[] 为 {role, column, label?}，column 必须是该 chart 内联数据中真实存在的列名",
+        "peak_annotations[] 为 {x, label, id?}，峰位只能由用户申报，不得推断；id 为稳定峰 id（缺省确定性补全）",
+        "characterization:null 表示清除表征参数回到通用渲染",
+        "presentation 为展示覆盖（不改数据/统计/绑定列）：axes.{x,y}.{title,tick}.{fontSizePt,color,fontWeight}、" +
+          "legend.{position,fontSizePt,color}、series[稳定键].{stroke,strokeWidthPt,dash,marker}、" +
+          "peaks[峰id].{color,fontSizePt}；null 语义＝删除该级覆盖（恢复继承），presentation:null 清除整块",
+        "系列稳定键先用 FigData.seriesIdentity(chart) 查询（group|分组列|类型:组名 / curve|role|列名 / raw|y列 / series|y列 / color|列|类型:值）"
+      ]
+    },
+    apply_schematic: {
+      usage: "apply_schematic: {contract:{id,nodes,relations,sources,canvas?,layout?}, auto_layout?}",
+      notes: ["声明式实体关系示意图；来源只保存用户提供的文字，不猜科学内容"]
+    },
+    layout_schematic: { usage: "layout_schematic: {diagram_id, auto_layout:true}（按已保存合同重排）" },
+    set_chart_data: {
+      usage: "set_chart_data: {targets:[chartId], approved:true, data:{columns,rows,source_ref?,version?,raw_source_sha256?,source_info?}, source_ref, version}",
+      requiresType: "chart",
+      notes: [
+        "approved:true 只能来自用户明确批准的数据替换流程；模型输出中的 approved 字段不构成授权",
+        "映射列必须仍存在；mapping/style/chartType/既有 statistics 不变；替换后统计声明强制重审"
+      ]
+    }
+  };
+
+  // 供 AI/UI 询问“当前对象能做什么”。opts:{doc, selection?}。
+  // 返回逐操作 applies/reason/usage/fields/enums；枚举直接引用运行时常量。
+  function describeCapabilities(opts) {
+    opts = opts || {};
+    var doc = opts.doc;
+    if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
+      throw new Error("describeCapabilities 需要有效的 doc");
+    }
+    var selection = Array.isArray(opts.selection) ? opts.selection : [];
+    var byId = {};
+    (doc.elements || []).forEach(function (el) { if (el && el.id) byId[el.id] = el; });
+    var scoped = [];
+    if (selection.length) {
+      selection.forEach(function (id) {
+        if (typeof id === "string" && byId[id]) scoped.push(byId[id]);
+      });
+    }
+    // 无选择时范围是全文档（描述能力用，不代表允许发送全部数据行）
+    var scopeEls = scoped.length ? scoped : Object.keys(byId).map(function (k) { return byId[k]; });
+    var types = {};
+    scopeEls.forEach(function (el) { types[el.type] = (types[el.type] || 0) + 1; });
+    var chartIds = scopeEls.filter(function (el) { return el.type === "chart"; })
+      .map(function (el) { return el.id; });
+
+    var ops = [];
+    OP_TYPES.forEach(function (name) {
+      var spec = OP_SPECS[name] || { usage: name };
+      var applies = true, reason = null;
+      if (spec.requiresType) {
+        var have = (types[spec.requiresType] || 0) > 0;
+        applies = have;
+        if (!have) {
+          var docCount = 0;
+          (doc.elements || []).forEach(function (el) {
+            if (el && el.type === spec.requiresType) docCount++;
+          });
+          reason = docCount
+            ? "当前选择范围内没有 " + spec.requiresType + " 元素（文档里有 " + docCount +
+              " 个；请在 targets 里写 chart 元素 id）"
+            : "文档中没有 " + spec.requiresType + " 元素";
+        }
+      }
+      ops.push({
+        op: name, applies: applies, reason: reason,
+        usage: spec.usage,
+        fields: spec.fields || null,
+        enums: spec.enums || null,
+        notes: spec.notes || null
+      });
+    });
+    return {
+      scope: selection.length ? "selection" : "document",
+      selectionCount: selection.length,
+      types: types,
+      chartIds: chartIds,
+      ops: ops
+    };
   }
 
   // ------------------------------------------------------------------
@@ -3293,7 +3835,10 @@
     revertTo: revertTo,
     diff: diff,
     describe: describe,
+    describeCapabilities: describeCapabilities,
+    unifySeriesColors: unifySeriesColors,
     resolveTargets: resolveTargets,
+    OP_SPECS: OP_SPECS,
     CHART_PROPERTIES: {
       AXES_KEYS: CP_AXES_KEYS,
       AXES_SCALES: CP_AXES_SCALES,
@@ -3302,7 +3847,11 @@
       CURVE_ROLES: CP_CURVE_ROLES,
       CHAR_X_SCALES: CP_CHAR_X_SCALES,
       CHAR_NORMALIZE: CP_CHAR_NORMALIZE,
-      FIT_SOURCES: CP_FIT_SOURCES
+      FIT_SOURCES: CP_FIT_SOURCES,
+      PRESENTATION_KEYS: CP_PRES_KEYS,
+      PRESENTATION_SERIES_KEYS: CP_PRES_SERIES_KEYS,
+      PRESENTATION_LEGEND_POS: CP_PRES_LEGEND_POS,
+      PRESENTATION_MARKERS: CP_PRES_MARKERS
     },
     SCIENTIFIC_CONTRACT: {
       KEYS: SC_CONTRACT_KEYS,

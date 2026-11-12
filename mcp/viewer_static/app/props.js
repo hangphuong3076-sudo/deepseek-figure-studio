@@ -906,6 +906,209 @@
     refreshCharButtons();
   }
 
+  // ------------------------------------------------------------------
+  // R04：图表部件局部样式（chart.presentation 受控覆盖）
+  //
+  // 选中 chart 且 App.ui.chartPart 指向语义部件（系列/图例/轴标题/峰标注）
+  // 时显示。每次「应用」恰好一笔 set_chart_properties（presentation 补丁），
+  // 可撤销；「恢复继承」用 null 删除该级覆盖。样式不改数据/统计/绑定列。
+  // ------------------------------------------------------------------
+
+  function partPresentation(chart, ref) {
+    var pres = (chart.chart && chart.chart.presentation) || {};
+    if (ref.part === "series" && ref.seriesKey) {
+      return pres.series && pres.series[ref.seriesKey] ? pres.series[ref.seriesKey] : {};
+    }
+    if (ref.part === "legend") return pres.legend || {};
+    if (ref.part === "axis-title-x" || ref.part === "axis-title-y") {
+      var axis = ref.part === "axis-title-x" ? "x" : "y";
+      return (pres.axes && pres.axes[axis] && pres.axes[axis].title) || {};
+    }
+    if (ref.part === "peak" && ref.peakId) {
+      return pres.peaks && pres.peaks[ref.peakId] ? pres.peaks[ref.peakId] : {};
+    }
+    return {};
+  }
+
+  function buildPresentationPatch(ref, values) {
+    var patch = { version: 1 };
+    if (ref.part === "series") patch.series = (function () {
+      var o = {}; o[ref.seriesKey] = values; return o;
+    })();
+    else if (ref.part === "legend") patch.legend = values;
+    else if (ref.part === "axis-title-x" || ref.part === "axis-title-y") {
+      var ax = {}; ax[ref.part === "axis-title-x" ? "x" : "y"] = { title: values };
+      patch.axes = ax;
+    } else if (ref.part === "peak") {
+      var pk = {}; pk[ref.peakId] = values; patch.peaks = pk;
+    }
+    return patch;
+  }
+
+  function renderMultiSection() {
+    if (!refs.multiTitle || !refs.multiWrap) return;
+    var App = app();
+    var charts = (App.doc && App.doc.elements || []).filter(function (e) {
+      return e && e.type === "chart" && e.chart && e.chart.data &&
+        e.chart.data.inline && Array.isArray(e.chart.data.inline.rows) &&
+        e.chart.data.inline.rows.length;
+    });
+    var show = charts.length >= 2;
+    refs.multiTitle.style.display = show ? "" : "none";
+    refs.multiWrap.style.display = show ? "" : "none";
+  }
+
+  function renderPartSection(els, single) {
+    if (!refs.partTitle || !refs.partWrap) return;
+    var App = app();
+    var ref = App.ui && App.ui.chartPart;
+    var isChartSel = single && els[0] && els[0].type === "chart";
+    var applicable = isChartSel && ref && ref.chartId === els[0].id &&
+      ["series", "legend", "axis-title-x", "axis-title-y", "peak"].indexOf(ref.part) >= 0 &&
+      (ref.part !== "series" || ref.seriesKey) &&
+      (ref.part !== "peak" || ref.peakId);
+    refs.partTitle.style.display = applicable ? "" : "none";
+    refs.partWrap.style.display = applicable ? "" : "none";
+    if (!applicable) return;
+    var el = els[0];
+    var cur = partPresentation(el, ref);
+
+    function label(name) {
+      if (ref.part === "series" && ref.seriesKey) {
+        var ident = (global.FigData && FigData.seriesIdentity(el.chart) || [])
+          .filter(function (s) { return s.key === ref.seriesKey; })[0];
+        return "系列 " + (ident ? ident.label : ref.seriesKey);
+      }
+      if (ref.part === "legend") return "图例";
+      if (ref.part === "axis-title-x") return "X 轴标题";
+      if (ref.part === "axis-title-y") return "Y 轴标题";
+      if (ref.part === "peak") return "峰标注 " + ref.peakId;
+      return "图表部件";
+    }
+
+    refs.partWrap.textContent = "";
+    refs.partWrap.appendChild(h("div", {
+      text: label() + "（样式覆盖不改数据；原始行与统计不变）",
+      style: { fontSize: "11px", color: "#555", margin: "2px 0 6px" }
+    }));
+
+    var inputs = {};
+    function numField(key, text, min, max, step) {
+      var inp = h("input", { type: "number", min: String(min), max: String(max),
+        step: String(step), value: cur[key] != null ? String(cur[key]) : "",
+        placeholder: "继承", "aria-label": text,
+        style: { width: "62px", fontSize: "12px", boxSizing: "border-box" } });
+      inputs[key] = inp;
+      return h("label", { style: { display: "inline-flex", gap: "4px", alignItems: "center",
+        fontSize: "12px", marginRight: "10px" } }, [
+        h("span", { text: text, style: { width: "44px" } }), inp
+      ]);
+    }
+    function colorField(key, text) {
+      var inp = h("input", { type: "color", value: cur[key] || "#000000",
+        "aria-label": text, style: { width: "40px", padding: "0", height: "22px" } });
+      inputs[key] = inp;
+      return h("label", { style: { display: "inline-flex", gap: "4px", alignItems: "center",
+        fontSize: "12px", marginRight: "10px" } }, [
+        h("span", { text: text, style: { width: "44px" } }), inp
+      ]);
+    }
+
+    var rows = [];
+    if (ref.part === "series") {
+      rows.push(colorField("stroke", "颜色"));
+      rows.push(numField("strokeWidthPt", "线宽", 0.1, 20, 0.1));
+      var dashInp = h("input", { type: "text", value: cur.dash || "",
+        placeholder: "如 4 2，空=实线", "aria-label": "虚线",
+        style: { width: "110px", fontSize: "12px", boxSizing: "border-box" } });
+      inputs.dash = dashInp;
+      rows.push(h("label", { style: { display: "inline-flex", gap: "4px", alignItems: "center",
+        fontSize: "12px" } }, [h("span", { text: "虚线", style: { width: "44px" } }), dashInp]));
+    } else if (ref.part === "legend") {
+      var posSel = h("select", { "aria-label": "图例位置",
+        style: { fontSize: "12px", maxWidth: "110px" } });
+      ["", "none", "right", "top", "bottom"].forEach(function (v) {
+        posSel.appendChild(h("option", {
+          value: v, text: v === "" ? "继承" : (v === "none" ? "不显示" : v)
+        }));
+      });
+      posSel.value = cur.position || "";
+      inputs.position = posSel;
+      rows.push(h("label", { style: { display: "inline-flex", gap: "4px", alignItems: "center",
+        fontSize: "12px", marginRight: "10px" } }, [
+        h("span", { text: "位置", style: { width: "44px" } }), posSel
+      ]));
+      rows.push(numField("fontSizePt", "字号", 1, 200, 0.5));
+      rows.push(colorField("color", "颜色"));
+    } else if (ref.part === "axis-title-x" || ref.part === "axis-title-y") {
+      rows.push(numField("fontSizePt", "字号", 1, 200, 0.5));
+      rows.push(colorField("color", "颜色"));
+      var bold = h("input", { type: "checkbox" });
+      bold.checked = cur.fontWeight === "bold";
+      inputs.fontWeight = bold;
+      rows.push(h("label", { style: { display: "inline-flex", gap: "4px", alignItems: "center",
+        fontSize: "12px" } }, [bold, h("span", { text: "加粗" })]));
+    } else if (ref.part === "peak") {
+      rows.push(colorField("color", "颜色"));
+      rows.push(numField("fontSizePt", "字号", 1, 200, 0.5));
+    }
+    var row = h("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px",
+      alignItems: "center", marginBottom: "4px" } }, rows);
+    refs.partWrap.appendChild(row);
+
+    function collectValues(clear) {
+      if (clear) return null; // null = 删除该级覆盖（恢复继承）
+      var v = {};
+      ["stroke", "strokeWidthPt", "dash", "position", "fontSizePt", "color"].forEach(function (k) {
+        var inp = inputs[k];
+        if (!inp) return;
+        var raw = String(inp.value == null ? "" : inp.value).trim();
+        if (raw === "") return; // 空输入 = 继承（不写覆盖）
+        if (k === "stroke" || k === "color") v[k] = raw;
+        else if (k === "strokeWidthPt" || k === "fontSizePt") {
+          var n = Number(raw);
+          if (isFinite(n) && n > 0) v[k] = n;
+        } else v[k] = raw;
+      });
+      if (inputs.fontWeight && inputs.fontWeight.checked) v.fontWeight = "bold";
+      return v;
+    }
+
+    var applyBtn = h("button", {
+      text: "应用部件样式",
+      title: "一笔 set_chart_properties（presentation 补丁），可撤销；不改数据与统计",
+      style: { fontSize: "12px", padding: "3px 12px", cursor: "pointer", marginRight: "6px" }
+    });
+    applyBtn.addEventListener("click", function () {
+      var values = collectValues(false);
+      if (!values || !Object.keys(values).length) {
+        if (global.Ui && Ui.toast) Ui.toast("没有可应用的修改（空输入表示继承）", { type: "info" });
+        return;
+      }
+      var patch = buildPresentationPatch(ref, values);
+      commit([{
+        op: "set_chart_properties", targets: [el.id],
+        properties: { presentation: patch },
+        reason: "图表部件局部样式：" + label()
+      }], "图表部件样式：" + label());
+    });
+    var resetBtn = h("button", {
+      text: "恢复继承",
+      title: "删除该部件的样式覆盖（null 语义），回到默认渲染",
+      style: { fontSize: "12px", padding: "3px 12px", cursor: "pointer" }
+    });
+    resetBtn.addEventListener("click", function () {
+      var patch = buildPresentationPatch(ref, null);
+      commit([{
+        op: "set_chart_properties", targets: [el.id],
+        properties: { presentation: patch },
+        reason: "恢复继承：" + label()
+      }], "恢复部件继承：" + label());
+    });
+    refs.partWrap.appendChild(applyBtn);
+    refs.partWrap.appendChild(resetBtn);
+  }
+
   function renderCharSection(els, single) {
     var isChart = single && els[0].type === "chart";
     refs.charTitle.style.display = isChart ? "" : "none";
@@ -1264,15 +1467,76 @@
 
     panel.appendChild(info);
     panel.appendChild(hint);
-    panel.appendChild(sectionTitle("位置与尺寸"));
-    panel.appendChild(geo);
+    // R04：图表部件局部样式（选中 chart 且点击了系列/图例/轴标题/峰标注）
+    refs.partTitle = sectionTitle("图表部件局部样式");
+    refs.partTitle.style.display = "none";
+    refs.partWrap = h("div", {
+      "data-props-section": "chart-part",
+      style: { padding: "0 8px 8px", display: "none" }
+    });
+    panel.appendChild(refs.partTitle);
+    panel.appendChild(refs.partWrap);
+
+    // R06：多子图协同（文档含 ≥2 个数据图表时显示）
+    refs.multiTitle = sectionTitle("多子图协同");
+    refs.multiTitle.style.display = "none";
+    refs.multiWrap = h("div", {
+      "data-props-section": "multi-panel",
+      style: { padding: "0 8px 8px", display: "none" }
+    });
+    var unifyBtn = h("button", {
+      text: "统一实验组颜色",
+      title: "按稳定语义键把同一实验组在各子图统一为同一颜色；一笔提交、可撤销；" +
+        "色板不足会提示补色，不静默合并不同组",
+      style: { fontSize: "12px", padding: "3px 12px", cursor: "pointer" }
+    });
+    unifyBtn.addEventListener("click", function () {
+      var App = app();
+      if (!global.FigOps || typeof FigOps.unifySeriesColors !== "function") {
+        if (global.Ui && Ui.toast) Ui.toast("内核缺少 unifySeriesColors", { type: "error" });
+        return;
+      }
+      var res;
+      try { res = FigOps.unifySeriesColors(App.doc, {}); }
+      catch (err) {
+        if (global.Ui && Ui.toast) Ui.toast("统一颜色失败：" + err.message, { type: "error" });
+        return;
+      }
+      (res.warnings || []).forEach(function (w) {
+        if (global.Ui && Ui.toast) Ui.toast(w, { type: "info" });
+      });
+      if (!res.ops.length) {
+        if (global.Ui && Ui.toast) Ui.toast("没有可统一的数据图表", { type: "info" });
+        return;
+      }
+      commit(res.ops, "R06 统一实验组颜色");
+    });
+    refs.multiWrap.appendChild(unifyBtn);
+    refs.multiWrap.appendChild(h("div", {
+      text: "统一实验组颜色＝同一语义键（分组列+组值/曲线角色+列）在各子图同色；" +
+        "显式提交一笔历史，可撤销。共享坐标范围与共享图例暂未提供自动化，" +
+        "可用期刊预设统一尺寸后在各子图分别设置。",
+      style: { fontSize: "11px", color: "#666", margin: "4px 0 0" }
+    }));
+    panel.appendChild(refs.multiTitle);
+    panel.appendChild(refs.multiWrap);
+    // R03：未选中时的下一步指引（info 区在 render 中按文档状态更新）
+    refs.geoSection = h("div", {}, [
+      sectionTitle("位置与尺寸"),
+      geo
+    ]);
+    panel.appendChild(refs.geoSection);
     panel.appendChild(sectionTitle("填充与描边"));
     panel.appendChild(look);
     panel.appendChild(look2);
     panel.appendChild(dashWrap);
-    panel.appendChild(sectionTitle("文本"));
-    panel.appendChild(text);
-    panel.appendChild(text2);
+    // R03：文本属性只对包含 text 元素的选择显示
+    refs.textSection = h("div", { "data-props-section": "text" }, [
+      sectionTitle("文本"),
+      text,
+      text2
+    ]);
+    panel.appendChild(refs.textSection);
     panel.appendChild(charTitle);
     panel.appendChild(charWrap);
 
@@ -1341,6 +1605,16 @@
       : (single
         ? "已选 1 个：" + (els[0].name || els[0].type) + "（" + els[0].id + "）"
         : "已选 " + ids.length + " 个元素");
+
+    // R03：上下文属性——未选中给下一步指引；选中文本才显示文本段
+    var hasText = els.some(function (el) { return el.type === "text"; });
+    if (refs.textSection) refs.textSection.style.display = hasText ? "" : "none";
+    if (noSel) {
+      var empty = !(doc && Array.isArray(doc.elements) && doc.elements.length);
+      refs.info.textContent = empty
+        ? "空文档：点画布上方任务卡开始，或用左上「导入数据」；AI 面板可直接下指令（先预览后应用）。"
+        : "未选中。点击画布元素查看属性；框选多个可批量调整；右键「发送给 AI」可引用区域。";
+    }
 
     var panelRelative = els.some(function (el) {
       return el.style && el.style.panelRelative === true;
@@ -1425,6 +1699,8 @@
 
     // Characterization section (single chart selection only)
     renderCharSection(els, single);
+    renderPartSection(els, single); // R04 图表部件局部样式
+    renderMultiSection(); // R06 多子图协同
     renderRelationSection(els, single);
   }
 
@@ -1445,6 +1721,8 @@
 
     unsubs.push(App.on("doc:changed", render));
     unsubs.push(App.on("selection:changed", render));
+    // R04：部件引用变化（点击图表内部系列/图例/轴标题/峰标注）也刷新
+    unsubs.push(App.on("ui:changed", function () { render(); }));
     render();
   }
 
