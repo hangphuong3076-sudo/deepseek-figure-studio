@@ -175,7 +175,7 @@
 
   function pixelSizeFor(doc, dpi, panelId) {
     if (typeof G.FigExport === "undefined" || !G.FigExport || typeof G.FigExport.pixelSize !== "function") {
-      throw new Error("Exporter：缺少内核模块 FigExport，请确认 lib/export.js 已按顺序加载");
+      throw new Error("导出功能未加载（缺少渲染内核），请刷新页面重试");
     }
     return G.FigExport.pixelSize(probeDoc(doc, dpi), { panel_id: panelId });
   }
@@ -205,7 +205,7 @@
   function exportOne(doc, format, opts) {
     var o = opts || {};
     if (typeof G.FigExport === "undefined" || !G.FigExport) {
-      return Promise.reject(new Error("缺少内核模块 FigExport，请确认 lib/export.js 已按顺序加载"));
+      return Promise.reject(new Error("导出功能未加载（缺少渲染内核），请刷新页面重试"));
     }
     try {
       if (format === "png" || format === "jpeg") {
@@ -275,7 +275,7 @@
       }
     } catch (e) { /* context unavailable */ }
     if (format === "tiff") {
-      tips.push("TIFF 编码依赖内核 lib/tiff.js（FigTiff），请确认页面按顺序加载了 lib/tiff.js 与 lib/export.js。");
+      tips.push("TIFF 导出需要图像编码组件，当前未加载，请刷新页面重试。");
     }
     if (format === "png" || format === "jpeg") {
       tips.push("请确认 DPI 没有过大（超出浏览器画布上限会失败），可降低 DPI 后重试；若文档含外部图片，请确保其已内联为 data URL。");
@@ -308,7 +308,7 @@
       return Promise.reject(e);
     }
     if (typeof G.FigExport === "undefined" || !G.FigExport || typeof G.FigExport.suggestFilename !== "function") {
-      return Promise.reject(new Error("Exporter.quickExport：缺少内核模块 FigExport，请确认 lib/export.js 已按顺序加载"));
+      return Promise.reject(new Error("导出功能未加载（缺少渲染内核），请刷新页面重试"));
     }
     var meta = FORMAT_META[format];
     var dpi = resolveDpi(doc.canvas, null);
@@ -369,11 +369,13 @@
 
     var panel = el("div", {
       background: "#FFFFFF", color: "#222222", borderRadius: "10px",
-      width: "470px", maxWidth: "92vw", maxHeight: "88vh", overflowY: "auto",
-      padding: "18px 20px", boxSizing: "border-box",
+      width: "470px", maxWidth: "92vw", maxHeight: "88vh",
+      display: "flex", flexDirection: "column", overflow: "hidden",
+      padding: "0", boxSizing: "border-box",
       fontFamily: '"Segoe UI","Microsoft YaHei",Arial,sans-serif', fontSize: "13px",
       boxShadow: "0 8px 30px rgba(0,0,0,0.35)"
     });
+    panel.setAttribute("data-export-dialog", "true");
     overlay.appendChild(panel);
 
     var title = el("div", { fontSize: "16px", fontWeight: "bold", marginBottom: "10px" }, "导出图像");
@@ -612,8 +614,12 @@
     progressArea.appendChild(progressText);
     panel.appendChild(progressArea);
 
-    // --- footer buttons ---
-    var footer = el("div", { display: "flex", justifyContent: "flex-end", gap: "8px", margin: "14px 0 0" });
+    // --- footer buttons（固定在对话框底部，不随内容滚动） ---
+    var footer = el("div", {
+      display: "flex", justifyContent: "flex-end", gap: "8px",
+      flex: "0 0 auto", padding: "12px 20px",
+      borderTop: "1px solid #E3E8EF", background: "#FFFFFF"
+    });
     var cancelBtn = el("button", {
       padding: "7px 14px", border: "1px solid #C9D1DB", borderRadius: "6px",
       background: "#FFFFFF", cursor: "pointer"
@@ -628,6 +634,20 @@
     footer.appendChild(cancelBtn);
     footer.appendChild(exportBtn);
     panel.appendChild(footer);
+
+    // 三段式布局：标题固定在上；中间全部控件进可滚动 body；按钮行固定在底部。
+    // panel 已是 flex 列且 overflow:hidden，这里只重排既有子节点，不改任何控件/逻辑。
+    var header = el("div", { flex: "0 0 auto", padding: "16px 20px 0" });
+    var body = el("div", {
+      flex: "1 1 auto", minHeight: "0", overflowY: "auto", padding: "6px 20px 10px"
+    });
+    header.appendChild(title);                 // 标题移入固定头部
+    Array.prototype.slice.call(panel.children).forEach(function (child) {
+      if (child !== footer) body.appendChild(child);  // 其余内容（除 footer）移入滚动体
+    });
+    panel.appendChild(header);
+    panel.appendChild(body);
+    panel.appendChild(footer);                 // footer 已是最后一个，appendChild 移到末尾
 
     ui.dpiInput = dpiInput;
     ui.qualityRow = qualityRow;
@@ -859,7 +879,7 @@
       return Promise.reject(e);
     }
     if (typeof G.FigExport === "undefined" || !G.FigExport) {
-      var missing = new Error("Exporter.open：缺少内核模块 FigExport，请确认 lib/export.js 已按顺序加载");
+      var missing = new Error("导出功能未加载（缺少渲染内核），请刷新页面重试");
       notifyError(missing.message);
       return Promise.reject(missing);
     }

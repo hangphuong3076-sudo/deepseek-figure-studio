@@ -10,16 +10,21 @@
   var MAX_AUDIT_WARNINGS = 1000;
   var LABEL_PAD_X_MM = 1.5;
   var LABEL_PAD_Y_MM = 1;
+  // labelBoxFor 上下内缩合计占用的节点高度；fittedLabel 必须把它计入
+  // requiredHeight，否则自动适应高度的节点会被审计误报 LABEL_TRUNCATION_RISK。
+  var LABEL_BOX_V_MM = 1.0;
   var PT_TO_MM = 25.4 / 72;
   var LAYOUT_EPS_MM = 0.001;
   var ID_RE = /^[A-Za-z0-9_.:-]+$/;
   var ROLES = ["question", "method", "evidence", "conclusion"];
   var SHAPES = ["box", "ellipse", "cell", "molecule", "material", "process", "outcome",
-    "sample", "device", "group", "container", "diamond", "chart"];
+    "sample", "device", "group", "container", "diamond", "chart", "terminal", "chevron"];
   var KINDS = ["entity", "decision"].concat(SHAPES);
   var RELATIONS = ["activate", "inhibit", "include", "associate", "sequence"];
   var DIRECTIONS = ["forward", "reverse", "both", "none"];
-  var TEMPLATES = ["flow", "decision", "loop", "experiment", "timeline", "compare", "graphical_abstract"];
+  var TEMPLATES = ["flow", "decision", "loop", "experiment", "timeline", "compare", "graphical_abstract",
+    "prisma", "consort", "stages", "chevron", "roadmap", "merge", "numbered", "feedback",
+    "swimlane", "hierarchy", "model"];
   var TEMPLATE_IDS = {
     flow: "flow", decision: "decision", loop: "loop", experiment: "experiment",
     timeline: "timeline", compare: "compare", graphical_abstract: "graphical_abstract",
@@ -27,12 +32,51 @@
     entity_relationship: "flow", "entity-relationship": "flow",
     relationship_schematic: "flow", schematic: "flow",
     "tpl-diagram-flow": "flow", "tpl-diagram-arch": "flow",
-    "tpl-graphical-abstract": "graphical_abstract"
+    "tpl-diagram-pipeline": "flow", "tpl-diagram-decision": "decision",
+    "tpl-diagram-loop": "loop", "tpl-diagram-experiment": "experiment",
+    "tpl-diagram-swimlane": "swimlane", "tpl-diagram-timeline": "timeline",
+    "tpl-diagram-hierarchy": "hierarchy", "tpl-diagram-model": "model",
+    "tpl-diagram-compare": "compare",
+    "tpl-diagram-prisma": "prisma", "tpl-diagram-consort": "consort",
+    "tpl-diagram-stages": "stages", "tpl-diagram-chevron": "chevron",
+    "tpl-diagram-roadmap": "roadmap", "tpl-diagram-merge": "merge",
+    "tpl-diagram-numbered": "numbered", "tpl-diagram-feedback": "feedback",
+    "tpl-graphical-abstract": "graphical_abstract",
+    // 规范名恒等映射：normalize 必须幂等（面板/ops 会二次 normalize）
+    swimlane: "swimlane", hierarchy: "hierarchy", model: "model",
+    prisma: "prisma", consort: "consort", stages: "stages", chevron: "chevron",
+    roadmap: "roadmap", merge: "merge", numbered: "numbered", feedback: "feedback"
+  };
+  // R9：布局模式全集（layered/grid/manual 为旧网格行为，保持不变）
+  var LAYOUT_MODES = ["layered", "grid", "manual", "flow", "snake", "stages",
+    "lanes", "tree", "cycle", "timeline", "prisma", "roadmap"];
+  // R9：模板默认布局/主题（theme 对应 presets/diagram_themes.json 的 id）
+  var TEMPLATE_DEFAULTS = {
+    flow: { layout: "flow", theme: "soft-card" },
+    decision: { layout: "flow", theme: "outline-academic" },
+    loop: { layout: "cycle", theme: "soft-card" },
+    experiment: { layout: "stages", theme: "numbered-card" },
+    timeline: { layout: "timeline", theme: "outline-academic" },
+    compare: { layout: "snake", theme: "mono-grey" },
+    graphical_abstract: { layout: "flow", theme: "soft-card" },
+    prisma: { layout: "prisma", theme: "side-bar" },
+    consort: { layout: "flow", theme: "soft-card" },
+    stages: { layout: "stages", theme: "side-bar" },
+    chevron: { layout: "snake", theme: "solid-block" },
+    roadmap: { layout: "roadmap", theme: "numbered-card" },
+    merge: { layout: "flow", theme: "soft-card" },
+    numbered: { layout: "snake", theme: "numbered-card" },
+    feedback: { layout: "flow", theme: "outline-academic" },
+    swimlane: { layout: "lanes", theme: "mono-grey" },
+    hierarchy: { layout: "tree", theme: "outline-academic" },
+    model: { layout: "flow", theme: "solid-block" }
   };
   var ROOT_KEYS = ["id", "schema_version", "schemaVersion", "template", "template_id", "templateId",
-    "nodes", "relations", "sources", "canvas", "layout", "uncertainties", "human_review"];
+    "nodes", "relations", "sources", "canvas", "layout", "uncertainties", "human_review",
+    "groups", "theme"];
   var NODE_KEYS = ["id", "label", "role", "shape", "kind", "x", "y", "w", "h",
-    "evidence", "source_refs", "sourceRefs", "color", "fill", "stroke", "fontSizePt", "data_slot"];
+    "evidence", "source_refs", "sourceRefs", "color", "fill", "stroke", "fontSizePt", "data_slot",
+    "group", "step", "subtitle"];
   var REL_KEYS = ["id", "source", "target", "from", "to", "sourceId", "targetId", "kind",
     "direction", "bend", "label", "evidence", "source_refs", "sourceRefs"];
   var SOURCE_KEYS = ["id", "locator", "sha256", "version", "title", "note", "text", "content", "metadata", "verification"];
@@ -202,6 +246,31 @@
       });
       spec.human_review = clone(input.human_review);
     }
+    // R9：根级 groups（泳道/阶段容器）与 theme（presets/diagram_themes.json）
+    spec.groups = [];
+    if (input.groups !== undefined) {
+      if (!Array.isArray(input.groups)) throw new Error("INVALID_SCHEMA: groups 必须是数组");
+      var groupSeen = Object.create(null);
+      input.groups.forEach(function (raw, i) {
+        keys(raw, ["id", "label", "color", "position"], "groups[" + i + "]");
+        var gid = id(raw.id, "groups[" + i + "].id");
+        if (groupSeen[gid]) throw new Error("DUPLICATE_ID: group " + gid);
+        groupSeen[gid] = true;
+        var g = { id: gid, label: text(raw.label, "groups[" + i + "].label", false) };
+        if (raw.color !== undefined) g.color = text(raw.color, "groups[" + i + "].color", false);
+        if (raw.position !== undefined) {
+          g.position = text(raw.position, "groups[" + i + "].position", false);
+          if (g.position !== "left" && g.position !== "right") {
+            throw new Error("INVALID_SCHEMA: groups[" + i + "].position 只允许 left/right");
+          }
+        }
+        spec.groups.push(g);
+      });
+    }
+    spec.theme = null;
+    if (input.theme !== undefined && input.theme !== null) {
+      spec.theme = text(input.theme, "theme", false);
+    }
     if (!Array.isArray(input.nodes) || !input.nodes.length) throw new Error("MISSING_MATERIALS: nodes 必须是非空数组");
     if (input.nodes.length > MAX_NODES) throw new Error("LAYOUT_LIMIT_EXCEEDED: nodes 最多 " + MAX_NODES + " 个，当前 " + input.nodes.length + " 个");
     if (input.relations !== undefined && !Array.isArray(input.relations)) throw new Error("INVALID_SCHEMA: relations 必须是数组");
@@ -247,10 +316,25 @@
       ["w", "h"].forEach(function (k) { if (raw[k] !== undefined) n[k] = positive(raw[k], "nodes[" + i + "]." + k); });
       ["color", "fill", "stroke"].forEach(function (k) { if (raw[k] !== undefined) n[k] = text(raw[k], "nodes[" + i + "]." + k, false); });
       if (raw.fontSizePt !== undefined) n.fontSizePt = positive(raw.fontSizePt, "nodes[" + i + "].fontSizePt");
+      // R9：group 引用根级 groups；step 副标题徽标文字
+      if (raw.group !== undefined) n.group = id(raw.group, "nodes[" + i + "].group");
+      if (raw.step !== undefined) n.step = text(raw.step, "nodes[" + i + "].step", true);
+      if (raw.subtitle !== undefined) n.subtitle = text(raw.subtitle, "nodes[" + i + "].subtitle", true);
       var ev = raw.evidence !== undefined ? raw.evidence : alias(raw, "source_refs", "sourceRefs", "nodes[" + i + "]");
       n.evidence = normalizeEvidence(ev, sourceMap, warnings, "nodes[" + i + "].evidence");
       nodeMap[nid] = n; spec.nodes.push(n);
     });
+    if (spec.groups.length) {
+      var groupIds = Object.create(null);
+      spec.groups.forEach(function (g) { groupIds[g.id] = true; });
+      spec.nodes.forEach(function (n) {
+        if (n.group !== undefined && !groupIds[n.group]) {
+          throw new Error("INVALID_GROUP_REF: nodes[" + n.id + "].group 引用了未声明的组 " + n.group);
+        }
+      });
+    } else {
+      spec.nodes.forEach(function (n) { if (n.group !== undefined) delete n.group; });
+    }
     var relMap = Object.create(null), includeParent = Object.create(null);
     (input.relations || []).forEach(function (raw, i) {
       keys(raw, REL_KEYS, "relations[" + i + "]");
@@ -298,13 +382,20 @@
       if (input.canvas.background !== undefined) spec.canvas.background = text(input.canvas.background, "canvas.background", false);
     }
     var hasChartSlot = spec.nodes.some(function (n) { return !!n.data_slot; });
-    spec.layout = { mode: "layered", direction: "LR", columns: Math.min(hasChartSlot ? 2 : 4, spec.nodes.length), gap_x: 5, gap_y: 8, margin: 7, auto_layout: false, palette_id: null };
+    // R9：模板默认布局模式/主题（用户显式 layout.mode/theme 优先）。
+    // 仅当调用方显式给了 template 时才套用模板默认——未给 template 的
+    // 裸 spec 沿用旧行为 mode="layered"（template 缺省回退 "flow" 只是
+    // 模板名占位，不代表用户选择了 flow 布局）。
+    var tplDefaults = (rawTpl != null && rawTpl !== "") ? (TEMPLATE_DEFAULTS[template] || {}) : {};
+    spec.layout = { mode: tplDefaults.layout || "layered", direction: "LR",
+      columns: Math.min(hasChartSlot ? 2 : 4, spec.nodes.length),
+      gap_x: 5, gap_y: 8, margin: 7, auto_layout: false, palette_id: null };
     if (input.layout !== undefined) {
       keys(input.layout, ["mode", "direction", "columns", "gap_x", "gap_y", "gapX", "gapY", "margin", "auto_layout", "autoLayout", "palette_id", "paletteId"], "layout");
       var paletteId = alias(input.layout, "palette_id", "paletteId", "layout");
       if (paletteId !== undefined && paletteId !== null) spec.layout.palette_id = text(paletteId, "layout.palette_id", false);
       if (input.layout.mode !== undefined) {
-        if (["layered", "grid", "manual"].indexOf(input.layout.mode) < 0) throw new Error("INVALID_LAYOUT: layout.mode");
+        if (LAYOUT_MODES.indexOf(input.layout.mode) < 0) throw new Error("INVALID_LAYOUT: layout.mode 只允许 " + LAYOUT_MODES.join("/"));
         spec.layout.mode = input.layout.mode;
       }
       if (input.layout.direction !== undefined) {
@@ -322,6 +413,7 @@
       var auto = alias(input.layout, "auto_layout", "autoLayout", "layout");
       if (auto !== undefined) { if (typeof auto !== "boolean") throw new Error("INVALID_LAYOUT: auto_layout"); spec.layout.auto_layout = auto; }
     }
+    if (!spec.theme && tplDefaults.theme) spec.theme = tplDefaults.theme;
     var coverage = { question: false, method: false, evidence: false, conclusion: false };
     spec.nodes.forEach(function (n) { coverage[n.role] = true; });
     var complete = true;
@@ -387,6 +479,41 @@
       current = chunk;
     });
     lines.push(current);
+    return kinsokuLines(lines);
+  }
+  // R9：中文换行禁则——行首不得出现闭合标点（全角 ，。、；：！？）」』】》
+  // 与半角 ? ! ) ] } , . : ; > ”’）；行尾不得留开括号
+  // （「『【《 与半角 ( [ { < “‘。越界字符移到相邻行。
+  var KINSOKU_CLOSE = "，。、；：！？）」』】》?!)]}.,:;>”’";
+  var KINSOKU_OPEN = "（「『【《([{<“‘";
+  function kinsokuLines(lines) {
+    if (!lines || lines.length < 2) {
+      // 单行两头都可能违规：闭合标点在行首无法上移（无上一行），开括号
+      // 在行尾同理；仅当有相邻行可移动时才处理（上面已处理多行）。
+      return lines;
+    }
+    for (var i = 1; i < lines.length; i++) {
+      while (lines[i] && KINSOKU_CLOSE.indexOf(lines[i].charAt(0)) >= 0) {
+        var ch = lines[i].charAt(0);
+        lines[i] = lines[i].slice(1);
+        lines[i - 1] += ch;
+      }
+    }
+    for (var j = lines.length - 2; j >= 0; j--) {
+      while (lines[j] && KINSOKU_OPEN.indexOf(lines[j].charAt(lines[j].length - 1)) >= 0) {
+        var ch2 = lines[j].charAt(lines[j].length - 1);
+        lines[j] = lines[j].slice(0, -1);
+        lines[j + 1] = ch2 + lines[j + 1];
+      }
+    }
+    // 开括号上移后可能再次把闭合标点顶到行首，再扫一遍
+    for (var k = 1; k < lines.length; k++) {
+      while (lines[k] && KINSOKU_CLOSE.indexOf(lines[k].charAt(0)) >= 0) {
+        var ch3 = lines[k].charAt(0);
+        lines[k] = lines[k].slice(1);
+        lines[k - 1] += ch3;
+      }
+    }
     return lines;
   }
   function wrapLabel(value, maxWidthMm, fontPt) {
@@ -408,21 +535,666 @@
       original_label_length: Array.from(node.label).length
     };
   }
-  function fittedLabel(node, maxWidthMm) {
+  var SUBTITLE_H_MM = 4.6;
+  // reserveMm：左侧徽标/色条占用的宽度（布局与渲染两侧必须一致地把文字区右移）；
+  // extraMM：节点内第二行副标题占用的高度（roadmap 等把副标题移到右栏时传 0）。
+  function fittedLabel(node, maxWidthMm, reserveMm, extraMM) {
     var base = size(node), fontPt = node.fontSizePt === undefined ? 7 : node.fontSizePt;
+    var reserve = finite(reserveMm) && reserveMm > 0 ? reserveMm : 0;
+    var extra = finite(extraMM) && extraMM > 0 ? extraMM : 0;
     var oneLine = Math.max.apply(Math, String(node.label).split(/\r\n|\n|\r/).map(function (line) {
       return measureLine(line, fontPt);
-    }).concat([0])) + 2 * LABEL_PAD_X_MM;
+    }).concat([0])) + 2 * LABEL_PAD_X_MM + reserve;
     var limit = Math.max(1, maxWidthMm);
     var w = node.w === undefined ? Math.round(Math.max(Math.min(base.w, limit), Math.min(limit, oneLine)) * 1000000) / 1000000 : node.w;
-    var contentWidth = Math.max(0.35, w - 2 * LABEL_PAD_X_MM);
+    var contentWidth = Math.max(0.35, w - 2 * LABEL_PAD_X_MM - reserve);
     var wrapped = wrapLabel(node.label, contentWidth, fontPt);
     var lineCount = wrapped.split("\n").length;
-    var requiredHeight = lineCount * fontPt * PT_TO_MM * 1.2 + 2 * LABEL_PAD_Y_MM;
-    var h = node.h === undefined ? Math.max(base.h, requiredHeight) : node.h;
+    var requiredHeight = lineCount * fontPt * PT_TO_MM * 1.2 + 2 * LABEL_PAD_Y_MM + extra + LABEL_BOX_V_MM;
+    var h = node.h === undefined ? Math.max(base.h + extra, requiredHeight) : node.h;
     return { w: round(w), h: round(h) };
   }
+  // ---- R9 布局模式 -------------------------------------------------------
+  // 通用：每个节点分到一个槽位 (x,y,slotW,slotH)，标签在槽内居中、
+  // fittedLabel 负责换行与尺寸；节点显式 x/y 时保留手动位置。
+  // ---- R9 内容驱动布局 ----------------------------------------------------
+  // 节点尺寸由 fittedLabel 实测（含徽标/色条占位与副标题高度），槽位紧贴
+  // 内容；画布 = 内容 bbox + layout.margin（buildElements 统一收口，
+  // 手动位置一并计入）。MAX_NODE_W_MM 限制单节点标签宽度上限。
+  var MAX_NODE_W_MM = 34;
+  var LAYOUT_PAD_MM = 1;
+  function labelReserve(spec, n) {
+    var theme = diagramTheme(spec), tn = theme.node || {}, r = 0;
+    if (n.step) r += 9;                    // 左侧编号徽标区
+    if (tn.sideBar) r += 3.4;              // 左侧主题色条区
+    return r;
+  }
+  function subtitleInside(spec) { return spec.layout.mode !== "roadmap"; }
+  function fitNode(spec, n, maxW) {
+    var extra = (n.subtitle && subtitleInside(spec)) ? SUBTITLE_H_MM : 0;
+    return fittedLabel(n, maxW === undefined ? MAX_NODE_W_MM : maxW,
+      labelReserve(spec, n), extra);
+  }
+  function emitPlaced(spec, slots, extras) {
+    var placed = Object.create(null), rowHeights = [], columns = 0;
+    spec.nodes.forEach(function (n) {
+      var s = slots[n.id] || { x: spec.layout.margin, y: spec.layout.margin,
+        slotW: 24, slotH: 14 };
+      var extra = (n.subtitle && subtitleInside(spec)) ? SUBTITLE_H_MM : 0;
+      var fitted = fittedLabel(n, Math.max(6, s.slotW - 1), labelReserve(spec, n), extra);
+      var w = n.w !== undefined ? n.w : fitted.w;
+      var h = n.h !== undefined ? n.h : fitted.h;
+      w = Math.min(w, Math.max(6, s.slotW + 8)); h = Math.max(4, h);
+      placed[n.id] = {
+        x: round(n.x !== undefined ? n.x : s.x + Math.max(0, (s.slotW - w) / 2)),
+        y: round(n.y !== undefined ? n.y : s.y + Math.max(0, (s.slotH - h) / 2)),
+        w: round(w), h: round(h), rotation: 0 };
+    });
+    var ex = extras || {};
+    return { placed: placed, row_heights_mm: rowHeights, columns: columns,
+      containers: ex.containers || [], decor: ex.decor || [],
+      subtitles: ex.subtitles || null, texts: ex.texts || null,
+      ellipse: ex.ellipse || null };
+  }
+  // 内容 bbox（节点 + 容器 + 装饰）→ 画布 = bbox + 边距；bbox.min 平移到 margin。
+  function finishLayout(spec, out) {
+    var m = spec.layout.margin;
+    var box = null;
+    function eat(b) {
+      if (!b || !finite(b.x) || !finite(b.y)) return;
+      var x2 = b.x + (b.w || 0), y2 = b.y + (b.h || 0);
+      box = box ? { x: Math.min(box.x, b.x), y: Math.min(box.y, b.y),
+        x2: Math.max(box.x2, x2), y2: Math.max(box.y2, y2) } :
+        { x: b.x, y: b.y, x2: x2, y2: y2 };
+    }
+    Object.keys(out.placed).forEach(function (id) { eat(out.placed[id]); });
+    (out.containers || []).forEach(eat); (out.decor || []).forEach(eat);
+    // roadmap 等把文字移出节点的布局：字幕/阶段标签也计入 bbox
+    if (out.subtitles) Object.keys(out.subtitles).forEach(function (id) { eat(out.subtitles[id]); });
+    (out.texts || []).forEach(function (tx) { eat({ x: tx.x, y: tx.y, w: tx.w, h: tx.h });
+      if (tx.barX !== undefined) eat({ x: tx.barX, y: tx.barY, w: tx.barW, h: tx.barH }); });
+    if (!box) {
+      out.canvas = clone(spec.canvas);
+      return out;
+    }
+    // 自动布局可自由平移：内容 bbox 左/上缘对齐 margin，左右边距相等
+    var dx = m - box.x, dy = m - box.y;
+    if (dx || dy) {
+      Object.keys(out.placed).forEach(function (id) {
+        out.placed[id].x = round(out.placed[id].x + dx);
+        out.placed[id].y = round(out.placed[id].y + dy);
+      });
+      (out.containers || []).forEach(function (c) { c.x = round(c.x + dx); c.y = round(c.y + dy); });
+      (out.decor || []).forEach(function (d) { d.x = round(d.x + dx); d.y = round(d.y + dy); });
+      if (out.subtitles) Object.keys(out.subtitles).forEach(function (id) {
+        out.subtitles[id].x = round(out.subtitles[id].x + dx);
+        out.subtitles[id].y = round(out.subtitles[id].y + dy);
+      });
+      (out.texts || []).forEach(function (tx) {
+        tx.x = round(tx.x + dx); tx.y = round(tx.y + dy);
+        if (tx.barX !== undefined) { tx.barX = round(tx.barX + dx); tx.barY = round(tx.barY + dy); }
+      });
+      box.x += dx; box.y += dy; box.x2 += dx; box.y2 += dy;
+    }
+    out.canvas = { width_mm: Math.max(30, round(box.x2 - box.x + 2 * m)),
+      height_mm: Math.max(20, round(box.y2 - box.y + 2 * m)),
+      dpi: spec.canvas.dpi, background: spec.canvas.background };
+    return out;
+  }
+  // direction=TB：把已落位的节点/容器/装饰做 x↔y 转置（节点宽高不变，
+  // 仅位置转置——在 emitPlaced 之后调用，避免槽位宽高互换导致节点被压扁）。
+  function transposeBoxes(list) {
+    return (list || []).map(function (b) {
+      return { x: b.y, y: b.x, w: b.h, h: b.w,
+        kind: b.kind, label: b.label, color: b.color, fill: b.fill,
+        barW: b.barW, pathData: b.pathData, group: b.group };
+    });
+  }
+  function transposeDetail(out) {
+    var placed = {};
+    Object.keys(out.placed).forEach(function (id) {
+      var p = out.placed[id];
+      placed[id] = { x: round(p.y), y: round(p.x), w: p.w, h: p.h, rotation: 0 };
+    });
+    out.placed = placed;
+    out.containers = transposeBoxes(out.containers);
+    out.decor = transposeBoxes(out.decor);
+    return out;
+  }
+  // 逻辑边：include 不参与布局；reverse 视为 target→source；both 双向都计。
+  function layoutEdges(spec) {
+    var out = [], inn = [];
+    spec.nodes.forEach(function (n) { out[n.id] = []; inn[n.id] = []; });
+    spec.relations.forEach(function (r) {
+      if (r.kind === "include") return;
+      if (r.direction === "none") return;
+      var a = r.direction === "reverse" ? r.target : r.source;
+      var b = r.direction === "reverse" ? r.source : r.target;
+      out[a].push(b); inn[b].push(a);
+      if (r.direction === "both") { out[b].push(a); inn[a].push(b); }
+    });
+    return { out: out, inn: inn };
+  }
+  // flow：最长路径分层（Bellman-Ford 式有界松弛，环安全）；层内按前驱
+  // 重心排序 2 轮；层居中。回边（target 能沿出边回到 source）与自环
+  // 不参与分层——否则环会让所有层序整体错位；回边仍由连线正交外绕。
+  function flowLayers(spec, E) {
+    var layer = {}, ids = spec.nodes.map(function (n) { return n.id; }), i, j;
+    ids.forEach(function (id) { layer[id] = 0; });
+    // DFS 回边识别：指向递归栈祖先（gray）的边是回边，不参与分层；
+    // 树边/前向边/横叉边保留——剩余图是 DAG，最长路径松弛收敛。
+    // （不能按 SCC 整块剔除：反馈边会把下游整条链圈进同一分量，
+    //   主链结构会丢失。）
+    var color = {}, outF = {}, innF = {}, seenEdge = Object.create(null),
+        backKeys = Object.create(null);
+    ids.forEach(function (id) { color[id] = 0; outF[id] = []; innF[id] = []; });
+    function dfs(u) {
+      color[u] = 1;
+      (E.out[u] || []).forEach(function (v) {
+        var key = u + ">" + v;
+        if (seenEdge[key]) return;
+        seenEdge[key] = true;
+        if (color[v] === 1) { backKeys[key] = true; return; } // 回边/自环
+        if (color[v] === 0) dfs(v);
+        outF[u].push(v); innF[v].push(u);
+      });
+      color[u] = 2;
+    }
+    ids.forEach(function (id) { if (color[id] === 0) dfs(id); });
+    for (i = 0; i < ids.length; i++) {
+      var changed = false;
+      ids.forEach(function (u) {
+        outF[u].forEach(function (v) {
+          if (layer[v] < layer[u] + 1) { layer[v] = layer[u] + 1; changed = true; }
+        });
+      });
+      if (!changed) break;
+    }
+    // 层内排序：初始按节点序，2 轮按前驱重心
+    var byLayer = {};
+    ids.forEach(function (id) {
+      var l = layer[id]; (byLayer[l] = byLayer[l] || []).push(id);
+    });
+    var layers = Object.keys(byLayer).map(Number).sort(function (a, b) { return a - b; });
+    for (var round = 0; round < 2; round++) {
+      layers.forEach(function (l) {
+        var arr = byLayer[l];
+        arr.sort(function (a, b) {
+          var ba = bary(innF[a], byLayer, layer), bb = bary(innF[b], byLayer, layer);
+          return ba - bb || ids.indexOf(a) - ids.indexOf(b);
+        });
+      });
+    }
+    return { layer: layer, byLayer: byLayer, layers: layers, order: ids,
+      backEdges: spec.relations.filter(function (r) {
+        if (r.kind === "include" || r.direction === "none") return false;
+        var a = r.direction === "reverse" ? r.target : r.source;
+        var b = r.direction === "reverse" ? r.source : r.target;
+        return a === b || backKeys[a + ">" + b] === true;
+      }).map(function (r) { return r.id; }) };
+  }
+  function bary(preds, byLayer, layer) {
+    if (!preds || !preds.length) return 0;
+    var sum = 0, cnt = 0;
+    preds.forEach(function (p) {
+      var arr = byLayer[layer[p]] || [];
+      var idx = arr.indexOf(p);
+      if (idx >= 0) { sum += idx; cnt++; }
+    });
+    return cnt ? sum / cnt : 0;
+  }
+  function dagDepths(spec, E, reverse) {
+    // 自上而下 depth（最长路径）；reverse=true 时沿反向边
+    var depth = {}, ids = spec.nodes.map(function (n) { return n.id; });
+    ids.forEach(function (id) { depth[id] = 0; });
+    for (var i = 0; i < ids.length; i++) {
+      var changed = false;
+      ids.forEach(function (u) {
+        var outs = reverse ? E.inn[u] : E.out[u];
+        outs.forEach(function (v) {
+          var d = depth[u] + 1;
+          if (depth[v] < d) { depth[v] = d; changed = true; }
+        });
+      });
+      if (!changed) break;
+    }
+    return depth;
+  }
+  // 按 group 分组（无 group 节点各自成段），groups 声明顺序优先。
+  function groupBuckets(spec) {
+    var groupsOrder = (spec.groups || []).map(function (g) { return g.id; });
+    var byGroup = {}, gorder = [];
+    spec.nodes.forEach(function (n) {
+      var g = n.group === undefined ? "__solo_" + n.id : n.group;
+      if (!byGroup[g]) { byGroup[g] = []; gorder.push(g); }
+      byGroup[g].push(n.id);
+    });
+    gorder.sort(function (a, b) {
+      var ia = groupsOrder.indexOf(a), ib = groupsOrder.indexOf(b);
+      if (ia >= 0 || ib >= 0) return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+      return 0;
+    });
+    return { byGroup: byGroup, gorder: gorder,
+      groupOf: function (gid) {
+        return (spec.groups || []).filter(function (gg) { return gg.id === gid; })[0] || null;
+      } };
+  }
+  function slotFor(f, x, y) {
+    return { x: round(x - LAYOUT_PAD_MM), y: round(y - LAYOUT_PAD_MM),
+      slotW: round(f.w + 2 * LAYOUT_PAD_MM), slotH: round(f.h + 2 * LAYOUT_PAD_MM) };
+  }
+  function layoutSpecial(spec, mode) {
+    var lay = spec.layout, m = lay.margin;
+    var E = layoutEdges(spec);
+    var slots = {}, extras = { containers: [], decor: [], subtitles: null, texts: null, ellipse: null };
+    var TB = lay.direction === "TB";
+    var needTranspose = false;
+    var nById = {};
+    spec.nodes.forEach(function (n) { nById[n.id] = n; });
+    var fits = {};
+    function fit(nid) {
+      if (!fits[nid]) fits[nid] = fitNode(spec, nById[nid]);
+      return fits[nid];
+    }
+    var i;
+
+    if (mode === "flow") {
+      // DAG 分层：层=列（LR）/行（TB 转置）；层内纵向堆叠、整体垂直居中。
+      var fl = flowLayers(spec, E);
+      var colW = {}, layerH = {}, maxH = 0, xs = {}, xcur = m;
+      fl.layers.forEach(function (l) {
+        var arr = fl.byLayer[l] || [], wmax = 0, hsum = -(arr.length - 1) * lay.gap_y;
+        arr.forEach(function (nid) { var f = fit(nid); wmax = Math.max(wmax, f.w); hsum += f.h; });
+        colW[l] = wmax; layerH[l] = hsum; maxH = Math.max(maxH, hsum);
+      });
+      fl.layers.forEach(function (l) { xs[l] = xcur; xcur += colW[l] + lay.gap_x; });
+      fl.layers.forEach(function (l) {
+        var arr = fl.byLayer[l] || [], ycur = m + Math.max(0, (maxH - layerH[l]) / 2);
+        arr.forEach(function (nid) {
+          var f = fit(nid);
+          slots[nid] = slotFor(f, xs[l] + (colW[l] - f.w) / 2, ycur);
+          ycur += f.h + lay.gap_y;
+        });
+      });
+      needTranspose = TB;
+    } else if (mode === "snake") {
+      // 蛇形网格：列/行尺寸取所在行列最大节点，奇数行反向。
+      var cols = Math.max(1, Math.min(lay.columns || 4, spec.nodes.length));
+      var colW2 = [], rowH2 = [];
+      spec.nodes.forEach(function (n, idx) {
+        var r = Math.floor(idx / cols), c = idx % cols;
+        if (r % 2 === 1) c = cols - 1 - c;
+        var f = fit(n.id);
+        colW2[c] = Math.max(colW2[c] || 0, f.w);
+        rowH2[r] = Math.max(rowH2[r] || 0, f.h);
+      });
+      var xs2 = [], xcur2 = m;
+      for (i = 0; i < cols; i++) { xs2[i] = xcur2; xcur2 += (colW2[i] || 0) + lay.gap_x; }
+      var ys2 = [], ycur2 = m;
+      for (i = 0; i < rowH2.length; i++) { ys2[i] = ycur2; ycur2 += (rowH2[i] || 0) + lay.gap_y; }
+      spec.nodes.forEach(function (n, idx) {
+        var r = Math.floor(idx / cols), c = idx % cols;
+        if (r % 2 === 1) c = cols - 1 - c;
+        var f = fit(n.id);
+        slots[n.id] = slotFor(f, xs2[c] + ((colW2[c] || 0) - f.w) / 2,
+          ys2[r] + ((rowH2[r] || 0) - f.h) / 2);
+      });
+    } else if (mode === "stages") {
+      // 阶段列容器：每组一列，容器高=组内容高（统一取最高列），节点纵向居中。
+      var gb = groupBuckets(spec);
+      var stColW = {}, stMembersH = {}, stMaxH = 0, stX = {}, sx = m;
+      gb.gorder.forEach(function (g) {
+        var members = gb.byGroup[g], wmax = 0, hsum = -(members.length - 1) * lay.gap_y;
+        members.forEach(function (nid) { var f = fit(nid); wmax = Math.max(wmax, f.w); hsum += f.h; });
+        stColW[g] = wmax + 6; stMembersH[g] = hsum;
+        stMaxH = Math.max(stMaxH, 6 + hsum + 4);
+        stX[g] = sx; sx += stColW[g] + lay.gap_x * 1.6;
+      });
+      gb.gorder.forEach(function (g, gi) {
+        var members = gb.byGroup[g], gl = gb.groupOf(g);
+        var gx = stX[g], gy = m;
+        extras.containers.push({ kind: "stage", x: gx, y: gy, w: stColW[g],
+          h: stMaxH, label: gl ? gl.label : g, color: gl ? gl.color : null, group: g });
+        var y0 = gy + 6 + Math.max(0, (stMaxH - 6 - stMembersH[g]) / 2);
+        members.forEach(function (nid, mi) {
+          var f = fit(nid), prevH = 0;
+          for (var k = 0; k < mi; k++) prevH += fit(members[k]).h + lay.gap_y;
+          slots[nid] = slotFor(f, gx + 3 + (stColW[g] - 6 - f.w) / 2, y0 + prevH);
+        });
+      });
+      needTranspose = TB;
+    } else if (mode === "lanes") {
+      // 横向泳道：整条浅色底带 + 左侧标题栏；x 按全局 DAG 层对齐各泳道。
+      var gb2 = groupBuckets(spec);
+      var fl2 = flowLayers(spec, E);
+      var laneColW = {}, lx = {};
+      var barW = 10, xcur3 = m + barW + lay.gap_x;
+      fl2.layers.forEach(function (l) {
+        var wmax = 0;
+        (fl2.byLayer[l] || []).forEach(function (nid) { wmax = Math.max(wmax, fit(nid).w); });
+        laneColW[l] = wmax; lx[l] = xcur3; xcur3 += wmax + lay.gap_x;
+      });
+      var laneContentW = xcur3 - m - barW - lay.gap_x + 2;
+      var bandY = m;
+      gb2.gorder.forEach(function (g) {
+        var members = gb2.byGroup[g], gl = gb2.groupOf(g);
+        var label = gl ? gl.label : g;
+        var labelNeed = measureLine(label, 6.5) + 4;
+        var hmax = 0;
+        members.forEach(function (nid) { hmax = Math.max(hmax, fit(nid).h); });
+        var bandH = Math.max(hmax + 5, Math.min(labelNeed, 30));
+        extras.containers.push({ kind: "lane", x: m, y: bandY, w: laneContentW,
+          h: bandH, label: label, color: gl ? gl.color : null, barW: barW, group: g });
+        members.forEach(function (nid) {
+          var l = fl2.layer[nid] || 0, f = fit(nid);
+          slots[nid] = slotFor(f, lx[l] + (laneColW[l] - f.w) / 2,
+            bandY + (bandH - f.h) / 2);
+        });
+        bandY += bandH + lay.gap_y;
+      });
+    } else if (mode === "tree") {
+      // 整齐树：深度=最长路径；叶槽均分（槽宽=最大节点宽），行高按内容。
+      var depth = dagDepths(spec, E, false);
+      var maxD = 0, maxNW = 0;
+      spec.nodes.forEach(function (n) {
+        if (depth[n.id] > maxD) maxD = depth[n.id];
+        maxNW = Math.max(maxNW, fit(n.id).w);
+      });
+      var rowH3 = [], rowTop3 = [], yt = m;
+      for (i = 0; i <= maxD; i++) {
+        var rh = 0;
+        spec.nodes.forEach(function (n) { if (depth[n.id] === i) rh = Math.max(rh, fit(n.id).h); });
+        rowH3[i] = rh + lay.gap_y; rowTop3[i] = yt; yt += rowH3[i];
+      }
+      var leafW = {};
+      function computeLeaf(nid, seen) {
+        if (leafW[nid] !== undefined) return leafW[nid];
+        if (seen[nid]) return leafW[nid] = 1;
+        seen[nid] = true;
+        var kids = E.out[nid].filter(function (v) { return depth[v] === depth[nid] + 1; });
+        if (!kids.length) return leafW[nid] = 1;
+        return leafW[nid] = kids.reduce(function (s, k) { return s + computeLeaf(k, seen); }, 0);
+      }
+      spec.nodes.forEach(function (n) { computeLeaf(n.id, {}); });
+      var pitchX = maxNW + lay.gap_x, cursor = { v: 0 };
+      function placeTree(nid) {
+        var w = leafW[nid] || 1;
+        var l0 = cursor.v; cursor.v += w;
+        var x0 = m + l0 * pitchX;
+        var slotW = w * maxNW + (w - 1) * lay.gap_x;
+        var d = depth[nid];
+        var f = fit(nid);
+        slots[nid] = { x: round(x0 + (slotW - f.w) / 2 - LAYOUT_PAD_MM),
+          y: round(rowTop3[d] + Math.max(0, (rowH3[d] - lay.gap_y - f.h) / 2) - LAYOUT_PAD_MM),
+          slotW: round(slotW + 2 * LAYOUT_PAD_MM), slotH: round(rowH3[d] - lay.gap_y + 2 * LAYOUT_PAD_MM) };
+        E.out[nid].forEach(function (k) { if (depth[k] === depth[nid] + 1) placeTree(k); });
+      }
+      spec.nodes.forEach(function (n) { if (depth[n.id] === 0) placeTree(n.id); });
+      // 孤立/环节点兜底：追加到本层行尾
+      spec.nodes.forEach(function (n) {
+        if (!slots[n.id]) {
+          var d2 = depth[n.id], f2 = fit(n.id);
+          slots[n.id] = { x: round(m + cursor.v * pitchX - LAYOUT_PAD_MM),
+            y: round(rowTop3[d2] + Math.max(0, (rowH3[d2] - lay.gap_y - f2.h) / 2) - LAYOUT_PAD_MM),
+            slotW: round(f2.w + 2 * LAYOUT_PAD_MM), slotH: round(rowH3[d2] - lay.gap_y + 2 * LAYOUT_PAD_MM) };
+          cursor.v++;
+        }
+      });
+    } else if (mode === "cycle") {
+      // 环形：贪心最大邻接排序（出边优先）减少弦跨越；椭圆尺寸按内容。
+      var outAdj = {}, inAdj = {}, undAdj = {};
+      spec.nodes.forEach(function (n) { outAdj[n.id] = []; inAdj[n.id] = []; undAdj[n.id] = []; });
+      spec.relations.forEach(function (r) {
+        if (r.kind === "include" || r.direction === "none") return;
+        var a = r.direction === "reverse" ? r.target : r.source;
+        var b = r.direction === "reverse" ? r.source : r.target;
+        if (a === b) return;
+        outAdj[a].push(b); inAdj[b].push(a);
+        if (undAdj[a].indexOf(b) < 0) undAdj[a].push(b);
+        if (undAdj[b].indexOf(a) < 0) undAdj[b].push(a);
+      });
+      function greedyOrder(start) {
+        var order = [start], seen = {}, cur = start;
+        seen[start] = true;
+        while (order.length < spec.nodes.length) {
+          var nxt = null, cands = outAdj[cur].concat(inAdj[cur]), j;
+          for (j = 0; j < cands.length && nxt === null; j++) {
+            if (!seen[cands[j]]) nxt = cands[j];
+          }
+          if (nxt === null) {
+            for (j = 0; j < cands.length && nxt === null; j++) {
+              if (!seen[cands[j]]) nxt = cands[j];
+            }
+          }
+          if (nxt === null) {
+            for (j = 0; j < spec.nodes.length; j++) {
+              var cand = spec.nodes[j].id;
+              if (!seen[cand] && undAdj[cur].indexOf(cand) >= 0) { nxt = cand; break; }
+            }
+          }
+          if (nxt === null) {
+            for (j = 0; j < spec.nodes.length; j++) {
+              if (!seen[spec.nodes[j].id]) { nxt = spec.nodes[j].id; break; }
+            }
+          }
+          seen[nxt] = true; order.push(nxt); cur = nxt;
+        }
+        return order;
+      }
+      function orderScore(order) {
+        var s = 0;
+        for (var k = 0; k < order.length; k++) {
+          if (undAdj[order[k]].indexOf(order[(k + 1) % order.length]) >= 0) s++;
+        }
+        return s;
+      }
+      var bestOrder = null, bestScore = -1;
+      spec.nodes.forEach(function (n) {
+        var ord = greedyOrder(n.id), sc = orderScore(ord);
+        if (sc > bestScore) { bestScore = sc; bestOrder = ord; }
+      });
+      var nN = spec.nodes.length || 1, avgW = 0, maxNW2 = 0, maxNH = 0;
+      spec.nodes.forEach(function (n) { var f = fit(n.id); avgW += f.w; maxNW2 = Math.max(maxNW2, f.w); maxNH = Math.max(maxNH, f.h); });
+      avgW = nN ? avgW / nN : 20;
+      var need = nN * (avgW + lay.gap_x) / Math.PI * 1.12;
+      var ry = Math.max(10, need * 0.4), rx = Math.max(maxNW2 / 2 + 5, need - ry);
+      var cx = m + rx + maxNW2 / 2, cy = m + ry + maxNH / 2;
+      bestOrder.forEach(function (nid, idx) {
+        var ang = -Math.PI / 2 + idx * 2 * Math.PI / nN;
+        var px = cx + rx * Math.cos(ang), py = cy + ry * Math.sin(ang);
+        var f = fit(nid);
+        slots[nid] = slotFor(f, px, py);
+      });
+      extras.ellipse = { cx: cx, cy: cy, rx: rx, ry: ry };
+    } else if (mode === "timeline") {
+      // 水平时间轴：里程碑上下交替，短竖线连轴上圆点；轴带箭头；
+      // 节点间不画连线（关系元素由 build 标记 visible:false）。
+      var dotR = 1.6, tickGap = 4, nT = spec.nodes.length;
+      var dotX = [], xcur4 = m, aboveH = 0, belowH = 0;
+      spec.nodes.forEach(function (n, idx) {
+        var f = fit(n.id), above = idx % 2 === 0;
+        dotX[idx] = xcur4 + f.w / 2;
+        xcur4 += f.w + lay.gap_x * 1.6;
+        if (above) aboveH = Math.max(aboveH, f.h); else belowH = Math.max(belowH, f.h);
+      });
+      var axisY = m + aboveH + tickGap + dotR;
+      var axisX0 = dotX[0] - 5, axisX1 = dotX[nT - 1] + 9;
+      spec.nodes.forEach(function (n, idx) {
+        var f = fit(n.id), above = idx % 2 === 0, dx = dotX[idx];
+        var ny = above ? axisY - tickGap - dotR - f.h : axisY + tickGap + dotR;
+        slots[n.id] = slotFor(f, dx, ny + f.h / 2);
+        // 节点→圆点的短竖线
+        var ty = above ? ny + f.h : ny;
+        var th = (above ? axisY - dotR : axisY + dotR) - ty;
+        if (th > 0.2) extras.decor.push({ kind: "decor_line", x: dx - 0.15,
+          y: Math.min(ty, ty + th), w: 0.3, h: th, fill: "#9CA3AF" });
+        extras.decor.push({ kind: "decor_dot", x: dx - dotR, y: axisY - dotR,
+          w: dotR * 2, h: dotR * 2, fill: "#374151" });
+      });
+      extras.decor.push({ kind: "decor_line", x: axisX0, y: axisY - 0.18,
+        w: axisX1 - axisX0, h: 0.36, fill: "#9CA3AF" });
+      extras.decor.push({ kind: "decor_path", x: axisX1, y: axisY - 2,
+        w: 3.2, h: 4, fill: "#374151", stroke: "#374151",
+        pathData: "M 0 0 L 3.2 2 L 0 4 Z" });
+    } else if (mode === "prisma") {
+      // PRISMA：左侧竖排阶段色条 + 单列主流程（自上而下）+
+      // 右侧排除列（group.position==='right' 的组）。
+      var groups3 = spec.groups || [];
+      var gpos = {};
+      groups3.forEach(function (g) { gpos[g.id] = g.position || "left"; });
+      var mainIds = [], sideIds = [];
+      spec.nodes.forEach(function (n) {
+        (gpos[n.group] === "right" ? sideIds : mainIds).push(n.id);
+      });
+      var pdepth = dagDepths(spec, E, false), declIdx = {};
+      spec.nodes.forEach(function (n, i2) { declIdx[n.id] = i2; });
+      mainIds.sort(function (a, b) {
+        return (pdepth[a] - pdepth[b]) || (declIdx[a] - declIdx[b]);
+      });
+      // 侧节点锚定：取其入边主流程节点的行区间中心
+      var mainRow = {}; mainIds.forEach(function (nid, i3) { mainRow[nid] = i3; });
+      var sideAnchor = {};
+      sideIds.forEach(function (nid) {
+        var rows = [];
+        spec.relations.forEach(function (r) {
+          var src = r.direction === "reverse" ? r.target : r.source;
+          var dst = r.direction === "reverse" ? r.source : r.target;
+          if (dst !== nid) return;
+          if (mainRow[src] !== undefined) rows.push(mainRow[src]);
+        });
+        sideAnchor[nid] = rows.length ? { lo: Math.min.apply(null, rows),
+          hi: Math.max.apply(null, rows) } : { lo: 0, hi: mainIds.length - 1 };
+      });
+      var barW2 = 7, mainColW = 0;
+      mainIds.forEach(function (nid) { mainColW = Math.max(mainColW, fit(nid).w); });
+      var sideColW = 0;
+      sideIds.forEach(function (nid) { sideColW = Math.max(sideColW, fit(nid).w); });
+      var rowH4 = [], yt4 = m;
+      mainIds.forEach(function (nid, i4) {
+        var h = fit(nid).h;
+        sideIds.forEach(function (sid) {
+          var a = sideAnchor[sid];
+          if (i4 >= a.lo && i4 <= a.hi) h = Math.max(h, fit(sid).h / Math.max(1, a.hi - a.lo + 1));
+        });
+        rowH4[i4] = h + lay.gap_y; yt4 += rowH4[i4];
+      });
+      var rowTop4 = [], yt5 = m;
+      rowH4.forEach(function (h) { rowTop4.push(yt5); yt5 += h; });
+      var mainX = m + barW2 + lay.gap_x;
+      var rightX = mainX + mainColW + lay.gap_x * 2;
+      mainIds.forEach(function (nid, i6) {
+        var f = fit(nid);
+        slots[nid] = slotFor(f, mainX + (mainColW - f.w) / 2,
+          rowTop4[i6] + (rowH4[i6] - lay.gap_y - f.h) / 2);
+      });
+      // 右列：按锚定行区间纵向居中，重叠时顺延
+      var sidePlaced = [];
+      sideIds.forEach(function (nid) {
+        var a = sideAnchor[nid], f = fit(nid);
+        var y1 = rowTop4[a.lo], y2 = rowTop4[a.hi] + rowH4[a.hi] - lay.gap_y;
+        sidePlaced.push({ nid: nid, cy: (y1 + y2) / 2, f: f });
+      });
+      sidePlaced.sort(function (a, b) { return a.cy - b.cy; });
+      var lastBottom = -1e9;
+      sidePlaced.forEach(function (sp) {
+        var y = Math.max(sp.cy - sp.f.h / 2, lastBottom + lay.gap_y);
+        lastBottom = y + sp.f.h;
+        slots[sp.nid] = slotFor(sp.f, rightX + (sideColW - sp.f.w) / 2, y + sp.f.h / 2);
+      });
+      // 右组容器（排除框）
+      var rightGroups = {};
+      sideIds.forEach(function (nid) {
+        var g = nById[nid].group;
+        if (g) (rightGroups[g] = rightGroups[g] || []).push(nid);
+      });
+      Object.keys(rightGroups).forEach(function (g) {
+        var gl = groups3.filter(function (gg) { return gg.id === g; })[0];
+        var ys = rightGroups[g].map(function (nid) { return slots[nid].y - LAYOUT_PAD_MM; });
+        var hs = rightGroups[g].map(function (nid) { return fit(nid).h; });
+        var y0 = Math.min.apply(null, ys) - 3, y1 = Math.max.apply(null, ys.map(function (v, k) { return v + hs[k]; })) + 3;
+        extras.containers.push({ kind: "stage", x: rightX - 3, y: y0, w: sideColW + 6,
+          h: y1 - y0, label: gl ? gl.label : g, color: gl ? gl.color : null, group: g });
+      });
+      // 左侧阶段竖条：覆盖本组成员行区间
+      var leftGroups = {};
+      mainIds.forEach(function (nid, i7) {
+        var g = nById[nid].group;
+        if (g && gpos[g] !== "right") (leftGroups[g] = leftGroups[g] || []).push(i7);
+      });
+      Object.keys(leftGroups).forEach(function (g) {
+        var idxs = leftGroups[g], gl = groups3.filter(function (gg) { return gg.id === g; })[0];
+        var y0 = rowTop4[idxs[0]], y1 = rowTop4[idxs[idxs.length - 1]] + rowH4[idxs[idxs.length - 1]] - lay.gap_y;
+        extras.containers.push({ kind: "stagebar", x: m, y: y0 - 1, w: barW2,
+          h: y1 - y0 + 2, label: gl ? gl.label : g, color: gl ? gl.color : null, group: g });
+      });
+    } else if (mode === "roadmap") {
+      // 三栏：左=阶段标签（竖色条+文字）、中=主流程节点（纵向链）、
+      // 右=细节说明文字（节点 subtitle 移出，与中栏同行，细线相连）。
+      extras.subtitles = {};
+      extras.texts = [];
+      var leftW = 0, detailW = 0;
+      spec.nodes.forEach(function (n) {
+        if (n.group) {
+          var gl = (spec.groups || []).filter(function (gg) { return gg.id === n.group; })[0];
+          if (gl) leftW = Math.max(leftW, measureLine(gl.label, 6.5) + 6);
+        }
+        if (n.subtitle) detailW = Math.max(detailW, Math.min(46, measureLine(n.subtitle, 5.5) + 2));
+      });
+      leftW = leftW ? Math.min(22, Math.max(10, leftW)) : 0;
+      detailW = detailW ? Math.min(46, Math.max(12, detailW)) : 0;
+      var midX = m + leftW + (leftW ? lay.gap_x : 0);
+      var maxNW3 = 0, rowH5 = [];
+      spec.nodes.forEach(function (n) {
+        var f = fit(n.id); maxNW3 = Math.max(maxNW3, f.w);
+        rowH5.push(Math.max(f.h, 6) + lay.gap_y);
+      });
+      var rowTops5 = [], yt6 = m;
+      rowH5.forEach(function (h) { rowTops5.push(yt6); yt6 += h; });
+      var nodeRight = midX + maxNW3;
+      var detailX = nodeRight + 3 + (detailW ? lay.gap_x : 0);
+      spec.nodes.forEach(function (n, idx) {
+        var f = fit(n.id), rowH = rowH5[idx] - lay.gap_y;
+        var cy = rowTops5[idx] + rowH / 2;
+        slots[n.id] = slotFor(f, midX + (maxNW3 - f.w) / 2, cy);
+        // 左栏：竖色条 + 阶段名（相邻同组并入一块）
+        if (n.group) {
+          var gl = (spec.groups || []).filter(function (gg) { return gg.id === n.group; })[0];
+          if (gl) {
+            var mergeWithPrev = idx > 0 && nById[spec.nodes[idx - 1].id].group === n.group &&
+              extras.texts[extras.texts.length - 1] &&
+              extras.texts[extras.texts.length - 1].group === n.group;
+            if (mergeWithPrev) {
+              var prev = extras.texts[extras.texts.length - 1];
+              prev.h = round(cy + rowH / 2 - prev.y);
+              prev.barH = prev.h;
+            } else {
+              // 左栏 = 竖色条(2.2) + 间隙 + 文字；文字起点须在条右缘之后
+              extras.texts.push({ kind: "group_label", parent: n.id, group: n.group,
+                x: m + 3.6, y: round(cy - 3), w: Math.max(4, leftW - 4.8), h: 6,
+                barX: m + 0.6, barW: 2.2, barY: round(rowTops5[idx] + 1),
+                barH: round(rowH - 2), barColor: gl.color || "#6366F1",
+                text: gl.label });
+            }
+          }
+        }
+        // 右栏：细节文字（subtitle）+ 细连接线
+        if (n.subtitle && detailW) {
+          extras.subtitles[n.id] = { x: detailX, y: round(cy - 2.4),
+            w: detailW, h: 4.8 };
+          var nx = slots[n.id].x - LAYOUT_PAD_MM + f.w;
+          extras.decor.push({ kind: "decor_line", x: nx + 0.8, y: round(cy - 0.15),
+            w: Math.max(0.5, detailX - nx - 1.6), h: 0.3, fill: "#CBD5E1" });
+        }
+      });
+    }
+    var out = emitPlaced(spec, slots, extras);
+    if (needTranspose) transposeDetail(out);
+    return finishLayout(spec, out);
+  }
   function layoutDetail(spec) {
+    if (["flow", "snake", "stages", "lanes", "tree", "cycle", "timeline", "prisma", "roadmap"].indexOf(spec.layout.mode) >= 0) {
+      return layoutSpecial(spec, spec.layout.mode);
+    }
     var ordered = spec.nodes.map(function (n, i) { return { n: n, i: i }; });
     if (spec.template_id === "graphical_abstract") ordered.sort(function (a, b) { return ROLES.indexOf(a.n.role) - ROLES.indexOf(b.n.role) || a.i - b.i; });
     var columns = spec.layout.direction === "TB" ? 1 : Math.max(1, Math.min(spec.layout.columns, ordered.length));
@@ -446,7 +1218,8 @@
         w: w, h: round(h), rotation: 0
       };
     });
-    return { placed: placed, row_heights_mm: rowHeights.map(round), columns: columns };
+    return { placed: placed, row_heights_mm: rowHeights.map(round), columns: columns,
+      containers: [], decor: [] };
   }
   function layout(spec) { return layoutDetail(spec).placed; }
   function base(idValue, type, t, z) {
@@ -477,6 +1250,173 @@
     }
     return { semanticRole: node.role, role: role, fill: color };
   }
+  // R9：主题。presets/diagram_themes.json 经 FigPresets.diagramTheme 提供；
+  // 内核内置同名默认保证无 presets 环境也可渲染（两边保持一致）。
+  var BUILTIN_THEMES = {
+    "soft-card": {
+      node: { fill: null, stroke: null, strokeWidthPt: 0, cornerRadiusMm: 2,
+        fontFamily: "Arial, sans-serif", fontWeight: "normal", fillText: "#374151",
+        subtitleColor: "#4B5563", groupFill: "declared" },
+      groupColors: ["#FDE68A", "#BBF7D0", "#BFDBFE", "#FBCFE8", "#DDD6FE", "#FED7AA"],
+      connector: { stroke: "#6B7280", strokeWidthPt: 0.6 },
+      container: { fill: "#F9FAFB", stroke: "#E5E7EB", strokeWidthPt: 0.5,
+        dash: null, titleFill: "#374151", titleBar: false },
+      badge: { fill: "#6B7280", text: "#FFFFFF" },
+      arrow: { size: "small" }
+    },
+    "outline-academic": {
+      node: { fill: "#FFFFFF", stroke: "#1F2937", strokeWidthPt: 0.5,
+        cornerRadiusMm: 0.6, fontFamily: "Times New Roman, SimSun, serif",
+        fontWeight: "normal", fillText: "#111827", subtitleColor: "#4B5563",
+        groupFill: "theme" },
+      groupColors: ["#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF"],
+      connector: { stroke: "#111827", strokeWidthPt: 0.6 },
+      container: { fill: "#FFFFFF", stroke: "#9CA3AF", strokeWidthPt: 0.5,
+        dash: "3 2", titleFill: "#111827", titleBar: true },
+      badge: { fill: "#1F2937", text: "#FFFFFF" },
+      arrow: { size: "small" }
+    },
+    "numbered-card": {
+      node: { fill: "#FFFFFF", stroke: "#E5E7EB", strokeWidthPt: 0.4,
+        cornerRadiusMm: 1.5, fontFamily: "Arial, sans-serif", fontWeight: "bold",
+        fillText: "#111827", subtitleColor: "#6B7280", groupFill: "theme" },
+      groupColors: ["#60A5FA", "#34D399", "#FBBF24", "#F472B6", "#A78BFA", "#FB923C"],
+      connector: { stroke: "#9CA3AF", strokeWidthPt: 0.6 },
+      container: { fill: "#F9FAFB", stroke: "#E5E7EB", strokeWidthPt: 0.5,
+        dash: null, titleFill: "#374151", titleBar: false },
+      badge: { fill: null, text: "#1F2937", ungroupedPalette: true },
+      arrow: { size: "small" }
+    },
+    "side-bar": {
+      node: { fill: "#FFFFFF", stroke: "#E5E7EB", strokeWidthPt: 0.5,
+        cornerRadiusMm: 1.2, fontFamily: "Arial, sans-serif", fontWeight: "normal",
+        fillText: "#111827", subtitleColor: "#6B7280", sideBar: true,
+        groupFill: "theme" },
+      groupColors: ["#6366F1", "#0EA5E9", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6"],
+      connector: { stroke: "#6B7280", strokeWidthPt: 0.6 },
+      container: { fill: "#FFFFFF", stroke: "#E5E7EB", strokeWidthPt: 0.5,
+        dash: null, titleFill: "#111827", titleBar: false, sideBar: true },
+      badge: { fill: "#6B7280", text: "#FFFFFF" },
+      arrow: { size: "small" }
+    },
+    "solid-block": {
+      node: { fill: null, stroke: null, strokeWidthPt: 0, cornerRadiusMm: 1,
+        fontFamily: "Arial, sans-serif", fontWeight: "bold", fillText: "#FFFFFF",
+        subtitleColor: "#FFFFFF", ungroupedPalette: true, groupFill: "palette" },
+      groupColors: ["#2F5D8C", "#2E7D5B", "#B4572E", "#6B4FA0", "#8C3B5C", "#3D6E8F"],
+      connector: { stroke: "#4B5563", strokeWidthPt: 0.8 },
+      container: { fill: null, stroke: null, strokeWidthPt: 0, dash: null,
+        titleFill: "#FFFFFF", titleBar: true },
+      badge: { fill: "#FFFFFF", text: "#1F2937" },
+      arrow: { size: "medium" }
+    },
+    "mono-grey": {
+      node: { fill: "#F3F4F6", stroke: null, strokeWidthPt: 0, cornerRadiusMm: 1.5,
+        fontFamily: "Arial, sans-serif", fontWeight: "bold", fillText: "#111827",
+        subtitleColor: "#4B5563", groupFill: "palette" },
+      groupColors: ["#E5E7EB", "#E5E7EB", "#E5E7EB", "#E5E7EB", "#E5E7EB", "#E5E7EB"],
+      connector: { stroke: "#374151", strokeWidthPt: 0.7 },
+      container: { fill: "#F9FAFB", stroke: null, strokeWidthPt: 0, dash: null,
+        titleFill: "#374151", titleBar: false },
+      badge: { fill: "#374151", text: "#FFFFFF" },
+      arrow: { size: "small" }
+    }
+  };
+  function diagramTheme(spec) {
+    var id = spec && spec.theme ? spec.theme : "soft-card";
+    if (global.FigPresets && typeof global.FigPresets.diagramTheme === "function") {
+      var t = global.FigPresets.diagramTheme(id);
+      if (t) return t;
+    }
+    return BUILTIN_THEMES[id] || BUILTIN_THEMES["soft-card"];
+  }
+  // ---- R9-A：文字/填充 WCAG 对比与组色解析 ----
+  function hexRgb(hex) {
+    var s = String(hex || "").trim();
+    if (s.charAt(0) === "#") s = s.slice(1);
+    if (s.length === 3) s = s.split("").map(function (c) { return c + c; }).join("");
+    if (!/^[0-9a-fA-F]{6}$/.test(s)) return null;
+    return [parseInt(s.substr(0, 2), 16), parseInt(s.substr(2, 2), 16),
+      parseInt(s.substr(4, 2), 16)];
+  }
+  function relLum(hex) {
+    var rgb = hexRgb(hex);
+    if (!rgb) return null;
+    var c = rgb.map(function (v) {
+      v /= 255;
+      return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  }
+  function contrastRatio(a, b) {
+    var l1 = relLum(a), l2 = relLum(b);
+    if (l1 == null || l2 == null) return null;
+    var hi = Math.max(l1, l2), lo = Math.min(l1, l2);
+    return (hi + 0.05) / (lo + 0.05);
+  }
+  // 文字色：优先主题色；对比度不足 4.5 时退回纯黑/纯白中对比更高者
+  //（纯黑对中明度彩条也能 ≥4.5，#111827 在 L≈0.21 的彩条上只有 4.47）。
+  function inkFor(bg, preferred) {
+    var dark = "#000000", light = "#FFFFFF";
+    if (preferred && (contrastRatio(preferred, bg) || 0) >= 4.5) return preferred;
+    var cd = contrastRatio(dark, bg), cl = contrastRatio(light, bg);
+    if (cd == null && cl == null) return preferred || dark;
+    return (cd == null ? -1 : cd) >= (cl == null ? -1 : cl) ? dark : light;
+  }
+  function groupIndexOf(spec, groupId) {
+    var order = (spec.groups || []).map(function (g) { return g.id; });
+    var idx = order.indexOf(groupId);
+    return idx < 0 ? 0 : idx;
+  }
+  function declaredGroupColor(spec, groupId) {
+    var g = (spec.groups || []).filter(function (gg) { return gg.id === groupId; })[0];
+    return g && g.color ? g.color : null;
+  }
+  // 组强调色（徽标/侧条/阶段条/标题条）：declared 主题尊重 schematic 声明的
+  // 浅色组色；palette/theme 主题忽略声明色、改用主题调色板（饱和或灰阶），
+  // 保证实色块白字、侧条可见、主题间区分度。
+  function groupAccentColor(spec, theme, groupId) {
+    if (groupId == null) return null;
+    var idx = groupIndexOf(spec, groupId);
+    var palette = Array.isArray(theme.groupColors) ? theme.groupColors : [];
+    var pc = palette.length ? palette[idx % palette.length] : null;
+    var dc = declaredGroupColor(spec, groupId);
+    var gf = theme.node && theme.node.groupFill;
+    if (!gf || gf === "declared") return dc || pc;
+    return pc || dc;
+  }
+  // 分组节点填充：declared=声明色|调色板浅色；palette=主题调色板；
+  // theme=主题 node.fill（白卡/灰底主题不吃组色）。
+  function nodeGroupFill(spec, theme, node) {
+    if (node.group == null) return null;
+    var tn = theme.node || {};
+    var gf = tn.groupFill || "declared";
+    if (gf === "theme") return tn.fill || null;
+    return groupAccentColor(spec, theme, node.group);
+  }
+  // 节点形状 → 原生元素：diamond/decision 画菱形 path，chevron 画人字
+  // 形 path，terminal 画胶囊 rect（圆角=h/2），其余 rect/ellipse。
+  function shapePlan(node) {
+    var kind = node.kind || node.shape, shape = node.shape || "box";
+    if (kind === "decision" || shape === "diamond") return { type: "path", path: "diamond" };
+    if (shape === "chevron" || kind === "chevron") return { type: "path", path: "chevron" };
+    if (shape === "terminal" || kind === "terminal") return { type: "rect", capsule: true };
+    if (["ellipse", "cell", "molecule", "outcome"].indexOf(shape) >= 0) return { type: "ellipse" };
+    return { type: "rect" };
+  }
+  function shapePathData(plan, w, h) {
+    if (plan.path === "diamond") {
+      return "M " + round(w / 2) + " 0 L " + round(w) + " " + round(h / 2) +
+        " L " + round(w / 2) + " " + round(h) + " L 0 " + round(h / 2) + " Z";
+    }
+    if (plan.path === "chevron") {
+      var notch = Math.min(w * 0.22, 5);
+      return "M 0 0 L " + round(w - notch) + " 0 L " + round(w) + " " + round(h / 2) +
+        " L " + round(w - notch) + " " + round(h) + " L 0 " + round(h) + " L " + round(notch) +
+        " " + round(h / 2) + " Z";
+    }
+    return null;
+  }
   function slotLabelTransform(t) {
     return { x: t.x, y: t.y, w: t.w, h: round(Math.min(6, t.h * 0.25)), rotation: t.rotation || 0 };
   }
@@ -504,33 +1444,221 @@
         }
       }
     });
+    // 内容驱动模式：画布已按自动布局收紧；手动位置可能把节点移出，
+    // 按最终 bbox（节点+容器+装饰）重新收口，保证一切元素在画布内。
+    var docCanvas = calculated.canvas || spec.canvas;
+    if (calculated.canvas) {
+      var bb = null;
+      function eatBox(b) {
+        if (!b || !finite(b.x) || !finite(b.y)) return;
+        var x2 = b.x + (b.w || 0), y2 = b.y + (b.h || 0);
+        bb = bb ? { x: Math.min(bb.x, b.x), y: Math.min(bb.y, b.y),
+          x2: Math.max(bb.x2, x2), y2: Math.max(bb.y2, y2) } :
+          { x: b.x, y: b.y, x2: x2, y2: y2 };
+      }
+      Object.keys(placed).forEach(function (id) { eatBox(placed[id]); });
+      (calculated.containers || []).forEach(eatBox);
+      (calculated.decor || []).forEach(eatBox);
+      if (calculated.subtitles) Object.keys(calculated.subtitles).forEach(function (id) { eatBox(calculated.subtitles[id]); });
+      (calculated.texts || []).forEach(function (tx) {
+        eatBox({ x: tx.x, y: tx.y, w: tx.w, h: tx.h });
+        if (tx.barX !== undefined) eatBox({ x: tx.barX, y: tx.barY, w: tx.barW, h: tx.barH });
+      });
+      if (bb) {
+        var lm = spec.layout.margin;
+        // 仅当内容越过 margin（手动移出）才平移补齐；否则保留手动坐标，
+        // 画布右/下缘 = 内容最大缘 + margin，左/上缘保留实际位置。
+        var dx2 = lm - bb.x, dy2 = lm - bb.y;
+        if (dx2 > 0.01 || dy2 > 0.01) {
+          Object.keys(placed).forEach(function (id) {
+            placed[id].x = round(placed[id].x + Math.max(0, dx2));
+            placed[id].y = round(placed[id].y + Math.max(0, dy2));
+          });
+          (calculated.containers || []).forEach(function (c) { c.x = round(c.x + Math.max(0, dx2)); c.y = round(c.y + Math.max(0, dy2)); });
+          (calculated.decor || []).forEach(function (d) { d.x = round(d.x + Math.max(0, dx2)); d.y = round(d.y + Math.max(0, dy2)); });
+          if (calculated.subtitles) Object.keys(calculated.subtitles).forEach(function (id) {
+            calculated.subtitles[id].x = round(calculated.subtitles[id].x + Math.max(0, dx2));
+            calculated.subtitles[id].y = round(calculated.subtitles[id].y + Math.max(0, dy2));
+          });
+          (calculated.texts || []).forEach(function (tx) {
+            tx.x = round(tx.x + Math.max(0, dx2)); tx.y = round(tx.y + Math.max(0, dy2));
+            if (tx.barX !== undefined) { tx.barX = round(tx.barX + Math.max(0, dx2)); tx.barY = round(tx.barY + Math.max(0, dy2)); }
+          });
+          bb.x += Math.max(0, dx2); bb.y += Math.max(0, dy2);
+          bb.x2 += Math.max(0, dx2); bb.y2 += Math.max(0, dy2);
+        }
+        docCanvas = { width_mm: Math.max(30, round(bb.x2 + lm)),
+          height_mm: Math.max(20, round(bb.y2 + lm)),
+          dpi: spec.canvas.dpi, background: spec.canvas.background };
+      }
+    }
     var z = startZ || 1, root = tag(base("diagram-" + spec.id + ":root", "group",
-      { x: 0, y: 0, w: spec.canvas.width_mm, h: spec.canvas.height_mm }, z++), spec, null, "scene");
+      { x: 0, y: 0, w: docCanvas.width_mm, h: docCanvas.height_mm }, z++), spec, null, "scene");
     root.children = [];
-    spec.nodes.forEach(function (n) {
-      var t = clone(placed[n.id]), group = tag(base(n.id, "group", t, z++), spec, n.id, "node");
+    var theme = diagramTheme(spec);
+    // R9：stages/lanes/prisma 容器与 timeline 装饰画在节点之下（z 更小）
+    (calculated.containers || []).forEach(function (ct, ci) {
+      var cid = "diagram-" + spec.id + ":container:" + ci;
+      var tc = theme.container || {};
+      var cEl = tag(base(cid, "group",
+        { x: ct.x, y: ct.y, w: ct.w, h: ct.h, rotation: 0 }, z++), spec, null, "stage_container");
+      cEl.parent_id = root.id; cEl.children = [];
+      // R9-A：容器强调色走主题解析（declared 主题用声明浅色；其余用主题
+      // 调色板——实色块得饱和色、侧条/编号得彩色，保证色条与白字可读）。
+      var cAccent = ct.group != null ?
+        (groupAccentColor(spec, theme, ct.group) || ct.color || null) : (ct.color || null);
+      var gfMode = theme.node && theme.node.groupFill;
+      var bgTint = (!gfMode || gfMode === "declared") ? ct.color : null;
+      if (ct.kind === "stagebar") {
+        // prisma 左侧竖排阶段色条：纯色条 + 竖排字（墨色按条色自动对比）
+        var sbar = tag(base(cid + ".bar", "rect",
+          { x: ct.x, y: ct.y, w: ct.w, h: ct.h, rotation: 0 }, z++), spec, null, "lane_bar");
+        sbar.parent_id = cid;
+        var sbarFill = cAccent || "#6366F1";
+        sbar.style = { fill: sbarFill, stroke: null, strokeWidthPt: 0,
+          cornerRadiusMm: 0.8 };
+        cEl.children.push(sbar.id); elements.push(sbar);
+        var sbw = ct.w || 7;
+        var slt = tag(base(cid + ".label", "text",
+          { x: ct.x + sbw / 2 - (ct.h - 4) / 2, y: ct.y + ct.h / 2 - (sbw - 1.5) / 2,
+            w: Math.max(4, ct.h - 4), h: Math.max(3, sbw - 1.5), rotation: -90 },
+          z++), spec, null, "lane_label");
+        slt.parent_id = cid; slt.text = ct.label || "";
+        slt.style = { fill: inkFor(sbarFill, "#FFFFFF"), fontFamily: "Arial, sans-serif",
+          fontSizePt: 6.5, textAlign: "center", verticalAlign: "middle", fontWeight: "bold" };
+        cEl.children.push(slt.id); elements.push(slt);
+        elements.push(cEl); root.children.push(cEl.id);
+        return;
+      }
+      var fill = bgTint || tc.fill || "#F9FAFB";
+      var bg = tag(base(cid + ".bg", "rect",
+        { x: ct.x, y: ct.y, w: ct.w, h: ct.h, rotation: 0 }, z++), spec, null, "stage_bg");
+      bg.parent_id = cid;
+      bg.style = { fill: ct.kind === "lane" ? (tc.fill || "#F8FAFC") : fill,
+        stroke: tc.stroke || "#E5E7EB",
+        strokeWidthPt: tc.strokeWidthPt != null ? tc.strokeWidthPt : 0.5,
+        cornerRadiusMm: ct.kind === "stage" ? 1.5 : 0,
+        dash: tc.dash || undefined, opacity: tc.fill ? 1 : 0.55 };
+      cEl.children.push(bg.id); elements.push(bg);
+      if (ct.kind === "lane") {
+        // 左侧色条（barW 宽）+ 竖排标题，居中于条内
+        var barW = ct.barW || 9;
+        var bar = tag(base(cid + ".bar", "rect",
+          { x: ct.x, y: ct.y, w: barW, h: ct.h, rotation: 0 }, z++), spec, null, "lane_bar");
+        bar.parent_id = cid;
+        var barFill = cAccent || "#6366F1";
+        bar.style = { fill: barFill, stroke: null, strokeWidthPt: 0,
+          cornerRadiusMm: 0 };
+        cEl.children.push(bar.id); elements.push(bar);
+        var lt = tag(base(cid + ".label", "text",
+          { x: ct.x + barW / 2 - (ct.h - 5) / 2, y: ct.y + ct.h / 2 - (barW - 2) / 2,
+            w: Math.max(4, ct.h - 5), h: Math.max(3, barW - 2), rotation: -90 },
+          z++), spec, null, "lane_label");
+        lt.parent_id = cid; lt.text = ct.label || "";
+        lt.style = { fill: inkFor(barFill, "#FFFFFF"), fontFamily: "Arial, sans-serif",
+          fontSizePt: 6.5, textAlign: "center", verticalAlign: "middle", fontWeight: "bold" };
+        cEl.children.push(lt.id); elements.push(lt);
+      } else {
+        var titleBarFill = cAccent || "#E5E7EB";
+        var st = tag(base(cid + ".label", "text",
+          { x: ct.x + 2, y: ct.y + 1, w: ct.w - 4, h: 5, rotation: 0 }, z++),
+          spec, null, "stage_label");
+        st.parent_id = cid; st.text = ct.label || "";
+        // 标题文字落在标题条（titleBar）或容器底（淡色）上，墨色按实际底色取对比
+        st.style = { fill: inkFor(tc.titleBar ? titleBarFill : fill,
+            tc.titleFill || "#374151"), fontFamily: "Arial, sans-serif",
+          fontSizePt: 7.5, textAlign: "left", verticalAlign: "middle",
+          fontWeight: "bold" };
+        cEl.children.push(st.id); elements.push(st);
+        if (tc.titleBar) {
+          var tb = tag(base(cid + ".titlebar", "rect",
+            { x: ct.x, y: ct.y, w: ct.w, h: 5.5, rotation: 0 }, z++), spec, null, "stage_titlebar");
+          tb.parent_id = cid;
+          tb.style = { fill: titleBarFill, stroke: null, strokeWidthPt: 0,
+            cornerRadiusMm: 0 };
+          cEl.children.push(tb.id); elements.push(tb);
+        }
+      }
+      elements.push(cEl); root.children.push(cEl.id);
+    });
+    (calculated.decor || []).forEach(function (dc, di) {
+      var did = "diagram-" + spec.id + ":decor:" + di;
+      var dType = dc.kind === "decor_dot" ? "ellipse" : dc.kind === "decor_path" ? "path" : "rect";
+      var dEl = tag(base(did, dType,
+        { x: dc.x || 0, y: dc.y || 0, w: dc.w || 0, h: dc.h || 0, rotation: 0 }, z++), spec, null, "decor");
+      if (dType === "path") dEl.pathData = dc.pathData;
+      dEl.parent_id = root.id;
+      dEl.style = { fill: dc.fill || "#9CA3AF", stroke: dc.stroke || null,
+        strokeWidthPt: dc.stroke ? 0.4 : 0 };
+      elements.push(dEl); root.children.push(dEl.id);
+    });
+    // R9-B：徽标放节点左侧居中，文字区整体右移；色条主题再让位。
+    // 布局侧 labelReserve(step=9 / sideBar=3.4) 必须 ≥ 此处实际占位。
+    function badgeMetrics(t) {
+      var br = Math.min(3.2, t.h * 0.28);
+      return { br: br, zone: 2 * br + 2.0, cx: t.x + 1.0 + br, cy: t.y + t.h / 2 };
+    }
+    function nodeLeftReserve(n, t) {
+      var r = 0;
+      if (n.step) r += badgeMetrics(t).zone;
+      if (theme.node && theme.node.sideBar) r += 2.8;
+      return r;
+    }
+    function labelBoxFor(n, t) {
+      if (n.data_slot) return slotLabelTransform(t);
+      var subOverride = calculated.subtitles && calculated.subtitles[n.id];
+      var subH = (n.subtitle && !subOverride) ? SUBTITLE_H_MM : 0;
+      var leftRes = nodeLeftReserve(n, t);
+      return { x: round(t.x + leftRes), y: round(t.y + 0.3),
+        w: round(Math.max(4, t.w - leftRes - 0.6)),
+        h: round(Math.max(3, t.h - subH - LABEL_BOX_V_MM)), rotation: t.rotation || 0 };
+    }
+    spec.nodes.forEach(function (n, ni) {
+      var t = clone(placed[n.id]);
+      var group = tag(base(n.id, "group", t, z++), spec, n.id, "node");
       group.semantic_node = { id: n.id, role: n.role, kind: n.kind, shape: n.shape };
       group.semantic_role = n.role; group.entity_kind = n.kind; group.declared_shape = n.shape;
       group.declared_transform = clone(t); group.diagram_manual_layout = !!(old[n.id] && old[n.id].diagram_manual_layout);
       group.evidence = clone(n.evidence); group.source_refs = clone(n.evidence); group.children = [];
       group.parent_id = root.id; elements.push(group); groups[n.id] = group;
-      var shapeType = ["ellipse", "cell", "molecule", "outcome"].indexOf(n.shape) >= 0 ? "ellipse" : "rect";
-      var shape = tag(base(n.id + ".shape", shapeType, t, z++), spec, n.id, "node_shape");
+      var plan = shapePlan(n);
+      var shape = tag(base(n.id + ".shape", plan.type, t, z++), spec, n.id, "node_shape");
       shape.parent_id = n.id; shape.declared_shape = n.shape; shape.semantic_role = n.role;
+      if (plan.type === "path") shape.pathData = shapePathData(plan, t.w, t.h);
       var semanticPaint = paletteStyle(spec, n);
-      shape.style = { fill: n.color || n.fill || semanticPaint.fill, stroke: n.stroke || "#334155", strokeWidthPt: 0.9,
-        cornerRadiusMm: n.shape === "cell" || n.shape === "process" ? 3 : 1,
+      var tn = theme.node || {};
+      // R9-A：节点填充按主题 groupFill 模式解析（declared/palette/theme）；
+      // accent 为徽标/侧条/容器强调色（declared 主题用声明色，其余用主题调色板）。
+      var ngf = nodeGroupFill(spec, theme, n);
+      var accent = groupAccentColor(spec, theme, n.group);
+      // solid-block 等主题：无 group 节点也按主题调色板取饱和深色（配白字）
+      var nodePalette = tn.ungroupedPalette === true &&
+        Array.isArray(theme.groupColors) && theme.groupColors.length ?
+        theme.groupColors[ni % theme.groupColors.length] : null;
+      var shapeFill = n.color || n.fill || ngf || (!n.group ? nodePalette : null) ||
+        (tn.fill ? null : semanticPaint.fill);
+      if (shapeFill == null && tn.fill) shapeFill = tn.fill;
+      if (shapeFill == null) shapeFill = semanticPaint.fill;
+      shape.style = { fill: shapeFill,
+        stroke: n.stroke || tn.stroke || (accent ? "#9CA3AF" : "#334155"),
+        strokeWidthPt: n.stroke ? 0.9 : (tn.strokeWidthPt != null ? tn.strokeWidthPt : 0.9),
+        cornerRadiusMm: plan.capsule ? t.h / 2 :
+          (n.shape === "cell" || n.shape === "process" ? 3 : (tn.cornerRadiusMm != null ? tn.cornerRadiusMm : 1)),
         role: semanticPaint.role, semanticRole: semanticPaint.semanticRole };
       shape.evidence = clone(n.evidence);
       var priorShape = old[shape.id];
       if (keepManual && priorShape && priorShape.diagram_manual_layout) shape.transform = clone(priorShape.transform);
       elements.push(shape); group.children.push(shape.id);
-      var labelTransform = n.data_slot ? slotLabelTransform(t) : clone(t);
+      var labelTransform = labelBoxFor(n, t);
       var label = tag(base(n.id + ".label", "text", labelTransform, z++), spec, n.id, "node_text");
       var metrics = labelMetrics(n, labelTransform.w, labelTransform.h);
       label.parent_id = n.id; label.text = metrics.text; label.contract_label = n.label; label.semantic_role = n.role;
       label.diagram_label_layout = clone(metrics);
-      label.style = { fill: "#172033", fontFamily: "Arial, sans-serif", fontSizePt: n.fontSizePt === undefined ? 7 : n.fontSizePt,
+      // R9-A：文字色对节点填充做 WCAG≥4.5 兜底（主题色优先，不足时换深/浅墨）
+      label.style = { fill: inkFor(shapeFill, tn.fillText || "#172033"),
+        fontFamily: tn.fontFamily || "Arial, sans-serif",
+        fontSizePt: n.fontSizePt === undefined ? 7 : n.fontSizePt,
+        fontWeight: tn.fontWeight || undefined,
         textAlign: "center", verticalAlign: "middle", lineHeight: 1.2, role: n.role };
       label.evidence = clone(n.evidence);
       var priorText = old[label.id];
@@ -540,6 +1668,85 @@
         label.diagram_label_layout.text = label.text;
       }
       elements.push(label); group.children.push(label.id);
+      // R9：subtitle 第二行小字；roadmap 移到右栏（calculated.subtitles 覆盖）
+      if (n.subtitle) {
+        var subBox = (calculated.subtitles && calculated.subtitles[n.id]) ||
+          (function () {
+            var lr = nodeLeftReserve(n, t);
+            return { x: round(t.x + lr + 0.4), y: round(t.y + t.h - SUBTITLE_H_MM - 0.3),
+              w: round(Math.max(4, t.w - lr - 1.4)), h: SUBTITLE_H_MM, rotation: 0 };
+          })();
+        var sub = tag(base(n.id + ".subtitle", "text", subBox, z++),
+          spec, n.id, "node_subtitle");
+        sub.parent_id = n.id; sub.text = n.subtitle; sub.contract_label = n.subtitle;
+        // roadmap 等把 subtitle 移出节点时，底色是画布而非节点填充
+        var subBg = calculated.subtitles && calculated.subtitles[n.id] ?
+          ((spec.canvas && spec.canvas.background) || "#FFFFFF") : shapeFill;
+        sub.style = { fill: inkFor(subBg, tn.subtitleColor || "#6B7280"),
+          fontFamily: tn.fontFamily || "Arial, sans-serif", fontSizePt: 5.5,
+          textAlign: calculated.subtitles && calculated.subtitles[n.id] ? "left" : "center",
+          verticalAlign: "middle", lineHeight: 1.15 };
+        elements.push(sub); group.children.push(sub.id);
+      }
+      // R9-B：编号徽标在节点左侧居中，文字区已右移（labelBoxFor）
+      if (n.step) {
+        var bm = badgeMetrics(t);
+        var badgeBox = { x: round(t.x + 1.0), y: round(bm.cy - bm.br),
+          w: round(bm.br * 2), h: round(bm.br * 2), rotation: 0 };
+        var badge = tag(base(n.id + ".stepbadge", "ellipse", badgeBox, z++),
+          spec, n.id, "step_badge");
+        badge.parent_id = n.id;
+        // R9-A：numbered-card 徽标始终取主题彩色调色板（组内按组序、无组按
+        // 节点序）；其余主题用 badge.fill 固定色，不再吃浅色组色导致白字不可见。
+        var badgeIdx = n.group != null ? groupIndexOf(spec, n.group) : ni;
+        var badgePalette = theme.badge && theme.badge.ungroupedPalette === true &&
+          Array.isArray(theme.groupColors) && theme.groupColors.length ?
+          theme.groupColors[badgeIdx % theme.groupColors.length] : null;
+        var bcol = badgePalette || (theme.badge && theme.badge.fill) || accent || "#6B7280";
+        badge.style = { fill: bcol, stroke: null, strokeWidthPt: 0 };
+        elements.push(badge); group.children.push(badge.id);
+        var bt = tag(base(n.id + ".steptext", "text", badgeBox, z++),
+          spec, n.id, "step_text");
+        bt.parent_id = n.id; bt.text = n.step;
+        bt.style = { fill: inkFor(bcol, (theme.badge && theme.badge.text) || "#FFFFFF"),
+          fontFamily: "Arial, sans-serif", fontSizePt: Math.max(5, bm.br * 1.5),
+          fontWeight: "bold", textAlign: "center", verticalAlign: "middle" };
+        elements.push(bt); group.children.push(bt.id);
+      }
+      // R9-10：side-bar 主题左侧 1.2mm 阶段色条
+      if (theme.node && theme.node.sideBar) {
+        var sbar = tag(base(n.id + ".sidebar", "rect",
+          { x: round(t.x + 0.5), y: round(t.y + 0.6), w: 1.4,
+            h: round(Math.max(2, t.h - 1.2)), rotation: 0 }, z++),
+          spec, n.id, "node_sidebar");
+        sbar.parent_id = n.id;
+        // R9-A：侧条用组强调色（side-bar 主题 palette 优先 → 饱和色条可见）
+        var sideFill = accent ||
+          (Array.isArray(theme.groupColors) && theme.groupColors.length ?
+            theme.groupColors[ni % theme.groupColors.length] : "#6366F1");
+        sbar.style = { fill: sideFill, stroke: null, strokeWidthPt: 0,
+          cornerRadiusMm: 0.5 };
+        elements.push(sbar); group.children.push(sbar.id);
+      }
+      // R9：roadmap 左栏阶段标签（竖色条 + 文字，相邻同组并入一块）
+      (calculated.texts || []).forEach(function (gt) {
+        if (gt.parent !== n.id) return;
+        var gbar = tag(base(n.id + ".gbar", "rect",
+          { x: gt.barX, y: gt.barY, w: gt.barW, h: gt.barH, rotation: 0 }, z++),
+          spec, n.id, "group_bar");
+        gbar.parent_id = n.id;
+        gbar.style = { fill: (gt.group != null ?
+            groupAccentColor(spec, theme, gt.group) : null) || gt.barColor || "#6366F1",
+          stroke: null, strokeWidthPt: 0, cornerRadiusMm: 0.6 };
+        elements.push(gbar); group.children.push(gbar.id);
+        var gl = tag(base(n.id + ".glabel", "text",
+          { x: gt.x, y: gt.y, w: gt.w, h: gt.h, rotation: 0 }, z++),
+          spec, n.id, "group_label");
+        gl.parent_id = n.id; gl.text = gt.text;
+        gl.style = { fill: "#374151", fontFamily: "Arial, sans-serif", fontSizePt: 6.5,
+          textAlign: "left", verticalAlign: "middle", fontWeight: "bold" };
+        elements.push(gl); group.children.push(gl.id);
+      });
       if (n.data_slot) {
         var slot = tag(base(n.id + ".slot", "rect", slotTransform(t), z++), spec, n.id, "chart_slot");
         slot.parent_id = n.id; slot.slot_type = "chart";
@@ -571,9 +1778,31 @@
       var tx = elements.filter(function (el) { return el.id === nid + ".label"; })[0];
       sh.transform = manual && old[sh.id] ? clone(old[sh.id].transform) : clone(box);
       tx.transform = specNode.data_slot ? slotLabelTransform(box) : manual && old[tx.id] ? clone(old[tx.id].transform) :
-        includedChildren[nid] ? { x: box.x+2, y: box.y+1, w: Math.max(1,box.w-4), h: 6, rotation: 0 } : clone(box);
+        includedChildren[nid] ? { x: box.x+2, y: box.y+1, w: Math.max(1,box.w-4), h: 6, rotation: 0 } : labelBoxFor(specNode, box);
       var slot = elements.filter(function (el) { return el.id === nid + ".slot"; })[0];
       if (slot) slot.transform = slotTransform(box);
+      // include 容器会改变节点外框：徽标/副标题/色条同步重算（手动位保留）
+      if (!manual) {
+        var bm2 = badgeMetrics(box);
+        [[".stepbadge", { x: round(box.x + 1.0), y: round(bm2.cy - bm2.br),
+            w: round(bm2.br * 2), h: round(bm2.br * 2), rotation: 0 }],
+          [".steptext", { x: round(box.x + 1.0), y: round(bm2.cy - bm2.br),
+            w: round(bm2.br * 2), h: round(bm2.br * 2), rotation: 0 }],
+          [".sidebar", { x: round(box.x + 0.5), y: round(box.y + 0.6), w: 1.4,
+            h: round(Math.max(2, box.h - 1.2)), rotation: 0 }]
+        ].forEach(function (pair) {
+          var ex = elements.filter(function (el) { return el.id === nid + pair[0]; })[0];
+          if (ex && !(old[ex.id] && old[ex.id].diagram_manual_layout)) ex.transform = pair[1];
+        });
+        var subEl = elements.filter(function (el) { return el.id === nid + ".subtitle"; })[0];
+        if (subEl && !(calculated.subtitles && calculated.subtitles[nid]) &&
+            !(old[subEl.id] && old[subEl.id].diagram_manual_layout)) {
+          var lr2 = nodeLeftReserve(specNode, box);
+          subEl.transform = { x: round(box.x + lr2 + 0.4),
+            y: round(box.y + box.h - SUBTITLE_H_MM - 0.3),
+            w: round(Math.max(4, box.w - lr2 - 1.4)), h: SUBTITLE_H_MM, rotation: 0 };
+        }
+      }
       if (!manual || !old[tx.id]) tx.diagram_label_layout = labelMetrics(specNode, tx.transform.w, tx.transform.h);
       return g;
     }
@@ -589,17 +1818,97 @@
       }
       kept.parent_id = owner.id; owner.children.push(kept.id); elements.push(kept);
     });
+    var ORTHO_ROUTE_MODES = { stages: true, lanes: true, tree: true, prisma: true, roadmap: true };
+    // cycle 环形弧线：bend 让弦中点沿椭圆外法向鼓出；弧线两两可能相交，
+    // 对每条边贪心尝试翻转鼓出方向，取与其它弧线交叉最少的符号（沿环单向、不交叉）。
+    var cycleBends = null;
+    if (spec.layout.mode === "cycle" && calculated.ellipse) {
+      var bc0 = calculated.ellipse;
+      var cycRels = spec.relations.filter(function (r) {
+        return r.kind !== "include" && r.bend === undefined && placed[r.source] && placed[r.target];
+      });
+      if (cycRels.length) {
+        var mag0 = Math.min(bc0.rx, bc0.ry) * 0.38;
+        var cinfo = cycRels.map(function (r) {
+          var pa = placed[r.source], pb = placed[r.target];
+          var sx = pa.x + pa.w / 2, sy = pa.y + pa.h / 2;
+          var ex = pb.x + pb.w / 2, ey = pb.y + pb.h / 2;
+          var edx = ex - sx, edy = ey - sy, elen = Math.sqrt(edx * edx + edy * edy) || 1;
+          var mx = (sx + ex) / 2 - bc0.cx, my = (sy + ey) / 2 - bc0.cy;
+          var sgn = (edx * my - edy * mx) >= 0 ? 1 : -1;
+          return { id: r.id, sx: sx, sy: sy, ex: ex, ey: ey, sgn: sgn,
+            mx: (sx + ex) / 2, my: (sy + ey) / 2, elen: elen, edx: edx, edy: edy };
+        });
+        function bendMid(ci, sgn) {
+          var b = sgn * mag0;
+          return { x: ci.mx - ci.edy / ci.elen * b, y: ci.my + ci.edx / ci.elen * b };
+        }
+        function bezier(ci, sgn) {
+          var m = bendMid(ci, sgn), pts = [], n = 14;
+          for (var i = 0; i <= n; i++) {
+            var t = i / n, u = 1 - t;
+            pts.push({ x: u * u * ci.sx + 2 * u * t * m.x + t * t * ci.ex,
+              y: u * u * ci.sy + 2 * u * t * m.y + t * t * ci.ey });
+          }
+          return pts;
+        }
+        function segX(a, b, c, d) {
+          function cr(p, q, r) { return (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x); }
+          var o1 = cr(a, b, c), o2 = cr(a, b, d), o3 = cr(c, d, a), o4 = cr(c, d, b);
+          return o1 * o2 < 0 && o3 * o4 < 0;
+        }
+        function pathX(ptsA, ptsB) {
+          for (var i = 0; i < ptsA.length - 1; i++)
+            for (var j = 0; j < ptsB.length - 1; j++)
+              if (segX(ptsA[i], ptsA[i + 1], ptsB[j], ptsB[j + 1])) return true;
+          return false;
+        }
+        var sampled = cinfo.map(function (ci) { return bezier(ci, ci.sgn); });
+        function crosses(idx) {
+          var n = 0;
+          for (var j = 0; j < cinfo.length; j++) {
+            if (j === idx) continue;
+            if (pathX(sampled[idx], sampled[j])) n++;
+          }
+          return n;
+        }
+        for (var pass = 0; pass < 2; pass++) {
+          var changed = false;
+          for (var k = 0; k < cinfo.length; k++) {
+            var before = crosses(k);
+            var altPts = bezier(cinfo[k], -cinfo[k].sgn);
+            var oldPts = sampled[k];
+            sampled[k] = altPts;
+            var after = crosses(k);
+            if (after < before) { cinfo[k].sgn = -cinfo[k].sgn; changed = true; }
+            else sampled[k] = oldPts;
+          }
+          if (!changed) break;
+        }
+        cycleBends = Object.create(null);
+        cinfo.forEach(function (ci) {
+          cycleBends[ci.id] = round(ci.sgn * mag0 * 10) / 10;
+        });
+      }
+    }
     spec.relations.filter(function (r) { return r.kind !== "include"; }).forEach(function (r) {
       var c = tag(base("diagram-" + spec.id + ":relation:" + r.id, "connector",
-        { x: 0, y: 0, w: spec.canvas.width_mm, h: spec.canvas.height_mm }, z++), spec, null, "relation");
+        { x: 0, y: 0, w: docCanvas.width_mm, h: docCanvas.height_mm }, z++), spec, null, "relation");
       c.relation = { source: r.source, target: r.target, kind: r.kind, direction: r.direction };
       if (r.bend !== undefined) c.relation.bend = r.bend;
+      else if (cycleBends && cycleBends[r.id] !== undefined) c.relation.bend = cycleBends[r.id];
       if (r.label !== undefined) c.relation.label = r.label;
+      // 阶段/容器类布局一律正交走线；timeline 关系仅作语义保留不渲染
+      c.orthogonal_route = ORTHO_ROUTE_MODES[spec.layout.mode] === true;
+      if (spec.layout.mode === "timeline") c.visible = false;
       c.semantic_relation = { id: r.id, source: r.source, target: r.target, kind: r.kind, direction: r.direction };
       c.parent_id = root.id;
       c.evidence = clone(r.evidence); c.source_refs = clone(r.evidence);
-      c.style = { stroke: r.kind === "activate" ? "#2E7D32" : r.kind === "inhibit" ? "#C62828" : "#334155",
-        strokeWidthPt: 1.1, fill: null, arrowHead: "none", role: "relation_" + r.kind };
+      var tc2 = theme.connector || {};
+      c.style = { stroke: r.kind === "activate" ? "#2E7D32" : r.kind === "inhibit" ? "#C62828" :
+          (tc2.stroke || "#334155"),
+        strokeWidthPt: tc2.strokeWidthPt != null ? tc2.strokeWidthPt : 1.1,
+        fill: null, arrowHead: "none", role: "relation_" + r.kind };
       if (r.label) {
         var l = tag(base(c.id + ".label", "text", { x: 0, y: 0, w: 20, h: 5 }, z++), spec, null, "relation_text");
         l.parent_id = root.id; l.text = r.label; l.relation_label_for = c.id;
@@ -617,7 +1926,7 @@
     elements.filter(function (el) { return el.diagram_part === "chart_slot"; }).forEach(function (el) {
       slotPlacements[el.diagramNodeId] = { element_id: el.id, transform: clone(el.transform) };
     });
-    return { elements: all, placements: placed, layout: {
+    return { elements: all, placements: placed, canvas: docCanvas, layout: {
       row_heights_mm: calculated.row_heights_mm, columns: calculated.columns,
       coordinate_space: "element-mm", auto_layout: !keepManual,
       automatic_placements: automaticPlacements, previous_placements: previousPlacements,
@@ -638,10 +1947,10 @@
       return spec.nodes.some(function (n) { return n.id === el.id || n.id + ".shape" === el.id || n.id + ".label" === el.id; });
     });
     if (collisions.length) throw new Error("ELEMENT_ID_CONFLICT: 语义元素 id 已被无关文档元素占用：" + collisions[0].id);
-    base.canvas = Object.assign({}, base.canvas, clone(spec.canvas));
     var other = base.elements.filter(function (el) { return !el || el.diagram_id !== spec.id; });
     var maxZ = 0; other.forEach(function (el) { if (el && finite(el.z)) maxZ = Math.max(maxZ, el.z); });
     var built = buildElements(spec, previous, opts.auto_layout !== true && spec.layout.auto_layout !== true, maxZ + 1);
+    base.canvas = Object.assign({}, base.canvas, clone(built.canvas || spec.canvas));
     base.elements = other.concat(built.elements);
     base.meta = base.meta || {}; base.meta.diagrams = base.meta.diagrams || {};
     var layoutNodes = built.elements.filter(function (el) { return el.diagram_part === "node"; }).map(function (el) {
@@ -714,9 +2023,11 @@
     var idValue = templateId || "workbench-schematic";
     var graphical = idValue === "tpl-graphical-abstract" || idValue === "graphical_abstract" || idValue === "workbench-schematic";
     var roles = graphical ? ["question", "method", "evidence", "conclusion"] : ["question", "method", "conclusion"];
+    // R9：中性占位文字（不再给每个标签加「（示例）」后缀造成难看折行）；
+    // 「合成示例」声明保留在 sources/uncertainties。
     var labels = synthetic === false ? roles.map(function (_, i) { return "待填写实体 " + (i + 1); }) :
-      graphical ? ["研究问题（示例）", "方法路线（示例）", "核心证据（示例）", "结论（示例）"] :
-        ["输入（示例）", "处理（示例）", "输出（示例）"];
+      graphical ? ["研究问题", "方法路线", "核心证据", "结论"] :
+        ["输入", "预处理", "输出"];
     return { id: idValue, template_id: TEMPLATE_IDS[idValue] ? idValue : "flow",
       nodes: roles.map(function (role, i) {
         return { id: graphical ? role : "node-" + (i + 1), label: labels[i], role: role, shape: role === "method" ? "process" : "box" };
@@ -730,15 +2041,24 @@
     };
   }
   function supportsTemplate(tpl) {
+    // R9：所有 tpl-diagram-* / tpl-graphical-abstract 模板均可应用——
+    // apply 路径统一要求用户提供 schematic（或模板自带默认结构），
+    // templateCapability / supportsTemplate / apply_template 三处一致。
     var generic = { "tpl-diagram-flow": true, "tpl-diagram-arch": true,
       "tpl-diagram-pipeline": true, "tpl-graphical-abstract": true };
     var value = typeof tpl === "string" ? tpl : obj(tpl) && (tpl.id || tpl.template_id || tpl.template || tpl.chart_type);
     var supported = !!generic[value];
+    if (typeof value === "string" &&
+        (/^tpl-diagram-[a-z0-9-]+$/.test(value) || value === "tpl-graphical-abstract")) {
+      supported = TEMPLATE_IDS[value] !== undefined || generic[value] === true;
+    }
     if (obj(tpl) && !value && tpl.chart_type === "graphical_abstract") supported = true;
+    if (obj(tpl) && tpl.category === "diagram" && typeof value === "string" &&
+        /^tpl-diagram-/.test(value)) supported = TEMPLATE_IDS[value] !== undefined;
     return { supported: supported, mode: "raw_parameters_only", requires_data: false,
       requires: supported ? "apply_schematic.contract" : null,
-      reason: supported ? "原生可编辑矢量；仅原始 nodes/relations/sources，不做数据自动关联，合成示例不代表论文" :
-        "没有保守的通用实体关系映射，保持 unsupported，不把占位预览称为自动支持" };
+      reason: supported ? "可编辑的矢量图；只按你提供的节点、关系、来源绘制，不会自动关联数据；示例不代表论文" :
+        "没有可用的通用实体关系模板，暂不能生成；占位预览不等于已支持" };
   }
   function templateCapability(tpl) {
     var verdict = supportsTemplate(tpl), supported = verdict.supported;
@@ -953,6 +2273,17 @@
       candidates.push(compactPolyline([portStart, { x: channel, y: portStart.y },
         { x: channel, y: portEnd.y }, portEnd]));
     });
+    // R9-D：中点肘形候选——竖-横-竖 / 横-竖-横，覆盖无障碍也需拐弯的
+    // 阶段/容器/树形布局（同列对齐时 compactPolyline 自动退化为直线）。
+    var midY = (ca.y + cb.y) / 2, midX = (ca.x + cb.x) / 2;
+    if (Math.abs(midY - ca.y) > LAYOUT_EPS_MM || Math.abs(midY - cb.y) > LAYOUT_EPS_MM) {
+      candidates.push(compactPolyline([portStart, { x: portStart.x, y: midY },
+        { x: portEnd.x, y: midY }, portEnd]));
+    }
+    if (Math.abs(midX - ca.x) > LAYOUT_EPS_MM || Math.abs(midX - cb.x) > LAYOUT_EPS_MM) {
+      candidates.push(compactPolyline([portStart, { x: midX, y: portStart.y },
+        { x: midX, y: portEnd.y }, portEnd]));
+    }
     candidates = candidates.filter(function (points) { return pathIsClear(points, obstacles); });
     candidates.sort(function (p, q) {
       var difference = pathLength(p) - pathLength(q);
@@ -993,24 +2324,30 @@
     }).concat(connector).sort(function (a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; });
     var index = peers.indexOf(connector), count = peers.length, fraction;
     var sideLength = side === "left" || side === "right" ? box.h : box.w;
+    // R10 修复：端口在边上的顺序按对端节点中心沿边方向的投影排序，
+    // 使同侧扇出的连线端口方位与目标方位一致，避免弧线/折线交叉
+    // （loop 顶部两条弧线互相穿过即由此引起）。
+    var otherEndpointName = endpoint === "source" ? "target" : "source";
+    var centers = peers.map(function (peer) {
+      var ref = peer.relation[otherEndpointName];
+      var peerNode = doc.elements.filter(function (el) {
+        return el && el.type === "group" && (el.id === ref || el.diagramNodeId === ref) &&
+          (el.diagramId || el.diagram_id) === diagramId;
+      })[0];
+      var center = boxCenter(worldNodeBox(doc, peerNode));
+      return side === "left" || side === "right" ? center.y : center.x;
+    });
+    var rank = peers.map(function (p, i) { return i; })
+      .sort(function (a, b) { return centers[a] - centers[b] || a - b; })
+      .indexOf(index);
     if (count === 2) {
-      fraction = index === 0 ? 0.25 : 0.75;
-      var otherEndpointName = endpoint === "source" ? "target" : "source";
-      var centers = peers.map(function (peer) {
-        var ref = peer.relation[otherEndpointName];
-        var peerNode = doc.elements.filter(function (el) {
-          return el && el.type === "group" && (el.id === ref || el.diagramNodeId === ref) &&
-            (el.diagramId || el.diagram_id) === diagramId;
-        })[0];
-        var center = boxCenter(worldNodeBox(doc, peerNode));
-        return side === "left" || side === "right" ? center.y : center.x;
-      });
+      fraction = rank === 0 ? 0.25 : 0.75;
       var mean = (centers[0] + centers[1]) / 2;
       fraction += Math.max(-0.125, Math.min(0.125, 0.125 * (centers[index] - mean) / Math.max(sideLength, LAYOUT_EPS_MM)));
     } else if (count === 1) fraction = 0.5;
     else {
       var margin = Math.max(0.1, Math.min(0.25, 2 / Math.max(sideLength, LAYOUT_EPS_MM)));
-      fraction = margin + (1 - 2 * margin) * index / Math.max(1, count - 1);
+      fraction = margin + (1 - 2 * margin) * rank / Math.max(1, count - 1);
     }
     fraction = Math.max(0, Math.min(1, fraction));
     var ids = peers.map(function (peer) { return peer.id; });
@@ -1048,12 +2385,13 @@
     var points = [start, end], pathType = bend ? "quadratic" : "straight", routeResolved = true;
     if (bend) {
       points = [start, middle, end];
-    } else if (rel.kind !== "include" && !pathIsClear(points, obstacles)) {
+    } else if (rel.kind !== "include" &&
+        (connector.orthogonal_route === true || !pathIsClear(points, obstacles))) {
       var routed = orthogonalRoute(a, b, obstacles, start, end);
       if (routed) {
         points = routed; pathType = "orthogonal"; middle = polylineMidpoint(points);
         start = points[0]; end = points[points.length - 1];
-      } else routeResolved = false;
+      } else if (!pathIsClear(points, obstacles)) routeResolved = false;
     }
     if (!points.length || points.some(function (point) { return !point || !finite(point.x) || !finite(point.y); }) ||
         !finite(middle.x) || !finite(middle.y)) throw new Error("INVALID_CONNECTOR_POINTS: " + connector.id);
@@ -1390,9 +2728,95 @@
     return audit;
   }
 
+  // R9：文字生成解析。语法：
+  //   A -> B -> C        建节点与连线（同标签复用节点）
+  //   A -> B : 是        连线标签（链式时作用于最后一条边）
+  //   ## 阶段名          开始一个 group，之后节点归入该组
+  //   标签以 ?/？ 结尾   判定节点（菱形）
+  //   (开始)             括号包裹 → terminal 起止形
+  // 返回 {ok, input, errors:[{line,message}]}；input 可直接喂 normalize/build。
+  function parseText(src, opts) {
+    opts = opts || {};
+    var errors = [];
+    var nodes = [], relations = [], groups = [];
+    var nodeByLabel = Object.create(null), seq = 0, relSeq = 0;
+    var currentGroup = null;
+    function nid() { return "n" + (++seq); }
+    function rid() { return "r" + (++relSeq); }
+    function ensureNode(rawLabel, lineNo) {
+      var label = String(rawLabel).trim();
+      var tm = /^[（(]([^()（）]*)[)）]$/.exec(label);
+      var terminal = !!tm;
+      var inner = terminal ? tm[1].trim() : label;
+      var decision = /[?？]$/.test(inner);
+      if (decision) inner = inner.replace(/[?？]\s*$/, "").trim();
+      // 形状语义参与去重键：(开始) 与 开始、判断? 与 判断 是不同节点
+      var key = (terminal ? "T:" : "") + (decision ? "D:" : "") + inner;
+      if (nodeByLabel[key]) return nodeByLabel[key];
+      var n = { id: nid(), label: inner || label, role: "method", shape: "box", evidence: [] };
+      if (decision) { n.kind = "decision"; n.shape = "diamond"; }
+      if (terminal) { n.kind = "terminal"; n.shape = "terminal"; }
+      if (currentGroup) n.group = currentGroup;
+      nodeByLabel[key] = n.id;
+      nodes.push(n);
+      return n.id;
+    }
+    String(src || "").split(/\r\n|\n|\r/).forEach(function (raw, li) {
+      var line = raw.trim();
+      var ln = li + 1;
+      if (!line || line.indexOf("//") === 0) return;
+      var gm = /^##\s*(.+)$/.exec(line);
+      if (gm) {
+        var gname = gm[1].trim();
+        if (!gname) { errors.push({ line: ln, message: "## 后需要阶段名" }); return; }
+        currentGroup = "g" + (groups.length + 1);
+        groups.push({ id: currentGroup, label: gname });
+        return;
+      }
+      if (line.indexOf("->") < 0) {
+        // 独立成行的 (标签) 声明一个起止节点（不产生连线）
+        if (/^[（(][^()（）]*[)）]$/.test(line)) { ensureNode(line, ln); return; }
+        errors.push({ line: ln, message: "无法识别：每行应为「A -> B」连线、「## 阶段名」分组或「(起止节点)」" });
+        return;
+      }
+      var segs = line.split("->");
+      var edgeLabel = null;
+      var last = segs[segs.length - 1];
+      var cm = /^(.*?)\s*[:：]\s*(\S.*?)\s*$/.exec(last);
+      if (cm && cm[2]) { edgeLabel = cm[2].trim(); segs[segs.length - 1] = cm[1]; }
+      var ids = [];
+      for (var si = 0; si < segs.length; si++) {
+        var lab = segs[si].trim();
+        if (!lab) { errors.push({ line: ln, message: "-> 两侧缺少节点名" }); return; }
+        ids.push(ensureNode(lab, ln));
+      }
+      for (var ei = 1; ei < ids.length; ei++) {
+        var rel = { id: rid(), source: ids[ei - 1], target: ids[ei],
+          kind: "sequence", direction: "forward" };
+        if (ei === ids.length - 1 && edgeLabel) rel.label = edgeLabel;
+        relations.push(rel);
+      }
+    });
+    var input = {
+      id: opts.id || "text-diagram",
+      template_id: opts.template_id || opts.template || "flow",
+      nodes: nodes, relations: relations,
+      sources: [{ id: "text-input", locator: "用文字生成（用户输入的结构化描述）" }],
+      uncertainties: ["文字生成的节点/连线为结构占位，不是已核实的论文或实验结论；请人工确认内容。"]
+    };
+    if (groups.length) input.groups = groups;
+    if (opts.layout) input.layout = opts.layout;
+    if (opts.theme) input.theme = opts.theme;
+    if (opts.canvas) input.canvas = opts.canvas;
+    if (!nodes.length) errors.push({ line: 0, message: "没有解析到任何节点" });
+    return { ok: errors.length === 0, input: input, errors: errors };
+  }
+
   global.FigDiagram = {
     SCHEMA_VERSION: VERSION, ROLES: ROLES.slice(), SHAPES: SHAPES.slice(), NODE_KINDS: KINDS.slice(),
     RELATION_KINDS: RELATIONS.slice(), DIRECTIONS: DIRECTIONS.slice(), TEMPLATES: TEMPLATES.slice(),
+    LAYOUT_MODES: LAYOUT_MODES.slice(), parseText: parseText,
+    diagramTheme: diagramTheme, BUILTIN_THEMES: clone(BUILTIN_THEMES),
     CONNECTOR_CONTRACT: clone(CONNECTOR_CONTRACT), build: build, supportsTemplate: supportsTemplate,
     templateCapability: templateCapability, previewSVG: previewSVG, example: example, validate: validateSpec, validateSpec: validateSpec,
     stableStringify: stable, sha256: sha256, hash: hash, sameContract: same,

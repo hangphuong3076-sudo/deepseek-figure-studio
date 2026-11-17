@@ -237,7 +237,30 @@ global.document = {body: new Element('body'), createElement: tag => new Element(
   createTextNode: text => { const node = new Element('#text'); node.textContent = text; return node; },
   addEventListener() {}, getElementById() { return null; }};
 const modals = [];
-global.Ui = {modal(options) { modals.push(options); return {close() {}}; }, toast() {}};
+function mockUiH(tag, attrs, children) {
+  var el = document.createElement(tag);
+  if (attrs) Object.keys(attrs).forEach(function (key) {
+    var value = attrs[key];
+    if (value === null || value === undefined || value === false) return;
+    if (key === "class" || key === "className") { el.className = String(value); el.setAttribute("class", String(value)); }
+    else if (key === "text") el.textContent = String(value);
+    else if (key === "html") el.innerHTML = String(value);
+    else if (key === "style" && value && typeof value === "object") {
+      var st = el.style || (el.style = {});
+      Object.keys(value).forEach(function (prop) { var pv = value[prop]; if (pv === null || pv === undefined) return; st[prop] = pv; });
+    } else if (key.indexOf("on") === 0 && typeof value === "function") { el.addEventListener(key.slice(2).toLowerCase(), value); }
+    else if (value === true) { el.setAttribute(key, ""); } else { el.setAttribute(key, String(value)); }
+  });
+  if (children != null) {
+    var list = Array.isArray(children) ? children : [children];
+    list.forEach(function (child) {
+      if (child === null || child === undefined || child === false) return;
+      el.appendChild(typeof child === "string" || typeof child === "number" ? document.createTextNode(String(child)) : child);
+    });
+  }
+  return el;
+}
+global.Ui = {h: mockUiH, modal(options) { modals.push(options); return {close() {}}; }, toast() {}};
 global.App = {doc: FigDoc.create({title: 'synthetic node raw'}), commits: 0,
   commit(ops, context) { const result = FigOps.applyAll(this.doc, ops,
     {label: context.label, source: context.source, ts: '2026-01-01T00:00:00Z'});

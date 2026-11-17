@@ -27,7 +27,8 @@
     "z_order", "add_anchor", "remove_anchor", "update_anchor",
     "apply_template", "apply_journal", "recolor", "panel_layout",
     "set_canvas", "note", "set_scientific_contract", "set_chart_properties",
-    "apply_schematic", "layout_schematic", "set_chart_data"
+    "apply_schematic", "layout_schematic", "apply_diagram_text",
+    "set_chart_data", "set_doc_title", "apply_chart_style"
   ];
 
   var MAX_HISTORY = 200;
@@ -42,7 +43,8 @@
   // Ops that address existing elements through op.targets
   var TARGET_OPS = ["move", "resize", "rotate", "set_text", "set_style",
     "set_color", "delete", "group", "ungroup", "align", "distribute",
-    "z_order", "panel_layout", "set_chart_properties", "set_chart_data"];
+    "z_order", "panel_layout", "set_chart_properties", "set_chart_data",
+    "apply_chart_style"];
 
   // ------------------------------------------------------------------
   // set_chart_properties — chartSpec 白名单补丁（表征参数编辑的唯一入口）
@@ -50,7 +52,8 @@
   // chartType 与 data.inline（原始数据永不被本操作改写）。
   // ------------------------------------------------------------------
 
-  var CP_AXES_KEYS = ["xLabel", "yLabel", "xScale", "yScale", "gridlines"];
+  var CP_AXES_KEYS = ["xLabel", "yLabel", "xScale", "yScale", "gridlines", "y2",
+    "xMin", "xMax", "yMin", "yMax"];
   var CP_AXES_SCALES = ["linear", "log"]; // 与 figure-document.schema.json 一致
   var CP_CHAR_KEYS = ["technique", "x_reverse", "x_scale", "x_label", "y_label",
     "curves", "fit_model", "fit_source", "peak_annotations", "normalize",
@@ -66,16 +69,45 @@
   // 只允许样式字段；null 语义＝删除该级覆盖（恢复继承）；
   // series/peaks 的键为稳定语义键/峰 id，不校验其存在性（数据替换后
   // 暂不匹配的覆盖保留，不转移）。
-  var CP_PRES_KEYS = ["version", "axes", "legend", "series", "peaks"];
+  var CP_PRES_KEYS = ["version", "axes", "legend", "series", "peaks", "plot", "points"];
   var CP_PRES_TEXT_KEYS = ["fontSizePt", "color", "fontWeight"];
   var CP_PRES_AXIS_KEYS = ["x", "y"];
   var CP_PRES_AXIS_PART_KEYS = ["title", "tick"];
-  var CP_PRES_LEGEND_KEYS = ["position", "fontSizePt", "color"];
-  var CP_PRES_LEGEND_POS = ["none", "right", "top", "bottom"];
-  var CP_PRES_SERIES_KEYS = ["stroke", "strokeWidthPt", "dash", "marker"];
-  var CP_PRES_MARKERS = ["none", "circle"];
+  var CP_PRES_LEGEND_KEYS = ["position", "fontSizePt", "color", "frame"];
+  var CP_PRES_LEGEND_POS = ["none", "right", "top", "bottom",
+    "inside-tr", "inside-tl", "inside-br", "inside-bl", "inside-best", "inline"];
+  var CP_PRES_SERIES_KEYS = ["stroke", "strokeWidthPt", "dash", "marker", "markerSizePt", "opacity", "hatch", "markerFill"];
+  var CP_PRES_HATCH = ["/", "\\", "x", ".", "-", "|"];
+  var CP_PRES_MARKERS = ["none", "circle", "square", "triangle", "diamond"];
   var CP_PRES_PEAK_KEYS = ["color", "fontSizePt"];
-  var CP_PRES_KEY_PATTERN = /^[A-Za-z0-9_|:.\-]{1,120}$/;
+  var CP_PRES_PLOT_KEYS = ["frame", "tickDirection", "axisWidthPt", "tickLengthPt",
+    "markerSizePt", "lineWidthPt", "markerFill", "markerCycle", "dashCycle",
+    "background", "gridColor", "seriesColors", "componentFill", "errorStyle"];
+  var CP_PRES_ERROR_STYLE = ["bars", "band"];
+  var CP_PRES_PLOT_FRAME = ["open", "box"];
+  var CP_PRES_PLOT_TICKDIR = ["out", "in"];
+  var CP_PRES_MARKER_FILL = ["solid", "hollow"];
+  var CP_PRES_DASH_CYCLE = ["solid", "dash", "dot", "dashdot"];
+  // R5：apply_chart_style 内联 style token 顶层允许键（styles.json schema）
+  var CS_TOKEN_KEYS = ["id", "name", "tags", "description", "refs",
+    "font", "palette", "plot", "markers", "dashes", "legend", "grid", "background"];
+  var CS_FONT_KEYS = ["family", "basePt", "tickPt", "titleWeight", "tickWeight"];
+  var CS_WEIGHT = ["normal", "bold"];
+  var CP_PRES_POINT_KEYS = ["fill", "sizePt", "opacity", "marker", "stroke", "strokeWidthPt"];
+  var CP_PRES_POINT_MARKERS = ["circle", "square", "triangle", "diamond"];
+  var CP_PRES_POINTS_MAX = 2000;
+  // 稳定键/标记键统一规则：1–200 字符、无控制字符、不撞原型键。
+  // 允许中文与空格（系列键含用户列名/分组值）。
+  function isPresKey(k) {
+    if (typeof k !== "string" || k.length < 1 || k.length > 200) return false;
+    if (k === "__proto__" || k === "constructor" || k === "prototype") return false;
+    for (var i = 0; i < k.length; i++) {
+      var c = k.charCodeAt(i);
+      if (c <= 0x1f || c === 0x7f) return false;
+    }
+    return true;
+  }
+  var CP_PRES_KEY_PATTERN = isPresKey;
 
   var ID_PATTERN = /^[A-Za-z0-9_.:-]+$/;
 
@@ -1423,8 +1455,19 @@
           (typeof op.options !== "object" || Array.isArray(op.options))) {
         throw new Error("apply_template.options 必须是对象或 null");
       }
+      // H2：op.options 未给 canvas 且模板非 diagram 类时，按当前文档画布排版；
+      // 不改写 op.options 本身，物化结果照旧存 op.materialized_template，重放不受影响。
+      var builtOpts = op.options || {};
+      if (builtOpts.canvas == null && tpl.category !== "diagram" &&
+          doc && doc.canvas &&
+          typeof doc.canvas.width_mm === "number" && doc.canvas.width_mm > 0 &&
+          typeof doc.canvas.height_mm === "number" && doc.canvas.height_mm > 0) {
+        builtOpts = Object.assign({}, builtOpts, {
+          canvas: { width_mm: doc.canvas.width_mm, height_mm: doc.canvas.height_mm }
+        });
+      }
       var built = GP.templateFromStats(op.template_id, op.data == null ? null : op.data,
-        op.options || {});
+        builtOpts);
       op.materialized_template = {
         template_id: tpl.id,
         template_name: tpl.name,
@@ -1596,15 +1639,102 @@
     return true;
   }
 
+  // panelLayout.areas：与 panel.children 顺序对齐的跨格声明
+  // [{col,row,colSpan,rowSpan}]（0 基、整数、cols×rows 界内、互不重叠）。
+  // 长度可少于 children：其余子元素按行主序填剩余空位；也可多于
+  // children（多余声明被忽略）。此处做防御性归一化——非法项直接跳过，
+  // 严格校验由 validate 的 panelAreasError 负责（ops 层拒绝）。
+  function normalizePanelAreas(raw, cols, rows) {
+    if (!Array.isArray(raw)) return [];
+    var out = [];
+    var used = {};
+    for (var i = 0; i < raw.length; i++) {
+      var a = raw[i];
+      if (!a || typeof a !== "object" || Array.isArray(a)) continue;
+      var col = a.col, row = a.row, cs = a.colSpan, rs = a.rowSpan;
+      if (typeof col !== "number" || typeof row !== "number" ||
+          typeof cs !== "number" || typeof rs !== "number" ||
+          !isFinite(col) || !isFinite(row) || !isFinite(cs) || !isFinite(rs)) continue;
+      col = Math.floor(col); row = Math.floor(row);
+      cs = Math.floor(cs); rs = Math.floor(rs);
+      if (col < 0 || row < 0 || cs < 1 || rs < 1) continue;
+      if (col + cs > cols || row + rs > rows) continue;
+      var clash = false;
+      for (var r = row; r < row + rs && !clash; r++) {
+        for (var c = col; c < col + cs && !clash; c++) {
+          if (used[c + "," + r]) clash = true;
+        }
+      }
+      if (clash) continue;
+      for (var r2 = row; r2 < row + rs; r2++) {
+        for (var c2 = col; c2 < col + cs; c2++) used[c2 + "," + r2] = true;
+      }
+      out.push({ col: col, row: row, colSpan: cs, rowSpan: rs });
+    }
+    return out;
+  }
+
+  // 校验 panel.areas：返回 null 表示合法，否则返回中文错误串。
+  function panelAreasError(areas, cols, rows) {
+    if (areas === undefined || areas === null) return null;
+    if (!Array.isArray(areas)) return "panel.areas 必须是数组";
+    var used = {};
+    for (var i = 0; i < areas.length; i++) {
+      var a = areas[i];
+      var tag = "panel.areas[" + i + "]";
+      if (!a || typeof a !== "object" || Array.isArray(a)) {
+        return tag + " 必须是 {col,row,colSpan,rowSpan} 对象";
+      }
+      var keys = ["col", "row", "colSpan", "rowSpan"];
+      for (var k = 0; k < keys.length; k++) {
+        var v = a[keys[k]];
+        if (typeof v !== "number" || !isFinite(v) || Math.floor(v) !== v) {
+          return tag + "." + keys[k] + " 必须是整数";
+        }
+      }
+      if (a.col < 0 || a.row < 0 || a.colSpan < 1 || a.rowSpan < 1) {
+        return tag + " 的 col/row 须 ≥0，colSpan/rowSpan 须 ≥1";
+      }
+      if (a.col + a.colSpan > cols || a.row + a.rowSpan > rows) {
+        return tag + " 超出 " + cols + "×" + rows + " 网格";
+      }
+      for (var r = a.row; r < a.row + a.rowSpan; r++) {
+        for (var c = a.col; c < a.col + a.colSpan; c++) {
+          var key = c + "," + r;
+          if (used[key]) return tag + " 与先前区域重叠（" + key + "）";
+          used[key] = true;
+        }
+      }
+    }
+    return null;
+  }
+
   function opPanelLayout(doc, op) {
     var ids = resolveTargets(doc, op.targets);
     if (!ids.length) return false;
-    var patch = op.panel || {};
+    var patch = Object.assign({}, op.panel || {});
+    // order 是操作级字段（调整 children 顺序），不写进 panelLayout。
+    var order = Array.isArray(patch.order) ? patch.order : null;
+    delete patch.order;
     var any = false;
     for (var i = 0; i < ids.length; i++) {
       var el = getEl(doc, ids[i]);
       if (!el || el.type !== "panel") continue;
       el.panelLayout = Object.assign({}, el.panelLayout || {}, patch);
+      if (order) {
+        var kids = Array.isArray(el.children) ? el.children.slice() : [];
+        var valid = {};
+        kids.forEach(function (cid) { valid[cid] = true; });
+        var head = [];
+        var seen = {};
+        order.forEach(function (cid) {
+          if (typeof cid === "string" && valid[cid] && !seen[cid]) {
+            seen[cid] = true;
+            head.push(cid);
+          }
+        });
+        el.children = head.concat(kids.filter(function (cid) { return !seen[cid]; }));
+      }
       relayoutPanelChildren(doc, el);
       any = true;
     }
@@ -1626,21 +1756,69 @@
     var cellW = Math.max(0.1, (innerW - (cols - 1) * gap) / cols);
     var cellH = Math.max(0.1, (innerH - (rows - 1) * gap) / rows);
     var kids = Array.isArray(panel.children) ? panel.children : [];
+    // areas 跨格布局：声明过的子元素占据 {col,row,colSpan,rowSpan} 区域
+    // （宽 = colSpan 格 + 之间 gap），未声明的按行主序填剩余空位。
+    var areas = normalizePanelAreas(layout.areas, cols, rows);
+    var occupied = {};
+    function cellKey(c, r) { return c + "," + r; }
+    function markCells(a) {
+      for (var r = a.row; r < a.row + a.rowSpan; r++) {
+        for (var c = a.col; c < a.col + a.colSpan; c++) occupied[cellKey(c, r)] = true;
+      }
+    }
+    function cellsFree(a) {
+      for (var r = a.row; r < a.row + a.rowSpan; r++) {
+        for (var c = a.col; c < a.col + a.colSpan; c++) {
+          if (occupied[cellKey(c, r)]) return false;
+        }
+      }
+      return true;
+    }
+    function firstFreeCell() {
+      for (var r = 0; r < rows; r++) {
+        for (var c = 0; c < cols; c++) {
+          if (!occupied[cellKey(c, r)]) return { col: c, row: r };
+        }
+      }
+      return { col: 0, row: 0 };
+    }
+    var placements = new Array(kids.length);
+    var ai = 0;
     for (var i = 0; i < kids.length; i++) {
-      var child = getEl(doc, kids[i]);
+      var a = null;
+      while (ai < areas.length) {
+        if (cellsFree(areas[ai])) { a = areas[ai]; ai++; break; }
+        ai++;
+      }
+      if (a) {
+        markCells(a);
+        placements[i] = { col: a.col, row: a.row,
+          colSpan: a.colSpan, rowSpan: a.rowSpan };
+      } else {
+        var fc = firstFreeCell();
+        occupied[cellKey(fc.col, fc.row)] = true;
+        placements[i] = { col: fc.col, row: fc.row, colSpan: 1, rowSpan: 1 };
+      }
+    }
+    for (var j = 0; j < kids.length; j++) {
+      var child = getEl(doc, kids[j]);
       if (!child) continue;
-      var col = i % cols, row = Math.floor(i / cols);
+      var p = placements[j];
+      var px = p.col * (cellW + gap);
+      var pw = p.colSpan * cellW + (p.colSpan - 1) * gap;
+      var py = p.row * (cellH + gap);
+      var ph = p.rowSpan * cellH + (p.rowSpan - 1) * gap;
       var ct = child.transform || (child.transform = { x: 0, y: 0, w: 0, h: 0 });
       if (child.style && child.style.panelRelative === true) {
-        ct.x = (col * (cellW + gap)) / innerW;
-        ct.y = (row * (cellH + gap)) / innerH;
-        ct.w = cellW / innerW;
-        ct.h = cellH / innerH;
+        ct.x = px / innerW;
+        ct.y = py / innerH;
+        ct.w = pw / innerW;
+        ct.h = ph / innerH;
       } else {
-        ct.x = t.x + pad + col * (cellW + gap);
-        ct.y = t.y + pad + row * (cellH + gap);
-        ct.w = cellW;
-        ct.h = cellH;
+        ct.x = t.x + pad + px;
+        ct.y = t.y + pad + py;
+        ct.w = pw;
+        ct.h = ph;
       }
     }
   }
@@ -1671,6 +1849,17 @@
       action: "note",
       detail: text || ""
     });
+    return true;
+  }
+
+  // R4：画布标题。写 doc.title（trim 后 1–120 字符），值不变时 no-op。
+  function opSetDocTitle(doc, op) {
+    var title = typeof op.title === "string" ? op.title.trim() : "";
+    if (!title || title.length > 120) {
+      throw new Error("set_doc_title 需要 1–120 字符的非空标题");
+    }
+    if (doc.title === title) return false;
+    doc.title = title;
     return true;
   }
 
@@ -1749,6 +1938,219 @@
     return next;
   }
 
+  // R4-HB：图表右轴（axes.y2）的系列名清单——宽表=ys 列名；长表=分组/颜色分组值
+  function chartY2SeriesNames(cel) {
+    var chart = (cel && cel.chart) || {};
+    var type = chart.chartType;
+    var mapping = chart.mapping || {};
+    var inline = chart.data && chart.data.inline;
+    var cols = (inline && Array.isArray(inline.columns)) ? inline.columns : [];
+    var rows = (inline && Array.isArray(inline.rows)) ? inline.rows : [];
+    if (type !== "line_multi" && type !== "scatter") return [];
+    var ys = Array.isArray(mapping.ys)
+      ? mapping.ys.filter(function (n) { return typeof n === "string" && n !== ""; }) : null;
+    if (ys && ys.length >= 2) return ys.slice();
+    var groupCol = type === "line_multi" ? mapping.group : mapping.color;
+    if (typeof groupCol !== "string" || groupCol === "") return [];
+    var at = cols.indexOf(groupCol);
+    if (at < 0) return [];
+    var seen = {}, vals = [];
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      if (!Array.isArray(row)) continue;
+      var v = row[at];
+      if (v === null || v === undefined || v === "") continue;
+      v = String(v);
+      if (!seen[v]) { seen[v] = true; vals.push(v); }
+    }
+    return vals;
+  }
+
+  function validateChartY2(cel, y2val, errors) {
+    var chart = (cel && cel.chart) || {};
+    var type = chart.chartType;
+    if (type !== "line_multi" && type !== "scatter") {
+      errors.push("目标 " + cel.id + " 的图表类型不支持右轴（仅 line_multi/scatter）");
+      return;
+    }
+    var names = chartY2SeriesNames(cel);
+    var seen = {}, rightCount = 0;
+    for (var i = 0; i < y2val.series.length; i++) {
+      var n = y2val.series[i];
+      if (typeof n !== "string" || n === "") {
+        errors.push("axes.y2.series 必须是非空字符串");
+        return;
+      }
+      if (seen[n]) {
+        errors.push("axes.y2.series 含重复系列名：" + n);
+        return;
+      }
+      seen[n] = true;
+      if (names.indexOf(n) < 0) {
+        errors.push("目标 " + cel.id + " 的 axes.y2.series 引用了不存在的系列：「" + n + "」");
+        return;
+      }
+      rightCount++;
+    }
+    if (names.length && rightCount >= names.length) {
+      errors.push("目标 " + cel.id + " 的 axes.y2 不能把所有系列都放到右轴（至少保留 1 个在左轴）");
+      return;
+    }
+    if (y2val.min != null && y2val.max != null && !(y2val.min < y2val.max)) {
+      errors.push("axes.y2.min 必须小于 axes.y2.max");
+    }
+  }
+
+  // R6：chart 级标注数组校验。references≤8组/组≤200位；bands≤20；
+  // significance≤30；letters 为 {键: 短字符串}。数值一律用户填写，
+  // 渲染器不计算不推断。
+  function isNumOrNull(v) { return v === null || (typeof v === "number" && isFinite(v)); }
+  function validateChartExtras(cp, errors) {
+    if (cp.references !== undefined && cp.references !== null) {
+      var refs = cp.references;
+      if (!Array.isArray(refs) || refs.length > 8) {
+        errors.push("references 必须是 ≤8 组的数组");
+      } else {
+        refs.forEach(function (r, i) {
+          var w = "references[" + i + "]";
+          if (!r || typeof r !== "object" || Array.isArray(r)) { errors.push(w + " 必须是对象"); return; }
+          if (typeof r.label !== "string" || !r.label) errors.push(w + ".label 必须是非空字符串");
+          if (r.source !== undefined && r.source !== null && typeof r.source !== "string") errors.push(w + ".source 必须是字符串");
+          if (r.color !== undefined && r.color !== null && !isHexColor(r.color)) errors.push(w + ".color 必须是 #hex");
+          if (["sticks", "lines"].indexOf(r.style) < 0) errors.push(w + ".style 必须是 sticks/lines");
+          if (!Array.isArray(r.positions) || !r.positions.length || r.positions.length > 200 ||
+              r.positions.some(function (p) { return typeof p !== "number" || !isFinite(p); })) {
+            errors.push(w + ".positions 必须是 1–200 个数字的数组");
+          }
+          if (r.heights !== undefined && r.heights !== null) {
+            if (!Array.isArray(r.heights) || r.heights.length !== (r.positions || []).length ||
+                r.heights.some(function (h) { return typeof h !== "number" || !(h >= 0 && h <= 1); })) {
+              errors.push(w + ".heights 长度须等于 positions 且每项为 0–1 的数字");
+            }
+          }
+        });
+      }
+    }
+    if (cp.bands !== undefined && cp.bands !== null) {
+      var bands = cp.bands;
+      if (!Array.isArray(bands) || bands.length > 20) {
+        errors.push("bands 必须是 ≤20 项的数组");
+      } else {
+        bands.forEach(function (b, i) {
+          var w = "bands[" + i + "]";
+          if (!b || typeof b !== "object" || Array.isArray(b)) { errors.push(w + " 必须是对象"); return; }
+          if (typeof b.x0 !== "number" || !isFinite(b.x0) || typeof b.x1 !== "number" || !isFinite(b.x1)) {
+            errors.push(w + " 的 x0/x1 必须是数字");
+          }
+          if (b.color !== undefined && b.color !== null && !isHexColor(b.color)) errors.push(w + ".color 必须是 #hex");
+          if (b.opacity !== undefined && b.opacity !== null &&
+              (typeof b.opacity !== "number" || !(b.opacity >= 0 && b.opacity <= 1))) {
+            errors.push(w + ".opacity 必须是 0–1 的数字");
+          }
+          if (b.label !== undefined && b.label !== null && typeof b.label !== "string") errors.push(w + ".label 必须是字符串");
+        });
+      }
+    }
+    if (cp.significance !== undefined && cp.significance !== null) {
+      var sigs = cp.significance;
+      if (!Array.isArray(sigs) || sigs.length > 30) {
+        errors.push("significance 必须是 ≤30 项的数组");
+      } else {
+        sigs.forEach(function (s, i) {
+          var w = "significance[" + i + "]";
+          if (!s || typeof s !== "object" || Array.isArray(s)) { errors.push(w + " 必须是对象"); return; }
+          if (typeof s.a !== "string" || !s.a) errors.push(w + ".a 必须是非空类别名");
+          if (typeof s.b !== "string" || !s.b) errors.push(w + ".b 必须是非空类别名");
+          if (typeof s.label !== "string" || !s.label) errors.push(w + ".label 必须是非空字符串（显著性符号由用户填写）");
+          if (s.group !== undefined && s.group !== null && typeof s.group !== "string") errors.push(w + ".group 必须是字符串");
+        });
+      }
+    }
+    if (cp.letters !== undefined && cp.letters !== null) {
+      var lt = cp.letters;
+      if (typeof lt !== "object" || Array.isArray(lt)) {
+        errors.push("letters 必须是 {类别或 类别|分组: 字母} 对象");
+      } else {
+        Object.keys(lt).forEach(function (k) {
+          if (typeof lt[k] !== "string" || !lt[k] || lt[k].length > 4) {
+            errors.push("letters[" + safeStr(k) + "] 必须是 1–4 字符的字母/标注");
+          }
+        });
+      }
+    }
+  }
+
+  // chart 级标注的类别存在性校验（significance/letters 需命中真实类别）
+  function chartCatLabels(cel) {
+    var chart = (cel && cel.chart) || {};
+    var inline = chart.data && chart.data.inline;
+    var cols = (inline && Array.isArray(inline.columns)) ? inline.columns : [];
+    var rows = (inline && Array.isArray(inline.rows)) ? inline.rows : [];
+    var mapping = chart.mapping || {};
+    var xi = cols.indexOf(mapping.x);
+    if (xi < 0) return { cats: [], groups: [] };
+    var seen = {}, cats = [], gseen = {}, groups = [];
+    var gi = mapping.group ? cols.indexOf(mapping.group) : -1;
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      if (!Array.isArray(row)) continue;
+      var v = row[xi];
+      if (v === null || v === undefined || v === "") continue;
+      v = String(v);
+      if (!seen[v]) { seen[v] = true; cats.push(v); }
+      if (gi >= 0) {
+        var g = row[gi];
+        if (g !== null && g !== undefined && g !== "") {
+          g = String(g);
+          if (!gseen[g]) { gseen[g] = true; groups.push(g); }
+        }
+      }
+    }
+    return { cats: cats, groups: groups };
+  }
+
+  function validateChartExtrasTargets(doc, op, errors) {
+    if (op.properties.significance === undefined && op.properties.letters === undefined &&
+        op.properties.references === undefined && op.properties.bands === undefined) return;
+    var ids;
+    try { ids = resolveTargets(doc, op.targets); } catch (e) { return; }
+    for (var i = 0; i < ids.length; i++) {
+      var cel = getEl(doc, ids[i]);
+      if (!cel || cel.type !== "chart") continue;
+      var type = cel.chart && cel.chart.chartType;
+      if (op.properties.significance !== undefined && op.properties.significance !== null) {
+        // violin/dotplot 当前无本地渲染器（unsupported-preview），但字段契约
+        // 与 bar/bar_grouped/box 一致，先放行避免模板数据被拒。
+        if (["bar", "bar_grouped", "box", "violin", "dotplot"].indexOf(type) < 0) {
+          errors.push("目标 " + cel.id + " 的图表类型不支持显著性括号（bar/bar_grouped/box/violin/dotplot）");
+        } else {
+          var lc = chartCatLabels(cel);
+          op.properties.significance.forEach(function (s, si) {
+            if (!s || typeof s !== "object") return;
+            if (lc.cats.indexOf(String(s.a)) < 0) errors.push("significance[" + si + "].a 类别不存在：「" + s.a + "」");
+            if (lc.cats.indexOf(String(s.b)) < 0) errors.push("significance[" + si + "].b 类别不存在：「" + s.b + "」");
+            if (s.group != null && lc.groups.length && lc.groups.indexOf(String(s.group)) < 0) {
+              errors.push("significance[" + si + "].group 分组值不存在：「" + s.group + "」");
+            }
+          });
+        }
+      }
+      if (op.properties.letters !== undefined && op.properties.letters !== null &&
+          typeof op.properties.letters === "object") {
+        var lc2 = chartCatLabels(cel);
+        Object.keys(op.properties.letters).forEach(function (k) {
+          var parts = String(k).split("|");
+          if (lc2.cats.indexOf(parts[0]) < 0) {
+            errors.push("letters 键的类别不存在：「" + parts[0] + "」");
+          } else if (parts[1] != null && lc2.groups.length &&
+                     lc2.groups.indexOf(parts[1]) < 0) {
+            errors.push("letters 键的分组值不存在：「" + parts[1] + "」");
+          }
+        });
+      }
+    }
+  }
+
   function opSetChartProperties(doc, op) {
     var ids = resolveTargets(doc, op.targets);
     if (!ids.length) return false;
@@ -1796,6 +2198,30 @@
           } else if (nextPres !== chart.presentation &&
               !deepEq(chart.presentation || {}, nextPres)) {
             chart.presentation = nextPres;
+            any = true;
+          }
+        }
+      }
+      // R6：chart 级标注（整组替换；null/[] 清除）
+      ["references", "bands", "significance"].forEach(function (k) {
+        if (props[k] === undefined) return;
+        var v = props[k];
+        if (v === null || (Array.isArray(v) && !v.length)) {
+          if (chart[k] !== undefined) { delete chart[k]; any = true; }
+        } else {
+          if (!deepEq(chart[k] || null, deepCopy(v))) {
+            chart[k] = deepCopy(v);
+            any = true;
+          }
+        }
+      });
+      if (props.letters !== undefined) {
+        var lv = props.letters;
+        if (lv === null || (typeof lv === "object" && !Array.isArray(lv) && !Object.keys(lv).length)) {
+          if (chart.letters !== undefined) { delete chart.letters; any = true; }
+        } else {
+          if (!deepEq(chart.letters || null, deepCopy(lv))) {
+            chart.letters = deepCopy(lv);
             any = true;
           }
         }
@@ -1874,8 +2300,200 @@
     doc.meta.diagrams[sid] = deepCopy(mat.diagram_meta);
   }
 
+  // R5：apply_chart_style — 把整套风格 token 落到每张目标图表。
+  // 替换式语义：风格拥有的键全部由 tokens 重建，tokens 未提供的键回到
+  // 渲染默认（不残留上一个风格的值）——先套 acs-bold 再套 nature-minimal
+  // 与直接套 nature-minimal 结果一致。一次提交内完成：paletteId/字体/
+  // plot/legend/grid + 系列覆盖重置 + styleRef；保留 points/peaks/轴标签
+  // 文本/y2 配置/数据与 mapping，以及用户自定义的颜色类覆盖
+  // （legend.color、axes.*.color、series.opacity、points、peaks）。
+  var CS_PLOT_TOKEN_KEYS = ["frame", "tickDirection", "axisWidthPt", "tickLengthPt",
+    "markerSizePt", "lineWidthPt", "markerFill", "markerCycle", "dashCycle",
+    "background", "gridColor"];
+
+  function csApplyTokensToChart(el, tokens, sid, sname) {
+    var chart = el.chart = el.chart || {};
+    el.style = el.style || {};
+    var font = (tokens.font && typeof tokens.font === "object") ? tokens.font : {};
+    var oldPres = (chart.presentation && typeof chart.presentation === "object" &&
+      !Array.isArray(chart.presentation)) ? chart.presentation : {};
+    var pres = JSON.parse(JSON.stringify(oldPres));
+    pres.version = 1;
+
+    // palette：tokens 未给 → 删除覆盖，回到默认调色板
+    if (typeof tokens.palette === "string" && tokens.palette) {
+      chart.paletteId = tokens.palette;
+    } else if (chart.paletteId !== undefined) {
+      delete chart.paletteId;
+    }
+
+    // 字体：family/basePt → 元素样式；tickPt → axes.tickLabelSizePt；
+    // title/tick 字号字重 → presentation.axes（title←basePt/titleWeight，
+    // tick←tickPt/tickWeight）；legend.fontSizePt←basePt
+    if (typeof font.family === "string" && font.family) el.style.fontFamily = font.family;
+    else if (el.style.fontFamily !== undefined) delete el.style.fontFamily;
+    if (typeof font.basePt === "number") el.style.fontSizePt = font.basePt;
+    else if (el.style.fontSizePt !== undefined) delete el.style.fontSizePt;
+    chart.axes = (chart.axes && typeof chart.axes === "object" && !Array.isArray(chart.axes))
+      ? chart.axes : {};
+    if (typeof font.tickPt === "number") chart.axes.tickLabelSizePt = font.tickPt;
+    else if (chart.axes.tickLabelSizePt !== undefined) delete chart.axes.tickLabelSizePt;
+
+    // 网格开关
+    if (tokens.grid && typeof tokens.grid === "object" &&
+        typeof tokens.grid.show === "boolean") {
+      chart.axes.gridlines = tokens.grid.show;
+    } else if (chart.axes.gridlines !== undefined) {
+      delete chart.axes.gridlines;
+    }
+
+    // presentation.plot：全部风格键由 tokens 重建（缺省 → 渲染默认）
+    var plotIn = {};
+    var sp = tokens.plot;
+    if (sp && typeof sp === "object") {
+      CS_PLOT_TOKEN_KEYS.forEach(function (k) {
+        if (sp[k] !== undefined) plotIn[k] = sp[k];
+      });
+    }
+    if (tokens.markers && typeof tokens.markers === "object") {
+      if (tokens.markers.fill === "solid" || tokens.markers.fill === "hollow") {
+        plotIn.markerFill = tokens.markers.fill;
+      }
+      if (Array.isArray(tokens.markers.cycle) && tokens.markers.cycle.length) {
+        plotIn.markerCycle = tokens.markers.cycle.slice();
+      }
+    }
+    if (Array.isArray(tokens.dashes) && tokens.dashes.length) {
+      plotIn.dashCycle = tokens.dashes.slice();
+    }
+    if (tokens.background !== undefined) plotIn.background = tokens.background;
+    if (tokens.grid && typeof tokens.grid === "object" && tokens.grid.color !== undefined) {
+      plotIn.gridColor = tokens.grid.color;
+    }
+    var newPlot = {};
+    CS_PLOT_TOKEN_KEYS.forEach(function (k) {
+      if (plotIn[k] !== undefined) {
+        newPlot[k] = Array.isArray(plotIn[k]) ? plotIn[k].slice() : plotIn[k];
+      }
+    });
+    if (Object.keys(newPlot).length) pres.plot = newPlot;
+    else if (pres.plot !== undefined) delete pres.plot;
+
+    // presentation.legend：position/frame/fontSizePt 由 tokens 重建；
+    // color 属用户自定义，保留
+    var legIn = (tokens.legend && typeof tokens.legend === "object") ? tokens.legend : {};
+    var oldLeg = (pres.legend && typeof pres.legend === "object" &&
+      !Array.isArray(pres.legend)) ? pres.legend : {};
+    var newLeg = {};
+    if (legIn.position !== undefined) newLeg.position = legIn.position;
+    if (legIn.frame !== undefined) newLeg.frame = legIn.frame === true;
+    if (typeof font.basePt === "number") newLeg.fontSizePt = font.basePt;
+    if (oldLeg.color !== undefined) newLeg.color = oldLeg.color;
+    if (Object.keys(newLeg).length) pres.legend = newLeg;
+    else if (pres.legend !== undefined) delete pres.legend;
+
+    // presentation.axes.{x,y}.{title,tick}：字号/字重由 tokens 重建；
+    // color 属用户自定义，保留
+    var oldAxesPres = (pres.axes && typeof pres.axes === "object" &&
+      !Array.isArray(pres.axes)) ? pres.axes : {};
+    var newAxesPres = {};
+    ["x", "y"].forEach(function (ax) {
+      var oldAx = (oldAxesPres[ax] && typeof oldAxesPres[ax] === "object")
+        ? oldAxesPres[ax] : {};
+      var newAx = {};
+      ["title", "tick"].forEach(function (part) {
+        var oldP = (oldAx[part] && typeof oldAx[part] === "object") ? oldAx[part] : {};
+        var newP = {};
+        if (oldP.color !== undefined) newP.color = oldP.color;
+        if (part === "title") {
+          if (typeof font.basePt === "number") newP.fontSizePt = font.basePt;
+          if (font.titleWeight === "bold" || font.titleWeight === "normal") {
+            newP.fontWeight = font.titleWeight;
+          }
+        } else {
+          if (typeof font.tickPt === "number") newP.fontSizePt = font.tickPt;
+          if (font.tickWeight === "bold" || font.tickWeight === "normal") {
+            newP.fontWeight = font.tickWeight;
+          }
+        }
+        if (Object.keys(newP).length) newAx[part] = newP;
+      });
+      if (Object.keys(newAx).length) newAxesPres[ax] = newAx;
+    });
+    if (Object.keys(newAxesPres).length) pres.axes = newAxesPres;
+    else if (pres.axes !== undefined) delete pres.axes;
+
+    // 系列级样式覆盖重置（stroke/strokeWidthPt/dash/marker/markerSizePt），
+    // 保留 opacity；逐点 points/peaks/轴标签/y2/数据不动
+    if (pres.series && typeof pres.series === "object" && !Array.isArray(pres.series)) {
+      var RESET_SERIES_KEYS = ["stroke", "strokeWidthPt", "dash", "marker", "markerSizePt"];
+      Object.keys(pres.series).forEach(function (key) {
+        var sv = pres.series[key];
+        if (!sv || typeof sv !== "object" || Array.isArray(sv)) return;
+        RESET_SERIES_KEYS.forEach(function (k) { delete sv[k]; });
+        if (!Object.keys(sv).length) delete pres.series[key];
+      });
+      if (!Object.keys(pres.series).length) delete pres.series;
+    }
+    // presentation 只剩 version（无任何覆盖）→ 移除整块
+    var presKeys = Object.keys(pres).filter(function (k) { return k !== "version"; });
+    if (presKeys.length) chart.presentation = pres;
+    else if (chart.presentation !== undefined) delete chart.presentation;
+    chart.styleRef = { id: sid, name: sname };
+    return true;
+  }
+
+  function opApplyChartStyle(doc, op) {
+    var ids = resolveTargets(doc, op.targets);
+    if (!ids.length) return false;
+    var tokens = null, sid = "custom", sname = "自定义风格";
+    if (op.style_id != null) {
+      var GP = global.FigPresets;
+      if (!GP || typeof GP.style !== "function") {
+        throw new Error("FigPresets 未加载，无法解析风格 " + safeStr(op.style_id));
+      }
+      var st = GP.style(op.style_id);
+      if (!st) throw new Error("风格不存在: " + safeStr(op.style_id));
+      tokens = st;
+      sid = st.id;
+      sname = typeof st.name === "string" && st.name ? st.name : st.id;
+    } else {
+      tokens = op.style;
+      sid = (typeof tokens.id === "string" && tokens.id) ? tokens.id : "custom";
+      sname = (typeof tokens.name === "string" && tokens.name) ? tokens.name : sid;
+    }
+    // palette 存在性在应用时检查（渲染 resolvePalette 对未知 id 直接抛错）
+    if (typeof tokens.palette === "string" && tokens.palette) {
+      var FP = global.FigPalette;
+      var palOk = false;
+      try {
+        palOk = !!(FP && typeof FP.colors === "function" && FP.colors(tokens.palette));
+      } catch (e) { palOk = false; }
+      if (!palOk) throw new Error("风格调色板不存在: " + safeStr(tokens.palette));
+    }
+    var any = false;
+    for (var i = 0; i < ids.length; i++) {
+      var el = getEl(doc, ids[i]);
+      if (!el || el.type !== "chart") continue;
+      csApplyTokensToChart(el, tokens, sid, sname);
+      any = true;
+    }
+    return any;
+  }
+
   function opApplySchematic(doc, op, ctx) {
-    var D = diagramModule(), normalized = D.normalize(schematicContract(op, doc)), auto = op.auto_layout === true;
+    var D = diagramModule();
+    if (op.op === "apply_diagram_text" && op.contract == null && typeof op.text === "string") {
+      var reparsed = D.parseText(op.text, { id: op.id, template_id: op.template_id || op.template,
+        layout: op.layout, theme: op.theme, canvas: op.canvas });
+      if (!reparsed.ok) {
+        throw new Error("文字生成解析失败：" + reparsed.errors.map(function (pe) {
+          return "第 " + pe.line + " 行 " + pe.message;
+        }).join("；"));
+      }
+      op.contract = reparsed.input;
+    }
+    var normalized = D.normalize(schematicContract(op, doc)), auto = op.auto_layout === true;
     op.contract = deepCopy(normalized);
     var existing = doc.meta && doc.meta.diagrams && doc.meta.diagrams[normalized.id];
     if (existing && !auto && D.sameContract(existing.contract || existing.spec, normalized)) return { doc: doc, changed: false };
@@ -2094,6 +2712,15 @@
       var mapping = el.chart.mapping || {};
       Object.keys(mapping).forEach(function (role) {
         var col = mapping[role];
+        // R4-HB：mapping.ys 是列名数组，逐列校验
+        if (role === "ys" && Array.isArray(col)) {
+          col.forEach(function (yc) {
+            if (typeof yc !== "string" || yc === "" || next.columns.indexOf(yc) < 0) {
+              errors.push("目标 " + id + " 的 mapping.ys 引用了新数据中不存在的列：" + String(yc));
+            }
+          });
+          return;
+        }
         if (col !== null && col !== undefined && col !== "" &&
             (typeof col !== "string" || next.columns.indexOf(col) < 0)) {
           errors.push("目标 " + id + " 的 mapping." + role + " 引用了新数据中不存在的列：" + String(col));
@@ -2229,8 +2856,11 @@
       case "set_scientific_contract": return { doc: work, changed: opSetScientificContract(work, op) };
       case "set_chart_properties": return { doc: work, changed: opSetChartProperties(work, op) };
       case "apply_schematic":
-      case "layout_schematic": return opApplySchematic(work, op, ctx);
+      case "layout_schematic":
+      case "apply_diagram_text": return opApplySchematic(work, op, ctx);
       case "set_chart_data": return { doc: work, changed: opSetChartData(work, op) };
+      case "set_doc_title": return { doc: work, changed: opSetDocTitle(work, op) };
+      case "apply_chart_style": return { doc: work, changed: opApplyChartStyle(work, op) };
       default:
         throw new Error("未知操作类型: " + safeStr(op.op));
     }
@@ -2860,7 +3490,24 @@
               errors.push("presentation.axes." + ax + " 不允许的键: " + safeStr(part));
               return;
             }
-            validatePresTextStyle(axv[part], "presentation.axes." + ax + "." + part, errors);
+            var tv = axv[part];
+            if (part === "tick" && tv && typeof tv === "object" && !Array.isArray(tv)) {
+              // R6：tick 额外允许 hidden:true（隐藏刻度线与刻度数字，轴标题保留）
+              Object.keys(tv).forEach(function (tk) {
+                if (tk === "hidden") {
+                  if (typeof tv.hidden !== "boolean") {
+                    errors.push("presentation.axes." + ax + ".tick.hidden 必须是 true/false");
+                  }
+                } else if (CP_PRES_TEXT_KEYS.indexOf(tk) < 0) {
+                  errors.push("presentation.axes." + ax + ".tick 不允许的键: " + safeStr(tk));
+                }
+              });
+              var tk2 = {};
+              Object.keys(tv).forEach(function (tk3) { if (tk3 !== "hidden") tk2[tk3] = tv[tk3]; });
+              validatePresTextStyle(tk2, "presentation.axes." + ax + ".tick", errors);
+            } else {
+              validatePresTextStyle(tv, "presentation.axes." + ax + "." + part, errors);
+            }
           });
         });
       }
@@ -2887,6 +3534,10 @@
             !isHexColor(patch.legend.color)) {
           errors.push("presentation.legend.color 必须是 #hex 颜色");
         }
+        if (patch.legend.frame !== undefined && patch.legend.frame !== null &&
+            typeof patch.legend.frame !== "boolean") {
+          errors.push("presentation.legend.frame 必须是 true/false");
+        }
       }
     }
     if (patch.series !== undefined && patch.series !== null) {
@@ -2894,7 +3545,7 @@
         errors.push("presentation.series 必须是 {稳定系列键: 样式|null}");
       } else {
         Object.keys(patch.series).forEach(function (key) {
-          if (!CP_PRES_KEY_PATTERN.test(key)) {
+          if (!CP_PRES_KEY_PATTERN(key)) {
             errors.push("presentation.series 的键不符合稳定键格式: " + safeStr(key));
             return;
           }
@@ -2924,6 +3575,23 @@
           if (sv.marker !== undefined && sv.marker !== null &&
               CP_PRES_MARKERS.indexOf(sv.marker) < 0) {
             errors.push("presentation.series." + key + ".marker 必须是 " + CP_PRES_MARKERS.join("/"));
+          }
+          if (sv.markerSizePt !== undefined && sv.markerSizePt !== null &&
+              (typeof sv.markerSizePt !== "number" ||
+                !(sv.markerSizePt >= 0.5 && sv.markerSizePt <= 40))) {
+            errors.push("presentation.series." + key + ".markerSizePt 必须是 0.5–40 的数字");
+          }
+          if (sv.opacity !== undefined && sv.opacity !== null &&
+              (typeof sv.opacity !== "number" || !(sv.opacity >= 0.05 && sv.opacity <= 1))) {
+            errors.push("presentation.series." + key + ".opacity 必须是 0.05–1 的数字");
+          }
+          if (sv.hatch !== undefined && sv.hatch !== null &&
+              CP_PRES_HATCH.indexOf(sv.hatch) < 0) {
+            errors.push("presentation.series." + key + ".hatch 必须是 " + CP_PRES_HATCH.join("/") + " 之一");
+          }
+          if (sv.markerFill !== undefined && sv.markerFill !== null &&
+              CP_PRES_MARKER_FILL.indexOf(sv.markerFill) < 0) {
+            errors.push("presentation.series." + key + ".markerFill 必须是 solid/hollow 之一");
           }
         });
       }
@@ -2958,6 +3626,299 @@
         });
       }
     }
+    if (patch.plot !== undefined && patch.plot !== null) {
+      if (typeof patch.plot !== "object" || Array.isArray(patch.plot)) {
+        errors.push("presentation.plot 必须是对象或 null");
+      } else {
+        Object.keys(patch.plot).forEach(function (k) {
+          if (CP_PRES_PLOT_KEYS.indexOf(k) < 0) {
+            errors.push("presentation.plot 不允许的键: " + safeStr(k));
+          }
+        });
+        var pv2 = patch.plot;
+        if (pv2.frame !== undefined && pv2.frame !== null &&
+            CP_PRES_PLOT_FRAME.indexOf(pv2.frame) < 0) {
+          errors.push("presentation.plot.frame 必须是 " + CP_PRES_PLOT_FRAME.join("/"));
+        }
+        if (pv2.tickDirection !== undefined && pv2.tickDirection !== null &&
+            CP_PRES_PLOT_TICKDIR.indexOf(pv2.tickDirection) < 0) {
+          errors.push("presentation.plot.tickDirection 必须是 " + CP_PRES_PLOT_TICKDIR.join("/"));
+        }
+        if (pv2.axisWidthPt !== undefined && pv2.axisWidthPt !== null &&
+            (typeof pv2.axisWidthPt !== "number" || !(pv2.axisWidthPt >= 0 && pv2.axisWidthPt <= 5))) {
+          errors.push("presentation.plot.axisWidthPt 必须是 0–5 的数字（0 表示不画轴线）");
+        }
+        if (pv2.tickLengthPt !== undefined && pv2.tickLengthPt !== null &&
+            (typeof pv2.tickLengthPt !== "number" || !(pv2.tickLengthPt >= 0 && pv2.tickLengthPt <= 20))) {
+          errors.push("presentation.plot.tickLengthPt 必须是 0–20 的数字");
+        }
+        if (pv2.markerSizePt !== undefined && pv2.markerSizePt !== null &&
+            (typeof pv2.markerSizePt !== "number" || !(pv2.markerSizePt >= 0.5 && pv2.markerSizePt <= 40))) {
+          errors.push("presentation.plot.markerSizePt 必须是 0.5–40 的数字");
+        }
+        if (pv2.lineWidthPt !== undefined && pv2.lineWidthPt !== null &&
+            (typeof pv2.lineWidthPt !== "number" || !(pv2.lineWidthPt >= 0.1 && pv2.lineWidthPt <= 20))) {
+          errors.push("presentation.plot.lineWidthPt 必须是 0.1–20 的数字");
+        }
+        if (pv2.markerFill !== undefined && pv2.markerFill !== null &&
+            CP_PRES_MARKER_FILL.indexOf(pv2.markerFill) < 0) {
+          errors.push("presentation.plot.markerFill 必须是 " + CP_PRES_MARKER_FILL.join("/"));
+        }
+        if (pv2.markerCycle !== undefined && pv2.markerCycle !== null) {
+          if (!Array.isArray(pv2.markerCycle) || !pv2.markerCycle.length ||
+              pv2.markerCycle.length > 12 ||
+              pv2.markerCycle.some(function (m) { return CP_PRES_MARKERS.indexOf(m) < 0; })) {
+            errors.push("presentation.plot.markerCycle 必须是 1–12 个 " + CP_PRES_MARKERS.join("/") + " 组成的数组");
+          }
+        }
+        if (pv2.dashCycle !== undefined && pv2.dashCycle !== null) {
+          if (!Array.isArray(pv2.dashCycle) || !pv2.dashCycle.length ||
+              pv2.dashCycle.length > 12 ||
+              pv2.dashCycle.some(function (d) { return CP_PRES_DASH_CYCLE.indexOf(d) < 0; })) {
+            errors.push("presentation.plot.dashCycle 必须是 1–12 个 " + CP_PRES_DASH_CYCLE.join("/") + " 组成的数组");
+          }
+        }
+        if (pv2.background !== undefined && pv2.background !== null && !isHexColor(pv2.background)) {
+          errors.push("presentation.plot.background 必须是 #hex 颜色或 null");
+        }
+        if (pv2.gridColor !== undefined && pv2.gridColor !== null && !isHexColor(pv2.gridColor)) {
+          errors.push("presentation.plot.gridColor 必须是 #hex 颜色或 null");
+        }
+        // R6：渐变系列色 / 分峰填充 / 误差带
+        if (pv2.componentFill !== undefined && pv2.componentFill !== null &&
+            typeof pv2.componentFill !== "boolean") {
+          errors.push("presentation.plot.componentFill 必须是 true/false");
+        }
+        if (pv2.errorStyle !== undefined && pv2.errorStyle !== null &&
+            CP_PRES_ERROR_STYLE.indexOf(pv2.errorStyle) < 0) {
+          errors.push("presentation.plot.errorStyle 必须是 " + CP_PRES_ERROR_STYLE.join("/"));
+        }
+        if (pv2.seriesColors !== undefined && pv2.seriesColors !== null) {
+          var sc = pv2.seriesColors;
+          if (typeof sc !== "object" || Array.isArray(sc) || sc.mode !== "gradient") {
+            errors.push("presentation.plot.seriesColors 目前仅支持 {mode:\"gradient\",palette:<配色id>,reverse?,colorbar?}");
+          } else {
+            if (typeof sc.palette !== "string" || !sc.palette) {
+              errors.push("presentation.plot.seriesColors.palette 必须是非空配色 id");
+            } else {
+              var FPsc = global.FigPalette;
+              var scOk = false;
+              try {
+                scOk = !!(FPsc && typeof FPsc.colors === "function" && FPsc.colors(sc.palette));
+              } catch (eSc) { scOk = false; }
+              if (!scOk) errors.push("presentation.plot.seriesColors.palette 配色不存在: " + safeStr(sc.palette));
+            }
+            if (sc.reverse !== undefined && sc.reverse !== null && typeof sc.reverse !== "boolean") {
+              errors.push("presentation.plot.seriesColors.reverse 必须是 true/false");
+            }
+            if (sc.colorbar !== undefined && sc.colorbar !== null) {
+              var cb = sc.colorbar;
+              if (typeof cb !== "object" || Array.isArray(cb) || typeof cb.show !== "boolean") {
+                errors.push("presentation.plot.seriesColors.colorbar 必须是 {show:bool,label?,min?,max?}");
+              } else {
+                if (cb.label !== undefined && cb.label !== null && typeof cb.label !== "string") {
+                  errors.push("presentation.plot.seriesColors.colorbar.label 必须是字符串");
+                }
+                ["min", "max"].forEach(function (k3) {
+                  if (cb[k3] !== undefined && cb[k3] !== null &&
+                      (typeof cb[k3] !== "number" || !isFinite(cb[k3]))) {
+                    errors.push("presentation.plot.seriesColors.colorbar." + k3 + " 必须是数字或 null");
+                  }
+                });
+                if (cb.min != null && cb.max != null && !(cb.min < cb.max)) {
+                  errors.push("presentation.plot.seriesColors.colorbar.min 必须小于 max");
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    if (patch.points !== undefined && patch.points !== null) {
+      if (typeof patch.points !== "object" || Array.isArray(patch.points)) {
+        errors.push("presentation.points 必须是 {标记键: 样式|null}");
+      } else {
+        var pointKeys = Object.keys(patch.points);
+        if (pointKeys.length > CP_PRES_POINTS_MAX) {
+          errors.push("presentation.points 单次最多 " + CP_PRES_POINTS_MAX + " 个键");
+        }
+        pointKeys.forEach(function (key) {
+          if (!isPresKey(key)) {
+            errors.push("presentation.points 的键不符合标记键格式: " + safeStr(key));
+            return;
+          }
+          var pv3 = patch.points[key];
+          if (pv3 === null) return;
+          if (typeof pv3 !== "object" || Array.isArray(pv3)) {
+            errors.push("presentation.points." + key + " 必须是对象或 null");
+            return;
+          }
+          Object.keys(pv3).forEach(function (k) {
+            if (CP_PRES_POINT_KEYS.indexOf(k) < 0) {
+              errors.push("presentation.points." + key + " 不允许的键: " + safeStr(k));
+            }
+          });
+          if (pv3.fill !== undefined && pv3.fill !== null && !isHexColor(pv3.fill)) {
+            errors.push("presentation.points." + key + ".fill 必须是 #hex 颜色");
+          }
+          if (pv3.stroke !== undefined && pv3.stroke !== null && !isHexColor(pv3.stroke)) {
+            errors.push("presentation.points." + key + ".stroke 必须是 #hex 颜色");
+          }
+          if (pv3.sizePt !== undefined && pv3.sizePt !== null &&
+              (typeof pv3.sizePt !== "number" || !(pv3.sizePt >= 0.5 && pv3.sizePt <= 40))) {
+            errors.push("presentation.points." + key + ".sizePt 必须是 0.5–40 的数字");
+          }
+          if (pv3.opacity !== undefined && pv3.opacity !== null &&
+              (typeof pv3.opacity !== "number" || !(pv3.opacity >= 0.05 && pv3.opacity <= 1))) {
+            errors.push("presentation.points." + key + ".opacity 必须是 0.05–1 的数字");
+          }
+          if (pv3.marker !== undefined && pv3.marker !== null &&
+              CP_PRES_POINT_MARKERS.indexOf(pv3.marker) < 0) {
+            errors.push("presentation.points." + key + ".marker 必须是 " + CP_PRES_POINT_MARKERS.join("/"));
+          }
+          if (pv3.strokeWidthPt !== undefined && pv3.strokeWidthPt !== null &&
+              (typeof pv3.strokeWidthPt !== "number" || !(pv3.strokeWidthPt >= 0 && pv3.strokeWidthPt <= 10))) {
+            errors.push("presentation.points." + key + ".strokeWidthPt 必须是 0–10 的数字");
+          }
+        });
+      }
+    }
+  }
+
+  // R5：apply_chart_style 内联 style token 校验（与 presets/styles.json 同构）。
+  // 只校验类型/枚举/范围；palette 是否存在由应用时按需检查。
+  function validateChartStyleTokens(st, where, errors) {
+    if (typeof st !== "object" || st === null || Array.isArray(st)) {
+      errors.push(where + " 必须是风格 token 对象");
+      return;
+    }
+    Object.keys(st).forEach(function (k) {
+      if (CS_TOKEN_KEYS.indexOf(k) < 0) {
+        errors.push(where + " 不允许的键: " + safeStr(k));
+      }
+    });
+    if (st.id !== undefined && st.id !== null &&
+        (typeof st.id !== "string" || !/^[a-z0-9][a-z0-9-]{0,60}$/.test(st.id))) {
+      errors.push(where + ".id 必须是小写字母/数字/连字符组成的字符串");
+    }
+    if (st.name !== undefined && st.name !== null &&
+        (typeof st.name !== "string" || st.name.length > 40)) {
+      errors.push(where + ".name 必须是不超过 40 字的字符串");
+    }
+    if (st.tags !== undefined && st.tags !== null &&
+        (!Array.isArray(st.tags) || st.tags.length > 12 ||
+         st.tags.some(function (t) { return typeof t !== "string" || t.length > 20; }))) {
+      errors.push(where + ".tags 必须是不超过 12 个短字符串的数组");
+    }
+    if (st.font !== undefined && st.font !== null) {
+      var f = st.font;
+      if (typeof f !== "object" || Array.isArray(f)) {
+        errors.push(where + ".font 必须是对象或 null");
+      } else {
+        Object.keys(f).forEach(function (k) {
+          if (CS_FONT_KEYS.indexOf(k) < 0) errors.push(where + ".font 不允许的键: " + safeStr(k));
+        });
+        if (f.family !== undefined && f.family !== null &&
+            (typeof f.family !== "string" || f.family.length > 80)) {
+          errors.push(where + ".font.family 必须是不超过 80 字的字符串");
+        }
+        ["basePt", "tickPt"].forEach(function (k) {
+          if (f[k] !== undefined && f[k] !== null &&
+              (typeof f[k] !== "number" || !(f[k] >= 1 && f[k] <= 200))) {
+            errors.push(where + ".font." + k + " 必须是 1–200 的数字");
+          }
+        });
+        ["titleWeight", "tickWeight"].forEach(function (k) {
+          if (f[k] !== undefined && f[k] !== null && CS_WEIGHT.indexOf(f[k]) < 0) {
+            errors.push(where + ".font." + k + " 必须是 " + CS_WEIGHT.join("/"));
+          }
+        });
+      }
+    }
+    if (st.palette !== undefined && st.palette !== null &&
+        (typeof st.palette !== "string" || !st.palette)) {
+      errors.push(where + ".palette 必须是非空字符串或 null");
+    }
+    if (st.plot !== undefined && st.plot !== null) {
+      var pl = st.plot;
+      if (typeof pl !== "object" || Array.isArray(pl)) {
+        errors.push(where + ".plot 必须是对象或 null");
+      } else {
+        var pseudo = { plot: pl };
+        var sub = [];
+        validatePresentationPatch(pseudo, sub);
+        sub.forEach(function (m) { errors.push(where + "." + m); });
+      }
+    }
+    if (st.markers !== undefined && st.markers !== null) {
+      var mk = st.markers;
+      if (typeof mk !== "object" || Array.isArray(mk)) {
+        errors.push(where + ".markers 必须是对象或 null");
+      } else {
+        Object.keys(mk).forEach(function (k) {
+          if (k !== "cycle" && k !== "fill") errors.push(where + ".markers 不允许的键: " + safeStr(k));
+        });
+        if (mk.cycle !== undefined && mk.cycle !== null &&
+            (!Array.isArray(mk.cycle) || !mk.cycle.length || mk.cycle.length > 12 ||
+             mk.cycle.some(function (m) { return CP_PRES_MARKERS.indexOf(m) < 0; }))) {
+          errors.push(where + ".markers.cycle 必须是 1–12 个 " + CP_PRES_MARKERS.join("/") + " 组成的数组");
+        }
+        if (mk.fill !== undefined && mk.fill !== null &&
+            CP_PRES_MARKER_FILL.indexOf(mk.fill) < 0) {
+          errors.push(where + ".markers.fill 必须是 " + CP_PRES_MARKER_FILL.join("/"));
+        }
+      }
+    }
+    if (st.dashes !== undefined && st.dashes !== null &&
+        (!Array.isArray(st.dashes) || !st.dashes.length || st.dashes.length > 12 ||
+         st.dashes.some(function (d) { return CP_PRES_DASH_CYCLE.indexOf(d) < 0; }))) {
+      errors.push(where + ".dashes 必须是 1–12 个 " + CP_PRES_DASH_CYCLE.join("/") + " 组成的数组");
+    }
+    if (st.legend !== undefined && st.legend !== null) {
+      var lg = st.legend;
+      if (typeof lg !== "object" || Array.isArray(lg)) {
+        errors.push(where + ".legend 必须是对象或 null");
+      } else {
+        Object.keys(lg).forEach(function (k) {
+          if (k !== "position" && k !== "frame") errors.push(where + ".legend 不允许的键: " + safeStr(k));
+        });
+        if (lg.position !== undefined && lg.position !== null &&
+            CP_PRES_LEGEND_POS.indexOf(lg.position) < 0) {
+          errors.push(where + ".legend.position 必须是 " + CP_PRES_LEGEND_POS.join("/"));
+        }
+        if (lg.frame !== undefined && lg.frame !== null && typeof lg.frame !== "boolean") {
+          errors.push(where + ".legend.frame 必须是 true/false");
+        }
+      }
+    }
+    if (st.grid !== undefined && st.grid !== null) {
+      var gd = st.grid;
+      if (typeof gd !== "object" || Array.isArray(gd)) {
+        errors.push(where + ".grid 必须是对象或 null");
+      } else {
+        Object.keys(gd).forEach(function (k) {
+          if (k !== "show" && k !== "color") errors.push(where + ".grid 不允许的键: " + safeStr(k));
+        });
+        if (gd.show !== undefined && gd.show !== null && typeof gd.show !== "boolean") {
+          errors.push(where + ".grid.show 必须是 true/false");
+        }
+        if (gd.color !== undefined && gd.color !== null && !isHexColor(gd.color)) {
+          errors.push(where + ".grid.color 必须是 #hex 颜色");
+        }
+      }
+    }
+    if (st.background !== undefined && st.background !== null && !isHexColor(st.background)) {
+      errors.push(where + ".background 必须是 #hex 颜色或 null");
+    }
+    if (st.palette !== undefined && st.palette !== null &&
+        typeof st.palette === "string" && st.palette) {
+      var FPv = global.FigPalette;
+      var pvOk = false;
+      try {
+        pvOk = !!(FPv && typeof FPv.colors === "function" && FPv.colors(st.palette));
+      } catch (e) { pvOk = false; }
+      if (!pvOk) errors.push(where + ".palette 调色板不存在: " + safeStr(st.palette));
+    }
   }
 
   // R04：presentation 深合并（null 删除语义）。返回是否变化。
@@ -2986,7 +3947,9 @@
             return;
           }
           var sub = target[part] || {};
-          CP_PRES_TEXT_KEYS.forEach(function (k) {
+          var subKeys = part === "tick"
+            ? CP_PRES_TEXT_KEYS.concat(["hidden"]) : CP_PRES_TEXT_KEYS;
+          subKeys.forEach(function (k) {
             if (pv[k] === undefined) return;
             if (pv[k] === null) {
               if (sub[k] !== undefined) { delete sub[k]; changed = true; }
@@ -3058,6 +4021,50 @@
         else if (next.peaks[id] !== undefined) { delete next.peaks[id]; changed = true; }
       });
       if (!Object.keys(next.peaks).length) delete next.peaks;
+    }
+    if (patch.plot === null) {
+      if (next.plot !== undefined) { delete next.plot; changed = true; }
+    } else if (patch.plot) {
+      next.plot = next.plot || {};
+      CP_PRES_PLOT_KEYS.forEach(function (k) {
+        var v = patch.plot[k];
+        if (v === undefined) return;
+        if (v === null) {
+          if (next.plot[k] !== undefined) { delete next.plot[k]; changed = true; }
+        } else if (k === "seriesColors") {
+          // R6：嵌套对象按值比较并深拷贝，避免与 op 载荷共享引用
+          if (!deepEq(next.plot[k] || null, v)) {
+            next.plot[k] = deepCopy(v); changed = true;
+          }
+        } else if (next.plot[k] !== v) {
+          next.plot[k] = v; changed = true;
+        }
+      });
+      if (!Object.keys(next.plot).length) delete next.plot;
+    }
+    if (patch.points === null) {
+      if (next.points !== undefined) { delete next.points; changed = true; }
+    } else if (patch.points) {
+      next.points = next.points || {};
+      Object.keys(patch.points).forEach(function (key) {
+        var v = patch.points[key];
+        if (v === null) {
+          if (next.points[key] !== undefined) { delete next.points[key]; changed = true; }
+          return;
+        }
+        var sub = next.points[key] || {};
+        CP_PRES_POINT_KEYS.forEach(function (k) {
+          if (v[k] === undefined) return;
+          if (v[k] === null) {
+            if (sub[k] !== undefined) { delete sub[k]; changed = true; }
+          } else if (sub[k] !== v[k]) {
+            sub[k] = v[k]; changed = true;
+          }
+        });
+        if (Object.keys(sub).length) next.points[key] = sub;
+        else if (next.points[key] !== undefined) { delete next.points[key]; changed = true; }
+      });
+      if (!Object.keys(next.points).length) delete next.points;
     }
     return changed ? next : current;
   }
@@ -3217,7 +4224,6 @@
         break;
       }
       case "ungroup":
-        checkResolvedTypes(op, doc, errors, "group");
         try {
           var uids = resolveTargets(doc, op.targets);
           for (var u = 0; u < uids.length; u++) {
@@ -3326,13 +4332,33 @@
         }
         break;
       }
-      case "panel_layout":
+      case "panel_layout": {
         if (!op.panel || typeof op.panel !== "object" || Array.isArray(op.panel)
             || !Object.keys(op.panel).length) {
           errors.push("panel_layout 需要非空 panel 对象");
+          break;
+        }
+        if (op.panel.order !== undefined &&
+            (!Array.isArray(op.panel.order) ||
+             op.panel.order.some(function (x) { return typeof x !== "string" || !x; }))) {
+          errors.push("panel.order 必须是元素 id 字符串数组");
+        }
+        if (op.panel.areas !== undefined) {
+          var tids = resolveTargets(doc, op.targets) || [];
+          for (var ti = 0; ti < tids.length; ti++) {
+            var tel = getEl(doc, tids[ti]);
+            if (!tel || tel.type !== "panel") continue;
+            var effCols = typeof op.panel.cols === "number" ? op.panel.cols
+              : ((tel.panelLayout && tel.panelLayout.cols) || 1);
+            var effRows = typeof op.panel.rows === "number" ? op.panel.rows
+              : ((tel.panelLayout && tel.panelLayout.rows) || 1);
+            var aerr = panelAreasError(op.panel.areas, effCols, effRows);
+            if (aerr) { errors.push(aerr); break; }
+          }
         }
         checkResolvedTypes(op, doc, errors, "panel");
         break;
+      }
       case "set_canvas": {
         var cv = op.canvas;
         if (!cv || typeof cv !== "object" || Array.isArray(cv) || !Object.keys(cv).length) {
@@ -3368,8 +4394,8 @@
         }
         var cpTop = Object.keys(cp);
         for (var ct = 0; ct < cpTop.length; ct++) {
-          if (cpTop[ct] !== "axes" && cpTop[ct] !== "characterization" &&
-              cpTop[ct] !== "presentation") {
+          if (["axes", "characterization", "presentation",
+               "references", "bands", "significance", "letters"].indexOf(cpTop[ct]) < 0) {
             errors.push("properties 不允许的键: " + safeStr(cpTop[ct]));
           }
         }
@@ -3395,6 +4421,32 @@
                 }
               } else if (akey === "gridlines") {
                 if (typeof aval !== "boolean") errors.push("axes.gridlines 必须是布尔值");
+              } else if (["xMin", "xMax", "yMin", "yMax"].indexOf(akey) >= 0) {
+                if (aval !== null &&
+                    (typeof aval !== "number" || !isFinite(aval))) {
+                  errors.push("axes." + akey + " 必须是数字或 null");
+                }
+              } else if (akey === "y2") {
+                // R4-HB：右轴 {series:[名称…], label, min, max}；null 表示移除
+                if (aval !== null) {
+                  if (typeof aval !== "object" || Array.isArray(aval)) {
+                    errors.push("axes.y2 必须是对象或 null");
+                  } else {
+                    if (!Array.isArray(aval.series) || !aval.series.length ||
+                        aval.series.some(function (n) { return typeof n !== "string" || n === ""; })) {
+                      errors.push("axes.y2.series 必须是非空字符串数组");
+                    }
+                    if (aval.label !== undefined && aval.label !== null && typeof aval.label !== "string") {
+                      errors.push("axes.y2.label 必须是字符串或 null");
+                    }
+                    ["min", "max"].forEach(function (k2) {
+                      if (aval[k2] !== undefined && aval[k2] !== null &&
+                          (typeof aval[k2] !== "number" || !isFinite(aval[k2]))) {
+                        errors.push("axes.y2." + k2 + " 必须是数字或 null");
+                      }
+                    });
+                  }
+                }
               }
             }
           }
@@ -3405,6 +4457,8 @@
         if (cp.presentation !== undefined) {
           validatePresentationPatch(cp.presentation, errors);
         }
+        // R6：chart 级表征标注（references/bands/significance/letters）结构校验
+        validateChartExtras(cp, errors);
         try {
           var cids = resolveTargets(doc, op.targets);
           var hasCurves = cp.characterization && typeof cp.characterization === "object"
@@ -3427,6 +4481,33 @@
                 }
               }
             }
+            // R4-HB：axes.y2 语义校验（结构校验已过才进这里；null=移除跳过）
+            if (cp.axes && cp.axes.y2 !== undefined && cp.axes.y2 !== null &&
+                typeof cp.axes.y2 === "object" && !Array.isArray(cp.axes.y2)) {
+              validateChartY2(cel, cp.axes.y2, errors);
+            }
+            // R6：坐标范围语义校验（min<max；log 轴下界必须 >0）
+            if (cp.axes && ["xMin", "xMax", "yMin", "yMax"].some(function (k) {
+                  return cp.axes[k] !== undefined; })) {
+              var effAx = cpPatchAxes(cel.chart && cel.chart.axes, cp.axes);
+              [["xMin", "xMax", "xScale", "x"], ["yMin", "yMax", "yScale", "y"]]
+                .forEach(function (pr) {
+                  var lo = effAx[pr[0]], hi = effAx[pr[1]];
+                  if (typeof lo === "number" && typeof hi === "number" && !(lo < hi)) {
+                    errors.push("目标 " + cids[ci] + " 的 axes." + pr[0] + " 必须小于 " + pr[1]);
+                  }
+                  if (effAx[pr[2]] === "log") {
+                    [pr[0], pr[1]].forEach(function (bk) {
+                      var bv = effAx[bk];
+                      if (typeof bv === "number" && bv <= 0) {
+                        errors.push("目标 " + cids[ci] + " 的 log " + pr[3] + " 轴范围必须大于 0");
+                      }
+                    });
+                  }
+                });
+            }
+            // R6：references/bands/significance/letters 目标级校验
+            validateChartExtrasTargets(doc, { targets: [cids[ci]], properties: cp }, errors);
           }
         } catch (e) {
           errors.push(e.message);
@@ -3442,9 +4523,61 @@
         } catch (e) { errors.push(e.message); }
         break;
       }
+      case "apply_diagram_text": {
+        try {
+          var D = diagramModule();
+          if (typeof op.text !== "string" || !op.text.trim()) throw new Error("apply_diagram_text 需要非空字符串 text");
+          if (op.auto_layout !== undefined && typeof op.auto_layout !== "boolean") throw new Error("auto_layout 必须是布尔值");
+          if (op.theme !== undefined && op.theme !== null && typeof op.theme !== "string") throw new Error("theme 必须是字符串或 null");
+          var parsed = D.parseText(op.text, { id: op.id, template_id: op.template_id || op.template,
+            layout: op.layout, theme: op.theme, canvas: op.canvas });
+          if (!parsed.ok) {
+            parsed.errors.forEach(function (pe) {
+              errors.push("文字生成第 " + pe.line + " 行：" + pe.message);
+            });
+            break;
+          }
+          op.contract = deepCopy(D.normalize(parsed.input));
+        } catch (e) { errors.push(e.message); }
+        break;
+      }
       case "set_chart_data": {
         var dataProblems = chartDataProblems(doc, op);
         for (var dpe = 0; dpe < dataProblems.length; dpe++) errors.push(dataProblems[dpe]);
+        break;
+      }
+      case "set_doc_title": {
+        if (typeof op.title !== "string") {
+          errors.push("set_doc_title 需要字符串 title");
+        } else {
+          var tl = op.title.trim();
+          if (!tl) errors.push("set_doc_title 的 title 不能为空");
+          else if (tl.length > 120) errors.push("set_doc_title 的 title 不能超过 120 字符");
+        }
+        break;
+      }
+      case "apply_chart_style": {
+        var hasSid = op.style_id !== undefined && op.style_id !== null;
+        var hasSty = op.style !== undefined && op.style !== null;
+        if (hasSid === hasSty) {
+          errors.push("apply_chart_style 必须且只能提供 style_id 或 style 之一");
+          break;
+        }
+        if (hasSid) {
+          if (typeof op.style_id !== "string" || !op.style_id) {
+            errors.push("apply_chart_style 的 style_id 必须是非空字符串");
+            break;
+          }
+          var GPs = global.FigPresets;
+          if (!GPs || typeof GPs.style !== "function") {
+            errors.push("FigPresets 未加载，无法校验风格 " + safeStr(op.style_id));
+          } else if (!GPs.style(op.style_id)) {
+            errors.push("风格不存在: " + safeStr(op.style_id));
+          }
+        } else {
+          validateChartStyleTokens(op.style, "style", errors);
+        }
+        checkResolvedTypes(op, doc, errors, "chart");
         break;
       }
     }
@@ -3566,7 +4699,15 @@
     apply_journal: { usage: "apply_journal: {journal_preset_id}" },
     recolor: { usage: "recolor: {palette_id, recolor_strategy?}",
                enums: { recolor_strategy: RECOLOR_STRATEGIES } },
-    panel_layout: { usage: "panel_layout: {targets, panel:{cols, rows, gap_mm, padding_mm, ...}}（目标须为 panel）" },
+    panel_layout: {
+      usage: "panel_layout: {targets, panel:{cols, rows, gap_mm, padding_mm, areas?, order?, label?, labelStyle?, labelPosition?}}（目标须为 panel）",
+      notes: [
+        "组图结构：外层 panel（panelLayout 网格）→ 每格一个子 panel（自身 panelLayout.label/labelStyle/labelPosition 绘制子图字母）→ 子 panel 内含 chart/image/group 元素",
+        "panelLayout.areas 与 children 顺序对齐：[{col,row,colSpan,rowSpan}] 0 基整数、cols×rows 界内、互不重叠；可少于 children（其余按行主序填空位），用于上一大两小/左大右二等跨格版式",
+        "panel.order 为子元素 id 数组，调整 children 顺序（未列出的保持原相对顺序排在后面）；areas/order 是 op.panel 的键，不写入 panelLayout 持久字段",
+        "子图字母 labelPosition：top-left（框外左上）/top-right/below/inside-top-left（框内左上）；labelStyle {fontSizePt,fontFamily,fontWeight,fill}"
+      ]
+    },
     set_canvas: { usage: "set_canvas: {canvas:{width_mm, height_mm, dpi, background, ...}}" },
     note: { usage: "note: {note}（无副作用说明）" },
     set_scientific_contract: {
@@ -3577,9 +4718,9 @@
                uncertainty_source: SC_SOURCES }
     },
     set_chart_properties: {
-      usage: "set_chart_properties: {targets:[chartId], properties:{axes?, characterization?, presentation?}}（图表属性唯一入口；不改 chartType 与原始数据行）",
+      usage: "set_chart_properties: {targets:[chartId], properties:{axes?, characterization?, presentation?, references?, bands?, significance?, letters?}}（图表属性唯一入口；不改 chartType 与原始数据行）",
       requiresType: "chart",
-      fields: ["axes", "characterization", "presentation"],
+      fields: ["axes", "characterization", "presentation", "references", "bands", "significance", "letters"],
       enums: {
         "axes.keys": CP_AXES_KEYS,
         "axes.xScale/yScale": CP_AXES_SCALES,
@@ -3587,11 +4728,17 @@
         "characterization.x_scale": CP_CHAR_X_SCALES,
         "characterization.normalize": CP_CHAR_NORMALIZE,
         "characterization.fit_source": CP_FIT_SOURCES,
+        "axes.y2": "{series:[系列名…], label?, min?, max?} 或 null（仅 line_multi/scatter；series 名=宽表列名或分组值，至少留 1 个系列在左轴）",
         "curves[].role": CP_CURVE_ROLES,
         "presentation.keys": CP_PRES_KEYS,
         "presentation.legend.position": CP_PRES_LEGEND_POS,
+        "presentation.plot.keys": CP_PRES_PLOT_KEYS,
+        "presentation.plot.frame": CP_PRES_PLOT_FRAME,
+        "presentation.plot.tickDirection": CP_PRES_PLOT_TICKDIR,
         "presentation.series[键].keys": CP_PRES_SERIES_KEYS,
-        "presentation.series[键].marker": CP_PRES_MARKERS
+        "presentation.series[键].marker": CP_PRES_MARKERS,
+        "presentation.points[键].keys": CP_PRES_POINT_KEYS,
+        "presentation.points[键].marker": CP_PRES_POINT_MARKERS
       },
       notes: [
         "通用轴对数：axes.xScale/yScale 取 " + CP_AXES_SCALES.join("/") +
@@ -3600,10 +4747,20 @@
         "curves[] 为 {role, column, label?}，column 必须是该 chart 内联数据中真实存在的列名",
         "peak_annotations[] 为 {x, label, id?}，峰位只能由用户申报，不得推断；id 为稳定峰 id（缺省确定性补全）",
         "characterization:null 表示清除表征参数回到通用渲染",
-        "presentation 为展示覆盖（不改数据/统计/绑定列）：axes.{x,y}.{title,tick}.{fontSizePt,color,fontWeight}、" +
-          "legend.{position,fontSizePt,color}、series[稳定键].{stroke,strokeWidthPt,dash,marker}、" +
+        "presentation 为展示覆盖（不改数据/统计/绑定列）：axes.{x,y}.{title,tick}.{fontSizePt,color,fontWeight}（tick 另支持 hidden:true 隐藏刻度线与数字）、" +
+          "legend.{position,fontSizePt,color}（position 另支持 inline 行内标签/inside-best 自动角）、series[稳定键].{stroke,strokeWidthPt,dash,marker,markerSizePt,opacity,hatch,markerFill}、" +
+          "plot.{frame,tickDirection,axisWidthPt,tickLengthPt,markerSizePt,lineWidthPt,markerFill,markerCycle,dashCycle,background,gridColor,seriesColors,componentFill,errorStyle}、" +
+          "points[标记键].{fill,sizePt,opacity,marker,stroke,strokeWidthPt}（单次≤" + CP_PRES_POINTS_MAX + " 键）、" +
           "peaks[峰id].{color,fontSizePt}；null 语义＝删除该级覆盖（恢复继承），presentation:null 清除整块",
-        "系列稳定键先用 FigData.seriesIdentity(chart) 查询（group|分组列|类型:组名 / curve|role|列名 / raw|y列 / series|y列 / color|列|类型:值）"
+        "R6 表征标注（chart 级，整组替换）：axes.xMin/xMax/yMin/yMax 为 number|null 坐标范围（刻度限于范围内、超范围数据计数进 warnings）；" +
+          "references≤8 组 {label,source?,color?,style:sticks|lines,positions[≤200],heights?[0..1]} 标准卡参考线（sticks 画底部带、lines 画贯穿虚线）；" +
+          "bands≤20 {x0,x1,color?,opacity?,label?} 区间底色；significance≤30 {a,b,label,group?} 显著性括号（仅 bar/bar_grouped/box，类别须存在）；" +
+          "letters {类别或 类别|分组: 字母} 顶部字母标注；series[key].hatch ∈ / \\ x . - | 斜线填充；" +
+          "plot.seriesColors={mode:gradient,palette,reverse?,colorbar?} 渐变系列色；plot.componentFill 仅表征 component 曲线；plot.errorStyle=bars|band（band 仅 line/line_multi）；" +
+          "所有标注数值（峰位/显著性/字母/区间）必须由用户或模板提供，渲染器不计算不推断",
+        "系列稳定键先用 FigData.seriesIdentity(chart) 查询（group|分组列|类型:组名 / curve|role|列名 / raw|y列 / series|y列 / color|列|类型:值）；" +
+          "标记键：数据点 pt|行号|散列（FigData.pointKey(chart,rowIndex) 取得）、柱子 bar|类别[|组]；覆盖按数据值散列绑定，数据替换后旧键不转移",
+        "有效样式解析顺序：默认 ← plot ← series[键] ← points[键]；柱子只用 fill/opacity/stroke/strokeWidthPt"
       ]
     },
     apply_schematic: {
@@ -3611,12 +4768,33 @@
       notes: ["声明式实体关系示意图；来源只保存用户提供的文字，不猜科学内容"]
     },
     layout_schematic: { usage: "layout_schematic: {diagram_id, auto_layout:true}（按已保存合同重排）" },
+    apply_diagram_text: {
+      usage: "apply_diagram_text: {text:'A -> B -> C\\nA -> B : 是\\n## 阶段名\\n(结束)', layout?, theme?, id?, template_id?, canvas?, auto_layout?}",
+      notes: [
+        "文字语法：-> 连线（同标签复用节点）、:文字 为出边标签、## [编号 ]阶段名 开 group、?/？结尾为判断菱形、()包裹为起止胶囊；解析错误带行号",
+        "layout.mode 支持 layered/grid/manual/flow/snake/stages/lanes/tree/cycle/timeline；theme 取 presets 的 diagram_themes（soft-card 等 6 套）"
+      ]
+    },
+    set_doc_title: { usage: "set_doc_title: {title}（画布标题，trim 后 1–120 字符；值不变时 no-op）" },
     set_chart_data: {
       usage: "set_chart_data: {targets:[chartId], approved:true, data:{columns,rows,source_ref?,version?,raw_source_sha256?,source_info?}, source_ref, version}",
       requiresType: "chart",
       notes: [
         "approved:true 只能来自用户明确批准的数据替换流程；模型输出中的 approved 字段不构成授权",
         "映射列必须仍存在；mapping/style/chartType/既有 statistics 不变；替换后统计声明强制重审"
+      ]
+    },
+    apply_chart_style: {
+      usage: "apply_chart_style: {targets:[chartId], style_id} 或 {targets:[chartId], style:{tokens}}（style_id 与 style 必须且只能给一个）",
+      requiresType: "chart",
+      enums: {
+        "style_id": "FigPresets.style(id) 可用的风格 id（如 nature-minimal、acs-bold）",
+        "style": "与 presets/styles.json 同构的 token 对象：font/palette/plot/markers/dashes/legend/grid/background"
+      },
+      notes: [
+        "套用整套图表风格：配色、字体、边框/刻度/线宽、标记与线型循环、图例位置与边框、网格、绘图区底色",
+        "会重置系列级 stroke/strokeWidthPt/dash/marker/markerSizePt 覆盖以让风格生效；保留单点颜色覆盖、峰标注、轴标签文本、y2 配置与数据",
+        "记录 chart.styleRef={id,name}；可一次撤销"
       ]
     }
   };
@@ -3684,17 +4862,41 @@
   // Public: describe (human readable Chinese)
   // ------------------------------------------------------------------
 
-  function targetLabel(op) {
+  function elementTypeNameOf(type) {
+    if (global.FigDoc && typeof global.FigDoc.elementTypeName === "function") {
+      return global.FigDoc.elementTypeName(type);
+    }
+    return String(type || "元素");
+  }
+
+  function elementLabelOf(el) {
+    if (!el || typeof el !== "object") return null;
+    if (typeof el.name === "string" && el.name.trim()) return el.name.trim();
+    return elementTypeNameOf(el.type);
+  }
+
+  function findElementById(doc, id) {
+    var els = doc && Array.isArray(doc.elements) ? doc.elements : [];
+    for (var i = 0; i < els.length; i++) {
+      if (els[i] && els[i].id === id) return els[i];
+    }
+    return null;
+  }
+
+  // 面向用户的目标称呼：元素 id 解析为「名称或类型中文名」，解析不到才回退 id
+  function targetLabel(op, doc) {
     var ts = op && op.targets;
     if (!Array.isArray(ts) || ts.length === 0) return "目标";
     if (ts.length === 1) {
       var t = ts[0];
       if (typeof t === "string") {
-        return t.charAt(0) === "@" ? ("锚点 " + t.slice(1) + " 内的元素") : t;
+        if (t.charAt(0) === "@") return "锚点 " + t.slice(1) + " 内的元素";
+        var nm = elementLabelOf(doc ? findElementById(doc, t) : null);
+        return nm || t;
       }
       if (t && typeof t === "object") {
         if (t.kind === "all") return "全部元素";
-        if (t.kind === "type") return (t.type || "指定类型") + " 元素";
+        if (t.kind === "type") return elementTypeNameOf(t.type) + "元素";
       }
       return "目标";
     }
@@ -3703,15 +4905,240 @@
 
   var ALIGN_NAMES = { left: "左", center: "水平居中", right: "右", top: "上", middle: "垂直居中", bottom: "下" };
   var Z_NAMES = { front: "置于最前", back: "置于最后", forward: "上移一层", backward: "下移一层" };
+  var SCALE_NAMES = { linear: "线性刻度", log: "对数刻度", log10: "对数刻度" };
+  var LEGEND_POS_NAMES = { none: "不显示", right: "右侧", top: "上方", bottom: "下方" };
+  var MARKER_NAMES = { none: "无标记", circle: "圆点", square: "方块", triangle: "三角", diamond: "菱形" };
+  var FRAME_NAMES = { open: "只画左、下两条轴", box: "四边方框" };
+  var TICKDIR_NAMES = { out: "朝外", in: "朝内" };
+  var RECOLOR_STRATEGY_NAMES = { byOrder: "按顺序", byHue: "按色相", byRole: "按角色" };
+  var STYLE_KEY_NAMES = {
+    fontSizePt: "字号", fontWeight: "字重", fontStyle: "斜体", textAlign: "对齐",
+    fill: "填充色", stroke: "描边色", strokeWidthPt: "描边粗细", opacity: "不透明度",
+    dash: "线型", fontFamily: "字体", lineHeight: "行距"
+  };
+  var CANVAS_KEY_NAMES = {
+    width_mm: "宽", height_mm: "高", dpi: "分辨率",
+    background: "背景色", journal_preset_id: "期刊预设"
+  };
 
   function truncate(s, n) {
     s = String(s == null ? "" : s);
     return s.length > n ? s.slice(0, n) + "…" : s;
   }
 
+  function safeStr(v) { return String(v == null ? "" : v); }
+
+  function templateDisplayName(id) {
+    try {
+      if (global.FigPresets && typeof global.FigPresets.template === "function") {
+        var tpl = global.FigPresets.template(id);
+        if (tpl && tpl.name) return tpl.name;
+      }
+    } catch (e) { /* 名称查不到时回退通用说法 */ }
+    return null;
+  }
+
+  function journalDisplayName(id) {
+    try {
+      if (global.FigPresets && typeof global.FigPresets.journal === "function") {
+        var j = global.FigPresets.journal(id);
+        if (j && j.name) return j.name;
+      }
+    } catch (e) { /* 名称查不到时回退通用说法 */ }
+    return null;
+  }
+
+  function paletteDisplayName(id) {
+    try {
+      if (global.FigPalette && typeof global.FigPalette.get === "function") {
+        var p = global.FigPalette.get(id);
+        if (p && p.name) return p.name;
+      }
+    } catch (e) { /* 名称查不到时回退通用说法 */ }
+    return null;
+  }
+
+  // set_chart_properties 的白话逐项描述。返回字符串数组（每项一句）。
+  function describeChartPatch(doc, op) {
+    var props = op && op.properties && typeof op.properties === "object" ? op.properties : {};
+    var bits = [];
+    var axes = props.axes && typeof props.axes === "object" ? props.axes : null;
+    if (axes) {
+      if (axes.xLabel !== undefined) {
+        bits.push(axes.xLabel === null ? "横轴标题恢复默认"
+          : "横轴标题改为「" + truncate(axes.xLabel, 24) + "」");
+      }
+      if (axes.yLabel !== undefined) {
+        bits.push(axes.yLabel === null ? "纵轴标题恢复默认"
+          : "纵轴标题改为「" + truncate(axes.yLabel, 24) + "」");
+      }
+      if (axes.xScale !== undefined) {
+        bits.push(axes.xScale === null ? "横轴刻度恢复默认"
+          : "横轴改为" + (SCALE_NAMES[axes.xScale] || "线性刻度"));
+      }
+      if (axes.yScale !== undefined) {
+        bits.push(axes.yScale === null ? "纵轴刻度恢复默认"
+          : "纵轴改为" + (SCALE_NAMES[axes.yScale] || "线性刻度"));
+      }
+      if (axes.gridlines !== undefined) {
+        bits.push(axes.gridlines === null ? "网格线恢复默认"
+          : axes.gridlines ? "显示网格线" : "隐藏网格线");
+      }
+      if (axes.y2 !== undefined) {
+        bits.push(axes.y2 === null ? "右轴恢复默认"
+          : "右轴系列改为「" + truncate(((axes.y2.series || []).join("、")), 40) + "」");
+      }
+    }
+    if (props.characterization === null) {
+      bits.push("表征图设置恢复默认");
+    } else if (props.characterization && typeof props.characterization === "object") {
+      bits.push("更新表征图设置");
+    }
+    var pres = props.presentation;
+    if (pres === null) {
+      bits.push("外观设置全部恢复默认");
+    } else if (pres && typeof pres === "object") {
+      // 系列稳定键 → 显示名（seriesIdentity 与渲染器同规则）
+      var seriesNames = {};
+      try {
+        var chartEl = null;
+        var ts = Array.isArray(op.targets) ? op.targets : [];
+        for (var ti = 0; ti < ts.length && !chartEl; ti++) {
+          if (typeof ts[ti] === "string") chartEl = findElementById(doc, ts[ti]);
+        }
+        var spec = chartEl && chartEl.chart;
+        if (spec && global.FigData && typeof global.FigData.seriesIdentity === "function") {
+          (global.FigData.seriesIdentity(spec) || []).forEach(function (s) {
+            if (s && s.key) seriesNames[s.key] = s.label || s.key;
+          });
+        }
+      } catch (e) { /* 查不到就用“某个系列” */ }
+      function seriesLabel(key) {
+        return seriesNames[key] ? ("系列「" + seriesNames[key] + "」") : "某个系列";
+      }
+      function nullOr(v, make) {
+        return v === null ? null : make(v);
+      }
+      var pAxes = pres.axes && typeof pres.axes === "object" ? pres.axes : null;
+      if (pAxes) {
+        [["x", "横轴"], ["y", "纵轴"]].forEach(function (ax) {
+          var axv = pAxes[ax[0]];
+          if (!axv || typeof axv !== "object") return;
+          [["title", "标题"], ["tick", "刻度"]].forEach(function (pt) {
+            var pv = axv[pt[0]];
+            if (!pv || typeof pv !== "object") return;
+            var who = ax[1] + pt[1];
+            if (pv.fontSizePt !== undefined) {
+              bits.push(pv.fontSizePt === null ? who + "字号恢复默认"
+                : who + "字号改为 " + pv.fontSizePt + " pt");
+            }
+            if (pv.color !== undefined) {
+              bits.push(pv.color === null ? who + "颜色恢复默认"
+                : who + "颜色改为 " + safeStr(pv.color));
+            }
+            if (pv.fontWeight !== undefined) {
+              bits.push(pv.fontWeight === null ? who + "字重恢复默认"
+                : who + (pv.fontWeight === "bold" ? "加粗" : "字重改为 " + safeStr(pv.fontWeight)));
+            }
+          });
+        });
+      }
+      var legend = pres.legend && typeof pres.legend === "object" ? pres.legend : null;
+      if (legend) {
+        if (legend.position !== undefined) {
+          bits.push(legend.position === null ? "图例位置恢复默认"
+            : "图例" + (LEGEND_POS_NAMES[legend.position] ? "移到" + LEGEND_POS_NAMES[legend.position] : "位置改为 " + safeStr(legend.position)));
+        }
+        if (legend.fontSizePt !== undefined) {
+          bits.push(legend.fontSizePt === null ? "图例字号恢复默认"
+            : "图例字号改为 " + legend.fontSizePt + " pt");
+        }
+        if (legend.color !== undefined) {
+          bits.push(legend.color === null ? "图例颜色恢复默认"
+            : "图例颜色改为 " + safeStr(legend.color));
+        }
+      }
+      var series = pres.series && typeof pres.series === "object" ? pres.series : null;
+      if (series) {
+        Object.keys(series).forEach(function (key) {
+          var sv = series[key];
+          var who = seriesLabel(key);
+          if (sv === null) { bits.push(who + "外观恢复默认"); return; }
+          if (!sv || typeof sv !== "object") return;
+          var seg = [];
+          if (sv.stroke !== undefined) {
+            seg.push(sv.stroke === null ? "颜色恢复默认" : "颜色改为 " + safeStr(sv.stroke));
+          }
+          if (sv.strokeWidthPt !== undefined) {
+            seg.push(sv.strokeWidthPt === null ? "线宽恢复默认" : "线宽改为 " + sv.strokeWidthPt + " pt");
+          }
+          if (sv.dash !== undefined) {
+            seg.push(sv.dash === null ? "线型恢复默认"
+              : (sv.dash ? "改为虚线" : "改为实线"));
+          }
+          if (sv.marker !== undefined) {
+            seg.push(sv.marker === null ? "标记恢复默认"
+              : "标记改为" + (MARKER_NAMES[sv.marker] || safeStr(sv.marker)));
+          }
+          if (sv.markerSizePt !== undefined) {
+            seg.push(sv.markerSizePt === null ? "点大小恢复默认" : "点大小改为 " + sv.markerSizePt + " pt");
+          }
+          if (sv.opacity !== undefined) {
+            seg.push(sv.opacity === null ? "不透明度恢复默认" : "不透明度改为 " + sv.opacity);
+          }
+          if (seg.length) bits.push(who + seg.join("、"));
+        });
+      }
+      var plot = pres.plot && typeof pres.plot === "object" ? pres.plot : null;
+      if (plot) {
+        if (plot.frame !== undefined) {
+          bits.push(plot.frame === null ? "边框恢复默认"
+            : "边框改为" + (FRAME_NAMES[plot.frame] || safeStr(plot.frame)));
+        }
+        if (plot.tickDirection !== undefined) {
+          bits.push(plot.tickDirection === null ? "刻度朝向恢复默认"
+            : "刻度" + (TICKDIR_NAMES[plot.tickDirection] || safeStr(plot.tickDirection)));
+        }
+        if (plot.axisWidthPt !== undefined) {
+          bits.push(plot.axisWidthPt === null ? "轴线粗细恢复默认" : "轴线粗细改为 " + plot.axisWidthPt + " pt");
+        }
+        if (plot.tickLengthPt !== undefined) {
+          bits.push(plot.tickLengthPt === null ? "刻度长度恢复默认" : "刻度长度改为 " + plot.tickLengthPt + " pt");
+        }
+        if (plot.markerSizePt !== undefined) {
+          bits.push(plot.markerSizePt === null ? "数据点大小恢复默认" : "数据点大小改为 " + plot.markerSizePt + " pt");
+        }
+        if (plot.lineWidthPt !== undefined) {
+          bits.push(plot.lineWidthPt === null ? "线条粗细恢复默认" : "线条粗细改为 " + plot.lineWidthPt + " pt");
+        }
+      }
+      var points = pres.points && typeof pres.points === "object" ? pres.points : null;
+      if (points) {
+        var pk = Object.keys(points);
+        var nullOnly = pk.length > 0 && pk.every(function (k) { return points[k] === null; });
+        if (nullOnly) {
+          bits.push(pk.length + " 个数据点（或柱子）样式恢复默认");
+        } else if (pk.length) {
+          var kinds = {};
+          pk.forEach(function (k) {
+            var pv = points[k];
+            if (!pv || typeof pv !== "object") return;
+            if (pv.fill !== undefined || pv.stroke !== undefined) kinds.color = 1;
+            if (pv.sizePt !== undefined || pv.strokeWidthPt !== undefined || pv.opacity !== undefined) kinds.size = 1;
+            if (pv.marker !== undefined) kinds.shape = 1;
+          });
+          var kindText = [kinds.color ? "颜色" : null, kinds.size ? "大小/线宽/不透明度" : null,
+            kinds.shape ? "形状" : null].filter(Boolean).join("、") || "样式";
+          bits.push(pk.length + " 个数据点（或柱子）的" + kindText + "已更新");
+        }
+      }
+    }
+    return bits;
+  }
+
   function describe(op, doc) {
     if (!op || typeof op !== "object" || typeof op.op !== "string") return "无效操作";
-    var name = targetLabel(op);
+    var name = targetLabel(op, doc);
     switch (op.op) {
       case "move": {
         if (op.x != null || op.y != null) {
@@ -3731,8 +5158,10 @@
         return "把 " + name + " 的文本设为“" + truncate(op.text, 20) + "”";
       case "set_style": {
         var keys = op.style ? Object.keys(op.style) : [];
-        var head = keys.slice(0, 3).map(function (k) { return k + "=" + truncate(op.style[k], 12); }).join(", ");
-        return "把 " + name + " 的样式更新（" + head + (keys.length > 3 ? " 等" : "") + "）";
+        var head = keys.slice(0, 3).map(function (k) {
+          return (STYLE_KEY_NAMES[k] || "样式") + "改为 " + truncate(op.style[k], 12);
+        }).join("、");
+        return "把 " + name + " 的外观更新（" + head + (keys.length > 3 ? " 等" : "") + "）";
       }
       case "set_color": {
         var segs = [];
@@ -3740,12 +5169,16 @@
         if (op.stroke !== undefined) segs.push("描边色设为 " + safeStr(op.stroke));
         return "把 " + name + " 的 " + segs.join("、");
       }
-      case "add_element":
-        return "添加 " + (op.element && op.element.type ? op.element.type : "元素") + " 元素 " + (op.id || (op.element && op.element.id) || "");
+      case "add_element": {
+        var el = op.element || {};
+        var etn = elementTypeNameOf(el.type);
+        var elnm = typeof el.name === "string" && el.name.trim() ? "「" + truncate(el.name.trim(), 20) + "」" : "";
+        return "添加" + etn + "元素" + elnm;
+      }
       case "delete":
         return "删除 " + name;
       case "group":
-        return "把 " + name + " 编组为 " + (op.id || "新组");
+        return "把 " + name + " 编组";
       case "ungroup":
         return "解组 " + name;
       case "align": {
@@ -3763,18 +5196,38 @@
         return "删除锚点 " + ((op.anchor && op.anchor.id) || op.id || "");
       case "update_anchor":
         return "更新锚点 " + ((op.anchor && op.anchor.id) || op.id || "");
-      case "apply_template":
-        return "应用模板 " + op.template_id;
-      case "apply_journal":
-        return "套用期刊预设 " + op.journal_preset_id;
-      case "recolor":
-        return "按 " + (op.recolor_strategy || "byHue") + " 策略将文档配色换为 " + op.palette_id;
+      case "apply_template": {
+        var tn = templateDisplayName(op.template_id);
+        return tn ? ("应用「" + tn + "」模板") : "应用模板";
+      }
+      case "apply_journal": {
+        var jn = journalDisplayName(op.journal_preset_id);
+        return jn ? ("套用「" + jn + "」期刊预设") : "套用期刊预设";
+      }
+      case "recolor": {
+        var pn = paletteDisplayName(op.palette_id);
+        var rs = RECOLOR_STRATEGY_NAMES[op.recolor_strategy || "byHue"] || "按色相";
+        return "按" + rs + "将文档配色换为" + (pn ? "「" + pn + "」" : "所选配色");
+      }
       case "panel_layout": {
         var pl = op.panel || {};
         return "设置 " + name + " 的面板布局（" + (pl.cols || "?") + "×" + (pl.rows || "?") + "）";
       }
-      case "set_canvas":
-        return "修改画布（" + (op.canvas ? Object.keys(op.canvas).join(", ") : "") + "）";
+      case "set_canvas": {
+        var cv = op.canvas && typeof op.canvas === "object" ? op.canvas : {};
+        var ckeys = Object.keys(cv);
+        if (!ckeys.length) return "修改画布";
+        var cparts = ckeys.slice(0, 4).map(function (k) {
+          var kn = CANVAS_KEY_NAMES[k] || "画布";
+          var v = cv[k];
+          if (k === "journal_preset_id") {
+            var jv = journalDisplayName(v);
+            return kn + "改为" + (jv ? "「" + jv + "」" : "所选期刊预设");
+          }
+          return kn + "改为 " + truncate(v, 16);
+        });
+        return "修改画布：" + cparts.join("、") + (ckeys.length > 4 ? " 等" : "");
+      }
       case "note":
         return "备注：" + truncate(op.note != null ? op.note : op.reason, 40);
       case "set_scientific_contract": {
@@ -3788,30 +5241,34 @@
         return "更新科学论证合同（" + (parts.length ? parts.join("、") : "空轮廓") + "）";
       }
       case "set_chart_properties": {
-        var dcp = op.properties || {};
-        var dbits = [];
-        if (dcp.axes && Object.keys(dcp.axes).length) {
-          dbits.push("坐标轴（" + Object.keys(dcp.axes).join(", ") + "）");
-        }
-        if (dcp.characterization === null) {
-          dbits.push("清除表征参数");
-        } else if (dcp.characterization && Object.keys(dcp.characterization).length) {
-          dbits.push("表征参数（" + Object.keys(dcp.characterization).join(", ") + "）");
-        }
-        return "更新 " + name + " 的图表属性（" + (dbits.join("、") || "无变更") + "）";
+        var bits = describeChartPatch(doc, op);
+        if (!bits.length) return "更新 " + name + " 的图表外观";
+        return "更新 " + name + " 的图表外观：" + bits.join("；");
       }
       case "apply_schematic":
-      case "layout_schematic": {
+      case "layout_schematic":
+      case "apply_diagram_text": {
         var schematic = op.contract || {};
         var scene = schematic.id || op.diagram_id || op.scene_id || op.id || "未命名";
-        return (op.op === "layout_schematic" ? "重排" : "应用") + "实体关系示意图 " + scene +
-          "（" + (Array.isArray(schematic.nodes) ? schematic.nodes.length : 0) + " 节点，" +
-          (Array.isArray(schematic.relations) ? schematic.relations.length : 0) + " 关系）";
+        return (op.op === "layout_schematic" ? "重排" : "应用") + "实体关系示意图「" + scene + "」（" +
+          (Array.isArray(schematic.nodes) ? schematic.nodes.length : 0) + " 个节点，" +
+          (Array.isArray(schematic.relations) ? schematic.relations.length : 0) + " 条关系）";
       }
       case "set_chart_data":
-        return "经用户批准替换 " + name + " 的 inline 数据，保留 mapping/style 与原始统计声明并要求重审";
+        return "经用户批准替换 " + name + " 的图表数据，保留映射、样式与原始统计声明并要求重审";
+      case "apply_chart_style": {
+        var sname = null;
+        if (op.style_id != null && global.FigPresets && typeof global.FigPresets.style === "function") {
+          var sref = global.FigPresets.style(op.style_id);
+          if (sref) sname = sref.name || sref.id;
+        } else if (op.style && typeof op.style === "object") {
+          sname = (typeof op.style.name === "string" && op.style.name) ||
+            (typeof op.style.id === "string" && op.style.id) || "自定义风格";
+        }
+        return "为 " + name + " 套用「" + (sname || "所选") + "」图表风格";
+      }
       default:
-        return "未知操作 " + op.op;
+        return "无法识别的操作类型";
     }
   }
 

@@ -17,11 +17,18 @@
 ## Bundle 扩展约定
 
 - `set_scientific_contract`：以补丁方式保存科学问题、证据角色与统计声明，可撤销。省略的顶层字段保留；标量显式 `null` 清除；`panels` 出现时整体替换。`statistics` 省略或为 `{}` 时保留各图统计，`statistics:null` 清除全部图统计；`statistics[id]` 的对象整体替换该图统计，`null` 或 `{}` 只清除该图，未列出的图不变。真实统计信息唯一存于每个 chart 的 `chart.statistics`，一个图已申报不能替代另一个图。
-- `set_chart_properties`：`{targets, properties:{axes?, characterization?}}`，逐键合并图表轴与表征元数据，不改变 `chartType` 或 `data.inline`。
+- `set_chart_properties`：`{targets, properties:{axes?, characterization?, presentation?, references?, bands?, significance?, letters?}}`，逐键合并图表轴/表征元数据与 chart 级标注（`references/bands/significance` 整组替换、`letters` 整体替换，`null`/`[]` 清除），不改变 `chartType` 或 `data.inline`。`properties.axes.y2` 为可选右纵轴 `{series:[系列名…], label?, min?, max?}`（`series` 必填非空字符串数组；`label` 字符串或 null；`min`/`max` 数字或 null，空值自动取该侧数据域；`axes.y2=null` 移除右轴）。系列名＝宽表列名（`mapping.ys`）或长表分组值（`line_multi` 的 `group`、分组 `scatter` 的 `color`）；仅 `line_multi`/`scatter` 支持，且必须至少保留 1 条系列在左轴、全部名字存在；bar/area/表征图给出明文拒绝。多列在右轴时图例条目自动加「（右轴）」后缀，右轴刻度画在右脊向内、标签在轴外，网格线仍只来自左轴刻度。
+- `properties.axes` 另支持 `xMin/xMax/yMin/yMax`（number|null）：显式坐标范围。给定侧覆盖数据域（允许比数据更宽的 zoom-out），刻度取范围内 nice 值；范围外数据点由 clipPath 裁掉并计数写入 SVG `data-range-clipped`/`data-range-warning`（「范围外 n 个点未显示」）；`min>=max` 拒绝，log 轴下界 ≤0 拒绝；`y2` 右轴仍用自己的 `min/max`。cat 轴的 xMin/xMax 以类别序号计，time 轴以毫秒时间戳计。
+- `properties.references`（≤8 组）：`{label, source?, color?, style:"sticks"|"lines", positions:[≤200 个 x], heights?:[0..1]}`。`sticks` 在绘图区底部单独一条参考带（每组一行，组名+`source` 如「JCPDS 21-1272」写在带内左侧，竖线高 ∝ heights，缺省全 1，数据区相应上移不重叠）；`lines` 画贯穿数据区的虚线竖线、label 写顶部。positions 为用户/模板申报的峰位（如标准卡），渲染器不推断、不代填。
+- `properties.bands`（≤20）：`{x0, x1, color?, opacity?(0–1, 默认 0.15), label?}` 区间底色，画在数据之下的底层、已钳到绘图区内，label 写带内顶部。
+- `properties.significance`（≤30）：`{a:<类别>, b:<类别>, label:<显著性符号>, group?:<分组值>}`，适用 bar/bar_grouped/box/violin/dotplot；在两类别柱/箱顶（含误差线顶）上方画分层括号并写用户给定的 label，多个括号按 x 区间贪心分层不交叠，y 轴上界自动留头room；类别/分组不存在 → 校验报错。渲染器不生成任何显著性符号。
+- `properties.letters`：`{<类别 或 类别|分组>: <1–4 字符标注>}`，写在对应柱/箱顶（含误差线顶）上方；不自动统计分组字母。
+- 宽表多系列：`chart.mapping.ys` 为 ≥2 个互不重复的数值列名数组（仅 `line_multi`/`scatter`；与 `group`/`color` 互斥），此时 `mapping.y=ys[0]` 仅为兼容保留。系列键为 `series|<列名>|s:<列名>`，颜色按调色板顺序，图例标签＝列名。`ys` 在建图时写入（向导/`templateFromStats`/`makeChartElement`），`set_chart_data` 会校验其中引用的列在新数据中仍存在；绘制后没有专门的「改映射」操作。
 - `apply_schematic`：完整保存用户声明的 `{schema_version,id,nodes,relations,sources,canvas?,layout?,uncertainties?,human_review?}` 和物化 `materialized_schematic`，正常 commit 时间写 `generated_at/history`，但绝不进入 SVG 几何。contract 有纯白名单字段和枚举校验，兼容 `sourceRefs/from/to/sourceId/targetId`；不猜科学内容，不执行来源文字，不自动抓取 source。同语义节点默认保留手动布局，仅 `auto_layout=true` 或合同明确该字段时重排；历史重放使用首次物化的元素与 id。
 - `layout_schematic`：`{diagram_id,auto_layout:true}` 按已保存合同显式重排，不读取/推断外部材料。
+- `set_doc_title`：`{title}` 设置整幅画布标题（写 `doc.title`，trim 后 1–120 字符；值不变时 no-op），可撤销，供标签页改名等场景使用。
 - `set_chart_data`：`{targets:[chartId],approved:true,data:{columns,rows,source_ref?,version?,raw_source_sha256?,source_info?},source_ref?,version?,raw_source_sha256?,source_info?}`，同时支持 `sourceRef` camel alias；调用方必须提供真实 `approved=true`、非空 source_ref/version。映射列必须仍存在，`mapping/style/chartType/既有 statistics` 不变。替换前完整 `chart.data`（含原 raw SHA、filename、source_info 和值指纹）写入 `chart.data_history`。未显式提供新 raw 证明时当前 `raw_source_sha256='unknown'` 且移除旧 source_info/raw_source；提供时严格校验 SHA 格式、各 SHA 别名、locator/version、bytes 及 `value_fingerprint` 与本次 columns/rows 一致，明确申报同一 raw 文件仍可保留其 SHA。新 `content_sha256` 只标识 inline 值，不冒充 raw 文件哈希；`source_row_index=null` 不伪造原文件行号。替换后 `statistics_review.status=required`，缺 n/单位列出缺口，科学审计不可直接 ready。
-- `chart.characterization`：`technique`、`x_reverse`、`x_scale`（`linear/log10`）、`x_label`、`y_label`、`curves`、`fit_model`、`fit_source`、`peak_annotations`、`normalize`（`none/max_to_unity`）、`offset_each_series`、`equal_aspect`（布尔值；供 EIS 等科学坐标采用等比映射，不触发任何自动拟合）。
+- `chart.characterization`：`technique`、`x_reverse`、`x_scale`（`linear/log10`）、`x_label`、`y_label`、`curves`、`fit_model`、`fit_source`、`peak_annotations`、`normalize`（`none/max_to_unity`）、`offset_each_series`、`equal_aspect`（布尔值；供 EIS 等科学坐标采用等比映射，不触发任何自动拟合；line/line_multi 表征路径与 scatter 均生效，用户显式轴范围仍优先）。注：表征渲染路径不支持 `axes.y2` 双轴——需要双轴的图（如 TGA+DTG）应使用普通 `line_multi`（宽表 `mapping.ys` 或长表分组值作右轴系列名）。
 - `curves[]` 形如 `{role:'fit'|'component'|'baseline', column:'实际数据列名', label:'显示标签'}`，只使用真实列，不做前端拟合。XPS/NMR 反转结合能/化学位移轴；Raman 默认升序。绘制顺序为 component → baseline → fit → raw；fit 使用 `stroke-dasharray="6 3"`，baseline 使用 `"2 3"`，图例来自同样的原始/用户曲线序列。
 - 除 CV 外，表征曲线按每个序列自身的 x 数值升序排序后再做轴映射；XPS/NMR 的映射使屏幕 x 随结合能/化学位移反向递减。CV 保留采集顺序以连接循环，不按 x 重排；两种处理都只排序/连接渲染副本，inline 原始行与数字循环值保持不变。
 - `fit_source` 统一记录 `provided_by_user_fit`，表示来自用户提供的外部分析结果，不表示 plugin 已经执行拟合。存在 fit/component 曲线而未申报 `fit_source` 时，独立给出 `CHAR_FIT_SOURCE_MISSING`，不依赖该 chart 是否已有统计声明。
@@ -190,6 +197,8 @@ FigOps.MAX_HISTORY
 | `recolor` | 把文档内元素的 `style.fill/stroke` 按 `recolor_strategy` 映射到 `palette_id` 颜色。 |
 | `panel_layout` | 设 target（type=panel）的 `panelLayout`，并按 cols/rows/gap 重排 `children` 的 transform（若子元素是 `panelRelative` 则写归一化值）。 |
 | `set_canvas` | 同 `FigDoc.setCanvas`。 |
+| `set_chart_data` | 见上文 Bundle 扩展约定。 |
+| `apply_chart_style` | `{targets:[chartId], style_id}` 或 `{targets:[chartId], style:{tokens}}`（必须且只能给一个）。`style_id` 经 `FigPresets.style(id)` 解析（`presets/styles.json` 的 14 个内置风格或 prefs 中 `my-*` 自定义风格）；`style` 为与 styles.json 同构的 token 对象（`font/palette/plot/markers/dashes/legend/grid/background`，逐键校验）。效果：写 `paletteId`、元素 `style.fontFamily/fontSizePt`、`axes.tickLabelSizePt`、`presentation.axes.{x,y}.{title,tick}` 字号字重、`presentation.plot/legend`、`axes.gridlines`；重置 `presentation.series[键]` 的 `stroke/strokeWidthPt/dash/marker/markerSizePt`（保留 `opacity`）；保留 `points`、peaks、轴标签文本、y2、数据与 mapping；写 `chart.styleRef={id,name}`（内联风格 id 缺省为 `custom`）。可一次撤销。 |
 | `note` | 无副作用，只把 `reason` 写入 provenance（用于解释 AI 的说明性输出）。 |
 
 **`recolor` 策略**
@@ -223,9 +232,11 @@ FigPalette.luminance(hex) -> number
 ## `FigPresets`（`presets.js`）
 
 ```js
-FigPresets.load({journals, templates, palettes}) -> void   // 三个 JSON 对象；内部转调 FigPalette.load
+FigPresets.load({journals, templates, palettes, styles?}) -> void   // styles 可选（styles.json）；内部转调 FigPalette.load
 FigPresets.journals() -> preset[]
 FigPresets.journal(id) -> preset|null
+FigPresets.styles() -> style[]        // styles.json 的风格 token 数组（未加载时为空数组）
+FigPresets.style(id) -> style|null    // 按 id 取单个风格（含内置与加载时注入的自定义风格）
 FigPresets.templates({category?, chart_type?, capability?}) -> template[]
 FigPresets.template(id) -> template|null
 //   返回的每个模板都有 capability；capability 过滤值为 full/layout/unsupported。
@@ -258,14 +269,28 @@ FigPresets.recommend(columnStats, {n=5}) -> [{template_id, score, reasons: strin
 //   任何 status=unsupported 的模板一律在返回列表前剔除、不参与排序，因此 ROC/volcano/PCA/示意图等
 //   未实现本地 renderer 的候选不会以高分进入默认推荐，也不承诺 60 个模板都可真实生成。
 FigPresets.templateFromStats(templateId, data, {journal_id, palette_id, mapping?}) -> {
-//   elements, chart, warnings, capability, data_bound
+//   elements, chart, warnings, capability, data_bound, hints, preview
 // }
+//   R7：模板可带 chart_overrides={presentation?,axes?,characterization?,style_id?}
+//   （presentation/axes/characterization 用 set_chart_properties 同一套校验，
+//   style_id 须为 styles.json 已有风格；references/bands/significance/letters/
+//   peak_annotations 等数据标注键在加载期即拒绝——标注数值必须由用户填写）。
+//   overrides 深合并进每个新建图表（模板键优先）；hints 为 ≤4 条「下一步」
+//   提示（props 面板顶部显示，可关闭，不写入文档）；preview 为
+//   template-preview.js 合成示例生成器 id（仅缩略图用，示例非真实数据）。
+//   templateOverrideOps(templateId, targets) -> EditOp[]
+//   UI 创建路径在默认风格 op 之后追加这些 op（style_id→apply_chart_style，
+//   presentation/axes/characterization→set_chart_properties），保证
+//   「默认风格先套、模板 overrides 后套」；无 overrides 时返回 []。
 //   先执行 validateTemplateCapability，不可应用时抛 Error，不产生元素。
 //   R02：opts.mapping 为用户确认的字段映射 {槽位: 列名|null}。规则＝
 //   「用户确认值优先；未提供才使用既有推断」。槽位必须是模板
 //   default_mapping 声明的槽；字符串值必须是数据中真实存在的列名；
 //   null 显式清空该槽；违规立即抛错（不静默回退推断，保证向导所见
-//   与实际生成一致）。
+//   与实际生成一致）。mapping.ys（列名数组）同样允许，作为宽表多
+//   纵轴系列来源（仅 line_multi/scatter，且与 group/color 互斥）。
+//   R4-HB：opts.axes.y2 原样写入 chart.axes.y2（结构与「series 为
+//   mapping.ys 子集、至少留 1 列在左轴」校验；语义校验由 ops 把关）。
 //   full 无 data/rows 时仍允许显式空骨架，data_bound=false 并明确提示“未绑定数据”，不代表已生成图表。
 //   layout 只产生 chart={} 的空白复合骨架，data_bound=false；即使传 data 也不自动填图。
 //   每个图表模板含 panel 容器、一个或多个 chart 元素及可选标题文本。
@@ -283,8 +308,22 @@ FigPresets.RENDERER_SEMANTICS -> {
 ## `FigData`（`data.js`）
 
 ```js
-FigData.parseCSV(text, {delimiter="auto", header=true}) -> {columns: string[], rows: value[][]}
-//   auto 探测 , ; \t；带引号转义；空单元格为 null
+FigData.parseCSV(text, {delimiter="auto", header=true, numberFormat="plain"}) -> {columns: string[], rows: value[][]}
+//   auto 探测 , ; \t；带引号转义；空单元格为 null。
+//   numberFormat ∈ "plain"（默认，与历史逐字节一致）| "comma_thousands"（1,234.5→1234.5）
+//   | "comma_decimal"（1.234,56→1234.56 / 3,14→3.14）；非法值抛 Error。
+//   numberFormat 作用于每个单元格的数值写法解释，见下方 parseCell。
+FigData.parseCell(text, numberFormat="plain") -> number | string | null
+//   单个单元格统一转换：trim → 缺失记号 → null → 数字 → 其余字符串。
+//   numberFormat 取值同 parseCSV；plain 与历史 coerceCell 完全一致。
+FigData.detectDelimiter(text) -> "," | ";" | "\t"
+//   分隔符探测：优先「每行字段数一致且≥2」的自洽候选，无自洽才回退纯计数规则。
+FigData.sniffNumberFormat(text, {delimiter="auto", header=true}) -> {
+//   delimiter, suggestion, ambiguous, columns, example }
+//   suggestion ∈ "comma_decimal" | "comma_thousands" | null（ambiguous 时为 null）；
+//   columns 为疑似使用该写法的列名，example 为其中一格原文示例。
+//   约定：只读探测、只提示不自动应用——返回值供调用方决定是否提示用户，
+//   不改变数据本身；是否采用由用户/上层显式决定（如向导「读取方式」）。
 FigData.parseJSON(text) -> {columns, rows}      // 支持 [{...}] 或 [[...]]
 FigData.columnStats(data) -> {n_rows, columns: [{name, kind:"numeric"|"categorical"|"datetime"|"text",
     nunique, missing, min, max, mean, isOrderedCandidate, sampleValues}]}
@@ -302,6 +341,22 @@ FigData.renderChartSVG(chartSpec, {width_mm, height_mm, dpi}) -> string   // 返
 //   仅旧内核缺少探针函数时才使用 presets.js 已审计的兼容白名单，不维护 59 模板的静态支持映射。
 //   不支持、缺数据或未绑定数据行均明确抛 Error；UnsupportedChartError 可携带仅用于模板示意的
 //   svgFragment，但该片段不是成功渲染结果。FigRender 不再吞错转成“需 v2”占位成功输出。
+
+// H2：当前实际生效样式摘要（单位 pt）。复用渲染器同一批常量与解析函数
+// （STYLE_DEFAULTS/effPlot/effSeriesStyle/presLegendStyle/presAxisStyle/legendPos/
+// resolvePalette/seriesIdentity），未单独设置的项按渲染器默认值给出；不含原始数据行或单元格值。
+FigData.describeChartStyle(chartSpec, {fontSizePt, fontFamily}) -> {
+  chartType, font:{family, tickPt:{x,y}, axisTitlePt:{x,y}},
+  axis:{widthPt, tickLengthPt, tickDirection, frame, gridlines},
+  labels:{x,y}, scales:{x,y}, legend:{position, fontPt},
+  marks:{lineWidthPt, markerSizePt},
+  series:[{key,label,color,lineWidthPt?,markerSizePt?,marker?,dash?,opacity?,hatch?}],  // ≤12，渲染顺序
+  overrides:{points, peaks},
+  features:{ranges:{xMin?,xMax?,yMin?,yMax?}|null, tickHidden:{x,y},
+    annotations:{references,bands,significance,letters},
+    seriesColors:{mode,palette,reverse,colorbar}|null,
+    componentFill, errorStyle}
+}
 ```
 
 ---
@@ -416,6 +471,21 @@ FigAI.requestOps({doc, instruction, anchors, selection}) -> Promise<{ops, explan
 FigAI.requestReview({doc, imageDataUrl, journalPreset}) -> Promise<{items, mode:"model"|"fallback"}>
 FigAI.explainError(err) -> string
 
+// --- H2：对话 + 可执行修改方案 ---
+FigAI.buildAssistMessages({doc, instruction, anchors, selection, history,
+    chartPart, checks, journalProfile}) -> messages
+//   system：固定工作方式提示词（先中文回答；要求修改时给编号方案 + ops；
+//   不能直接改图、等用户「同意并修改」；依据「当前实际渲染样式」行）+
+//   EditOp 说明 + 元素/锚点清单 + 图表结构摘要（含 describeChartStyle）+
+//   选中元素/点选图内对象/期刊预设/规则检查 + JSON 输出要求。
+//   之后依次追加 history（原样）与 {role:"user", content: instruction}。
+FigAI.requestAssist({doc, instruction, anchors, selection, history,
+    chartPart, checks, journalProfile}) -> Promise<{reply, ops, mode:"model", repaired?, ops_error?}>
+//   未配置 key 抛 AIError(status 0,"no api key")，网络/HTTP 错误原样抛出（不做离线回退）。
+//   解析 {"reply","ops"}；纯文本按 reply 处理、ops=[]。ops 非空时经 opsProblem 形状检查
+//   与 FigOps.validateAll 校验；不通过则带原始输出重试一次，通过则 repaired:true，
+//   仍不通过则 ops=[] 并回非空 ops_error（reply 保留）。
+
 // --- 离线确定性回退（无 key / 网络失败 / 解析失败时自动使用，mode="fallback"）---
 FigAI.fallbackOps({doc, instruction, anchors, selection}) -> {ops, explanation}
 //   解析中文指令中的可识别模式，至少覆盖：
@@ -463,6 +533,56 @@ FigStore.MIGRATIONS                              // { "1.0": (project)=>project 
 ```
 
 工作台条件保存另有版本防护：每次 POST 携带本次文档的 `base_token`，与当前服务端不一致时返回 HTTP 409 / `save_conflict` 并停止自动覆盖。本页未确认修改仍保留，先通过「历史 → 导出工程」备份，再刷新核对并手动合并。这是防丢失/防覆盖机制，不承诺常驻多端同步或自动合并冲突。
+
+---
+
+## 图表展示覆盖 chart.presentation（version 1）
+
+`set_chart_properties` 的 `properties.presentation` 为可选展示覆盖对象，不改数据行、统计或绑定列；`null` 删除该级覆盖（恢复继承），`presentation:null` 清除整块。有效样式解析顺序：默认样式 ← `plot` ← `series[键]` ← `points[键]`。
+
+- `axes.{x,y}.{title,tick}.{fontSizePt,color,fontWeight}`：轴标题/刻度文字样式。`tick.hidden:true` 时该轴不画刻度线与刻度数字（轴线/边框/轴标题保留），常用于光谱「任意单位」轴。
+- `legend.{position: none|right|top|bottom|inside-tl|inside-tr|inside-bl|inside-br|inside-best|inline, fontSizePt, color, frame}`：`inside-*` 在绘图区内对应角落绘制（带内边距，底部两角自下而上堆叠）；`inside-best` 自动比较四个内角与数据几何的重叠，选最小者，全部重叠超阈值时退回 right；`inline` 不画图例框、把系列名写在各曲线右端（仅 line/line_multi/area/表征图，其他图型回退 right；纵向防重叠逐个下推）；`frame:true` 加白底细框。
+- `plot.{frame: open|box, tickDirection: out|in, axisWidthPt(0–5，0=不画轴线/框线), tickLengthPt(0–20，0=不画刻度线但保留标签), markerSizePt(0.5–40), lineWidthPt(0.1–20), markerFill: solid|hollow, markerCycle, dashCycle, background, gridColor, seriesColors, componentFill, errorStyle}`：整图外观；`frame:"box"` 补画上、右轴线；`markerCycle`/`dashCycle` 按系列序号循环取 `circle|square|triangle|diamond`（含 none）与 `solid|dash|dot|dashdot`，`series[键]` 显式值优先、逐点覆盖最后；`background`/`gridColor` 为 #hex 或 null（null 恢复默认）；`seriesColors:{mode:"gradient",palette:<顺序配色 id 如 viridis/plasma/blues/magma>,reverse?,colorbar?}` 按系列顺序（分组值全为数值时按数值大小）沿配色插值，显式 `series[键].stroke` 优先，`colorbar:{show:true,label?,min?,max?}` 在右侧画竖色标（未给 min/max 用数值分组范围，非数值分组画两端系列名）；`componentFill:true` 让表征 `role:"component"` 曲线向基线（有 baseline 曲线用之，否则 y=0/下界）以系列色 0.3 透明度填充；`errorStyle:"band"`（默认 bars，仅 line/line_multi）用同一误差来源画 0.2 透明误差带。
+- `series[稳定键].{stroke, strokeWidthPt, dash, marker: none|circle|square|triangle|diamond, markerSizePt, opacity, hatch, markerFill: solid|hollow}`：`hatch` ∈ `"/"|"\\"|"x"|"."|"-"|"|"`，柱/面积/箱用 clipPath 内线段实现斜线填充（PNG/PDF 导出一致）；markerFill 覆盖整图 plot.markerFill，实现逐系列实心/空心标记。
+- `points[标记键].{fill, sizePt, opacity, marker, stroke, strokeWidthPt}`（单次补丁 ≤2000 键）：
+  - 数据点键 `pt|<源行号>|<散列>`，散列对 `原始x + \u0001 + 原始y + \u0001 + 分组/颜色值` 取 31 乘法散列转 36 进制；`FigData.pointKey(chartSpec,rowIndex)` 返回该行的键。数据替换后同一行号值变 → 键不匹配 → 覆盖不生效但保留在文档，绝不转移。
+  - 柱子键 `bar|<类别>`（bar）/ `bar|<类别>|<组>`（bar_grouped）；柱子只用 fill/opacity/stroke/strokeWidthPt。
+- `peaks[峰id].{color,fontSizePt}`。
+
+系列稳定键用 `FigData.seriesIdentity(chart)` 查询；标记键渲染时写入 SVG `data-point-key`/`data-row`/`data-size-pt`/`data-marker`，供编辑器点选。渲染默认样式以 pt 计（`u=dpi/72`），同一 pt 在不同 dpi 下物理尺寸一致。
+
+---
+
+## 查看器多画布标签页 HTTP API（viewer.py）
+
+每个标签页是一个独立 FigureDocument（自己的 id/canvas/历史）；活动标签就是
+`_STATE["doc"]` 与 `current.figureproj.json`，MCP/DSH 工具与 `/api/current`、
+`/api/doc`、导出全部只作用于活动标签，语义不变。
+
+- `GET /api/tabs` → `{ok, active_id, tabs:[{id,title,elements,updated}]}`。
+- `POST /api/tabs/new {doc, base_token}`：校验 base_token（空服务器须为
+  `null`），把当前文档备份到 `tabs/<id>.figureproj.json`，新文档成为 current
+  并写入 `tabs/index.json` 的 order/active；id 重复 → 400；token 不符 →
+  409 `save_conflict`（形状同 `/api/current`）。
+- `POST /api/tabs/switch {to_id, base_token}`：同 token 校验；当前文档先备份
+  到自己的标签文件，再从 `tabs/<to_id>.figureproj.json` 载入为 current；
+  目标文件缺失/损坏 → 400 且不做任何变更。
+- `POST /api/tabs/close {id, base_token}`：把标签文件移到
+  `tabs/closed/<id>-<时间戳>.figureproj.json`（不删除）；关闭活动标签先把
+  current 切到右邻（无右邻取左邻），邻居文件缺失/损坏 → 400 且不做任何变更；
+  最后一个标签 → 400。
+- `GET /api/tabs/closed` → `{ok, closed:[{file,id,title,elements,closed_at}]}`，
+  最新在前最多 50 条；`file` 仅为归档 basename，`closed_at` 取归档时间戳
+  （解析失败退回文件 mtime）。
+- `POST /api/tabs/restore {file, base_token}`：同 token 校验；`file` 必须是
+  `tabs/closed/` 下真实存在的归档 basename（拒绝路径穿越）。归档中文档 id
+  已是打开标签时等价于切换（归档保留原位）；否则归档移回
+  `tabs/<id>.figureproj.json`、追加 order 并激活。任何校验失败 → 400 且不做
+  任何变更。
+- `tabs/index.json` 缺失时由当前文档推导单标签；当前文档 id 不在 order 中
+  （如 MCP `/api/doc` 整体推送）视为活动标签内容被替换，原位替换 active 项。
+- 以上操作在 `_STATE_LOCK`（RLock）单临界区内完成 token 校验、备份、切换与
+  index 更新，与 `/api/current` 条件保存互斥。
 
 ---
 

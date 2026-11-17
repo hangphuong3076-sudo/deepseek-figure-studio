@@ -212,8 +212,8 @@
       var snapshotDue = false;
       var transaction = enqueueDoc(function () {
         assertDoc();
-        if (!Array.isArray(ops)) throw new Error("App.commit: ops 必须是 EditOp 数组");
-        if (!global.FigOps) throw new Error("App.commit: 缺少内核 FigOps，请先加载 lib/ops.js");
+        if (!Array.isArray(ops)) throw new Error("文档提交：操作必须是数组");
+        if (!global.FigOps) throw new Error("文档提交失败：缺少操作内核");
 
         // Read App.doc only after every earlier document transaction completed.
         var check = global.FigOps.validateAll(ops, App.doc);

@@ -58,7 +58,29 @@ class Element {
   get innerHTML() { return this._html || ''; }
 }
 const document = {createElement: tag => new Element(tag), createTextNode: text => { const e = new Element('#text'); e.textContent = text; return e; }};
-const sandbox = {console, document, setTimeout, clearTimeout};
+const sandbox = {console, document, setTimeout, clearTimeout, Ui: {h: function (tag, attrs, children) {
+  var el = document.createElement(tag);
+  if (attrs) Object.keys(attrs).forEach(function (key) {
+    var value = attrs[key];
+    if (value === null || value === undefined || value === false) return;
+    if (key === "class" || key === "className") { el.className = String(value); el.setAttribute("class", String(value)); }
+    else if (key === "text") el.textContent = String(value);
+    else if (key === "html") el.innerHTML = String(value);
+    else if (key === "style" && value && typeof value === "object") {
+      var st = el.style || (el.style = {});
+      Object.keys(value).forEach(function (prop) { var pv = value[prop]; if (pv === null || pv === undefined) return; st[prop] = pv; });
+    } else if (key.indexOf("on") === 0 && typeof value === "function") { el.addEventListener(key.slice(2).toLowerCase(), value); }
+    else if (value === true) { el.setAttribute(key, ""); } else { el.setAttribute(key, String(value)); }
+  });
+  if (children != null) {
+    var list = Array.isArray(children) ? children : [children];
+    list.forEach(function (child) {
+      if (child === null || child === undefined || child === false) return;
+      el.appendChild(typeof child === "string" || typeof child === "number" ? document.createTextNode(String(child)) : child);
+    });
+  }
+  return el;
+}}};
 vm.createContext(sandbox);
 for (const name of ['figdoc','diagram','ops','render']) vm.runInContext(fs.readFileSync('lib/' + name + '.js','utf8'), sandbox);
 const App = sandbox.App = {doc: sandbox.FigDoc.create(), commits: [], selections: [], messages: [],
@@ -116,7 +138,9 @@ const geometryBefore = FigDiagram.connectorGeometry(first, connector);
 const svgBefore = FigRender.toSVG(first);
 const moved = FigOps.applyAll(first, [{op: 'move', targets: ['child'], dx: 7, dy: 4}], {ts: '2026-01-02T03:04:06.000Z'}).doc;
 const geometryAfter = FigDiagram.connectorGeometry(moved, moved.elements.find(el => el.id === connector.id));
-assert.notDeepStrictEqual(geometryBefore.end, geometryAfter.end);
+// R9：端口策略稳定后 end（目标侧端口）可能不变；起点在被移动的 child 上必变
+assert.notDeepStrictEqual(geometryBefore.start, geometryAfter.start);
+assert.notDeepStrictEqual(geometryBefore.points, geometryAfter.points);
 const svgAfter = FigRender.toSVG(moved);
 assert.notStrictEqual(svgBefore, svgAfter);
 const updatedInput = JSON.parse(JSON.stringify(input));
@@ -134,7 +158,9 @@ assert.deepStrictEqual(input, originalInput);
 const example = FigDiagram.example('tpl-graphical-abstract', true);
 assert.strictEqual(FigDiagram.validate(example).ok, true);
 assert(FigDiagram.supportsTemplate({id: 'tpl-graphical-abstract', category: 'diagram'}).supported);
-assert.strictEqual(FigDiagram.supportsTemplate({id: 'tpl-diagram-decision', category: 'diagram'}).supported, false);
+// R9：所有 tpl-diagram-* 模板统一可应用（apply 仍要求用户 schematic 或模板默认结构）
+assert(FigDiagram.supportsTemplate({id: 'tpl-diagram-decision', category: 'diagram'}).supported);
+assert(FigDiagram.supportsTemplate({id: 'tpl-diagram-feedback', category: 'diagram'}).supported);
 assert(FigDiagram.previewSVG(example).includes('data-fig-id='));
 console.log(JSON.stringify({ok: true, connector: connector.type, deterministic: true, replay: true}));
 """
@@ -267,32 +293,32 @@ const selects = label => panel.querySelectorAll('select').filter(s => s.attribut
 const fire = (el, value, evt) => { el.value = value; (el.listeners[evt || 'change'] || []).forEach(fn => fn.call(el, {})); };
 const contract = () => sandbox.DiagramPanel.getContract();
 const json = () => JSON.parse(panel.querySelector('#diagram-json').value);
-fire(selects('通用形状声明')[0], 'chart');
+fire(selects('形状')[0], 'chart');
 assert.strictEqual(contract().nodes[0].shape, 'chart');
 assert.strictEqual(contract().nodes[0].kind, 'chart');
 assert(contract().nodes[0].data_slot);
 assert.strictEqual(json().nodes[0].shape, 'chart');
-assert.strictEqual(selects('节点 kind')[0].value, 'chart');
-fire(selects('通用形状声明')[0], 'box');
+assert.strictEqual(selects('节点类别')[0].value, 'chart');
+fire(selects('形状')[0], 'box');
 assert.strictEqual(contract().nodes[0].kind, 'box');
 assert(!contract().nodes[0].data_slot);
 assert(!json().nodes[0].data_slot);
-fire(selects('节点 kind')[2], 'chart');
+fire(selects('节点类别')[2], 'chart');
 assert.strictEqual(contract().nodes[2].shape, 'box');
 assert(contract().nodes[2].data_slot);
-fire(selects('科学关系类型')[0], 'inhibit');
-assert.strictEqual(selects('节点 kind')[2].value, 'chart');
+fire(selects('关系类型')[0], 'inhibit');
+assert.strictEqual(selects('节点类别')[2].value, 'chart');
 assert.strictEqual(contract().relations[0].kind, 'inhibit');
-fire(selects('通用形状声明')[1], 'ellipse');
+fire(selects('形状')[1], 'ellipse');
 assert.strictEqual(contract().nodes[1].shape, 'ellipse');
 const area = panel.querySelector('#diagram-json');
 fire(area, '{"broken":', 'input');
-fire(selects('通用形状声明')[3], 'cell');
+fire(selects('形状')[3], 'cell');
 assert.strictEqual(area.value, '{"broken":');
 (async () => {
   await assert.rejects(sandbox.DiagramPanel.commit(), /未应用/);
   assert.strictEqual(App.commits.length, 0);
-  const reload = panel.querySelectorAll('button').find(b => b.textContent === '从表单重载 JSON');
+  const reload = panel.querySelectorAll('button').find(b => b.textContent === '按上面的表单重新生成 JSON');
   reload.click();
   assert.strictEqual(json().nodes[3].shape, 'cell');
   const result = await sandbox.DiagramPanel.commit();

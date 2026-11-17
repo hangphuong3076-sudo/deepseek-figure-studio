@@ -65,25 +65,7 @@
   }
 
   function h(tag, attrs, children) {
-    var el = document.createElement(tag);
-    attrs = attrs || {};
-    Object.keys(attrs).forEach(function (k) {
-      var v = attrs[k];
-      if (v === null || v === undefined) return;
-      if (k === "text") { el.textContent = String(v); return; }
-      if (k === "class") { el.className = String(v); return; }
-      if (k === "style" && typeof v === "object") {
-        Object.keys(v).forEach(function (p) { el.style[p] = v[p]; });
-        return;
-      }
-      if (k.indexOf("on") === 0 && typeof v === "function") {
-        el.addEventListener(k.slice(2).toLowerCase(), v);
-        return;
-      }
-      el.setAttribute(k, String(v));
-    });
-    (children || []).forEach(function (c) { if (c) el.appendChild(c); });
-    return el;
+    return global.Ui.h(tag, attrs, children);
   }
 
   function zOf(el) {

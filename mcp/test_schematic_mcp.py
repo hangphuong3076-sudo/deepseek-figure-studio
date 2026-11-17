@@ -282,11 +282,19 @@ class SchematicMCPTests(unittest.TestCase):
 
     def test_live_template_capability(self):
         templates = self.mcp.call("figure_templates", {"include_unsupported": True})["templates"]
-        self.assertEqual(len(templates), 60)
+        # R7+R9+R10：模板库 88 项 = 76 full + 12 layout，0 unsupported
+        self.assertEqual(len(templates), 88)
         counts = collections.Counter(item["capability"] for item in templates)
-        self.assertEqual(dict(counts), {"full": 27, "layout": 12, "unsupported": 21})
+        self.assertEqual(dict(counts), {"full": 76, "layout": 12})
         supported = {item["id"] for item in templates if item["category"] == "diagram" and item["capability"] == "full"}
-        self.assertEqual(supported, {"tpl-diagram-flow", "tpl-diagram-arch", "tpl-diagram-pipeline", "tpl-graphical-abstract"})
+        self.assertEqual(supported, {
+            "tpl-diagram-flow", "tpl-diagram-arch", "tpl-diagram-pipeline",
+            "tpl-diagram-decision", "tpl-diagram-loop", "tpl-diagram-experiment",
+            "tpl-diagram-swimlane", "tpl-diagram-timeline", "tpl-diagram-hierarchy",
+            "tpl-diagram-model", "tpl-diagram-compare", "tpl-diagram-prisma",
+            "tpl-diagram-consort", "tpl-diagram-stages", "tpl-diagram-chevron",
+            "tpl-diagram-roadmap", "tpl-diagram-merge", "tpl-diagram-numbered",
+            "tpl-diagram-feedback", "tpl-graphical-abstract"})
         self.assertFalse(any(item["category"] == "diagram" and item["auto_generate"] for item in templates))
 
 

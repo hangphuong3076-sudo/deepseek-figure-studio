@@ -91,8 +91,14 @@ class EntityGeometryTests(unittest.TestCase):
         connectors = [el for el in loaded["elements"] if el.get("type") == "connector"]
         self.assertEqual(len(connectors), 4)
         self.assertFalse(any("pathData" in el for el in connectors))
-        image = figraster.render_to_image(loaded, dpi=36)
-        self.assertEqual(image.size, (171, 128))
+        # canonical SVG → svg_export 真实导出（与 viewer/server 同链路）；
+        # 像素尺寸断言含义不变：ceil(canvas_mm * dpi / 25.4)。
+        raster_png = Path(temporary.name) / "synthetic-raster.png"
+        svg_export.export_svg(result["svg"], loaded, str(raster_png),
+                              "png", dpi=36)
+        from PIL import Image
+        with Image.open(raster_png) as image:
+            self.assertEqual(image.size, (171, 128))
         for extension, magic in (("png", b"\x89PNG\r\n\x1a\n"), ("pdf", b"%PDF-")):
             output = Path(temporary.name) / ("synthetic." + extension)
             svg_export.export_svg(result["svg"], loaded, str(output), extension, dpi=72)

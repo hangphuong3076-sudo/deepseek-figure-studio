@@ -472,6 +472,736 @@ body.ai-split-dragging {
   border-top: 1px solid var(--border-light);
 }
 
+/* ---------------- Ui.modal dialogs (.ui-modal-*) ----------------
+   #modal-root supplies the fixed backdrop; each overlay is transparent
+   and centers one .ui-modal card. Stacked overlays get an extra dim. */
+
+.ui-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  box-sizing: border-box;
+}
+
+.ui-modal-overlay ~ .ui-modal-overlay {
+  background: rgba(31, 45, 61, 0.25);
+}
+
+.ui-modal {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: min(360px, 100%);
+  max-width: min(720px, 100%);
+  max-height: 100%;
+  background: #fff;
+  color: var(--text-on-light);
+  border-radius: 10px;
+  box-shadow: 0 14px 48px rgba(31, 45, 61, 0.35);
+  overflow: hidden;
+}
+
+.ui-modal-wide {
+  width: min(1100px, 100%);
+  max-width: min(1100px, 100%);
+}
+
+.ui-modal-settings {
+  width: min(640px, 100%);
+}
+
+.ui-modal-title {
+  flex: none;
+  padding: 12px 48px 12px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.ui-modal-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-muted-light);
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.ui-modal-close:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--text-on-light);
+}
+
+.ui-modal-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.ui-modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 16px;
+}
+
+.ui-modal-footer {
+  flex: none;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 16px;
+  background: #fafbfc;
+  border-top: 1px solid var(--border-light);
+}
+
+/* Dialog buttons are scoped to .ui-modal so side/top bar buttons keep
+   their existing appearance. */
+.ui-modal .ui-btn {
+  font: inherit;
+  font-size: 13px;
+  padding: 5px 14px;
+  border-radius: 5px;
+  border: 1px solid var(--border-light);
+  background: #fff;
+  color: var(--text-on-light);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ui-modal .ui-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.ui-modal .ui-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.ui-modal .ui-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ui-modal .ui-btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.ui-modal .ui-btn-primary:hover:not(:disabled) {
+  color: #fff;
+  filter: brightness(1.08);
+}
+
+.ui-modal .ui-btn-ghost {
+  background: transparent;
+  border-color: transparent;
+}
+
+.ui-modal .ui-btn-ghost:hover:not(:disabled) {
+  background: var(--accent-soft);
+  border-color: transparent;
+  color: var(--accent-strong-text);
+}
+
+.ui-modal .ui-btn-danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+
+.ui-modal .ui-btn-danger:hover:not(:disabled) {
+  color: #fff;
+  filter: brightness(1.08);
+}
+
+/* ---------------- Data import wizard (dw-*) ----------------
+   4-step layout inside .dw-modal: fixed-height dialog, step bar on top,
+   scrollable control column left, persistent preview column right. */
+
+.dw-modal {
+  height: min(760px, 100%);
+}
+
+.dw-modal .ui-modal-body {
+  overflow: hidden;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.dw-root {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.dw-steps {
+  flex: none;
+  display: flex;
+  gap: 4px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-light);
+  background: #fafbfc;
+}
+
+.dw-stepbtn {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--text-on-light);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.dw-stepbtn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.dw-stepbtn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.dw-stepbtn.dw-stepbtn-on,
+.dw-stepbtn.dw-stepbtn-on:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.dw-cols {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+
+.dw-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: auto;
+  padding: 12px 14px;
+}
+
+.dw-side {
+  flex: 0 0 42%;
+  min-width: 0;
+  overflow: auto;
+  padding: 12px;
+  border-left: 1px solid var(--border-light);
+  background: #fafbfc;
+}
+
+.dw-step[hidden] {
+  display: none;
+}
+
+.dw-step:focus {
+  outline: none;
+}
+
+.dw-h {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-on-light);
+  margin: 10px 0 6px;
+}
+
+.dw-src {
+  font-size: 12px;
+  color: #555;
+  margin-bottom: 6px;
+}
+
+.dw-note {
+  font-size: 11px;
+  color: #8a6d3b;
+  padding: 4px 2px;
+}
+
+.dw-err {
+  color: #b91c1c;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+/* data table (step 1) */
+.dw-table-wrap {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid #e3e8ee;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.dw-table {
+  border-collapse: collapse;
+  font-size: 11px;
+  width: 100%;
+}
+
+.dw-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f3f5f7;
+  border: 1px solid #ddd;
+  padding: 4px 6px;
+  text-align: left;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.dw-table td {
+  border: 1px solid #eee;
+  padding: 2px 6px;
+  max-width: 180px;
+  overflow-wrap: anywhere;
+}
+
+.dw-th-badges {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.dw-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 0 5px;
+  border-radius: 999px;
+  border: 1px solid #d5dbe3;
+  color: #556;
+  background: #f3f5f7;
+  white-space: nowrap;
+}
+
+.dw-badge-num { color: #1d4ed8; border-color: #bfdbfe; background: #eff6ff; }
+.dw-badge-date { color: #0f766e; border-color: #99f6e4; background: #f0fdfa; }
+.dw-badge-text { color: #6b7280; }
+.dw-badge-miss { color: #b45309; border-color: #fde68a; background: #fffbeb; }
+.dw-badge-rec { color: #fff; border-color: var(--accent); background: var(--accent); }
+.dw-badge-ok { color: #166534; border-color: #bbf7d0; background: #f0fdf4; }
+.dw-badge-off { color: #9ca3af; border-color: #e5e7eb; background: #f9fafb; }
+
+.dw-miss {
+  background: #fef3c7;
+}
+
+/* recommendation card + memory hint (step 1) */
+.dw-reccard {
+  border: 1px solid #e3e8ee;
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px 12px;
+  margin-top: 8px;
+}
+
+.dw-reccard-title {
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dw-reccard-line {
+  font-size: 12px;
+  color: #444;
+  margin-top: 4px;
+}
+
+.dw-quick {
+  margin-top: 8px;
+}
+
+.dw-mem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #0f766e;
+  background: #f0fdfa;
+  border: 1px solid #99f6e4;
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin-top: 8px;
+}
+
+.dw-link {
+  font: inherit;
+  font-size: 12px;
+  color: var(--accent);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+/* template cards (step 2) */
+.dw-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* R7：第 2 步已是全量可用模板（数十张卡），列表内部滚动，
+     避免把下方字段映射区推出可视区（映射区需保持在首屏内）。 */
+  max-height: min(220px, 34vh);
+  overflow-y: auto;
+}
+
+.dw-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid #d5dbe3;
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+  position: relative;
+}
+
+.dw-card:hover {
+  border-color: var(--accent);
+}
+
+.dw-card-off {
+  opacity: 0.55;
+  background: #f9fafb;
+}
+
+.dw-card input[type='radio'] {
+  margin-top: 3px;
+}
+
+.dw-card-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.dw-card-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dw-card-reasons {
+  font-size: 11px;
+  color: #666;
+  margin-top: 2px;
+}
+
+.dw-card-tip {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+}
+
+/* column chips + mapping slots (step 2) */
+.dw-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 4px 0 10px;
+}
+
+.dw-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  padding: 3px 9px;
+  border: 1px solid #c7d0da;
+  border-radius: 999px;
+  background: #fff;
+  cursor: grab;
+  user-select: none;
+}
+
+.dw-chip:active {
+  cursor: grabbing;
+}
+
+.dw-chip-kind {
+  font-size: 10px;
+  color: #889;
+}
+
+.dw-slots {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.dw-slot {
+  border: 1px dashed #b9c4d0;
+  border-radius: 8px;
+  background: #fbfcfd;
+  padding: 6px 10px;
+}
+
+.dw-slot-over {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.dw-slot-bad {
+  border-color: var(--danger);
+  background: #fef2f2;
+}
+
+.dw-slot-label {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.dw-slot-cur {
+  font-size: 12px;
+  color: #0f766e;
+  margin: 2px 0;
+  min-height: 1em;
+}
+
+.dw-slot-select {
+  font-size: 12px;
+  max-width: 100%;
+  padding: 2px 4px;
+}
+
+.dw-slot-warn {
+  font-size: 11px;
+  color: var(--danger);
+  margin-top: 3px;
+}
+
+/* R4-HB：宽表多纵轴 chips（line_multi/scatter 纵轴槽） */
+.dw-ycol-wrap {
+  margin: 2px 0 4px;
+}
+
+.dw-ycol-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  margin: 2px 0;
+}
+
+.dw-ycol-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid #b9c4d0;
+  border-radius: 10px;
+  background: #fff;
+  padding: 1px 4px 1px 8px;
+  font-size: 12px;
+}
+
+.dw-ycol-chip-right {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.dw-ycol-chip[data-axis="right"] {
+  border-color: var(--accent);
+}
+
+.dw-ycol-axis {
+  font-size: 11px;
+  padding: 0 2px;
+}
+
+.dw-ycol-rm {
+  border: none;
+  background: transparent;
+  color: #888;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.dw-ycol-rm:hover {
+  color: var(--danger);
+}
+
+.dw-ycol-hint {
+  font-size: 11px;
+  color: #666;
+  margin: 2px 0 4px;
+}
+
+.dw-ycol-empty {
+  font-size: 12px;
+  color: #999;
+}
+
+.dw-ycol-addsel {
+  font-size: 12px;
+  max-width: 100%;
+  padding: 2px 4px;
+}
+
+/* stats + tips (step 2) */
+.dw-stats {
+  font-size: 12px;
+  color: #333;
+  background: #fff;
+  border: 1px solid #e3e8ee;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.dw-stat-line {
+  margin: 2px 0;
+}
+
+.dw-stat-warn {
+  font-size: 11px;
+  color: var(--danger);
+  margin: 4px 0 2px;
+}
+
+.dw-tiphost {
+  margin-top: 6px;
+}
+
+.dw-tip {
+  font-size: 11px;
+  color: #667;
+}
+
+.dw-tip summary {
+  cursor: pointer;
+  color: #778;
+  user-select: none;
+}
+
+.dw-tip summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.dw-tip-body {
+  margin-top: 4px;
+  padding: 6px 8px;
+  background: #f6f8fa;
+  border-radius: 6px;
+  line-height: 1.5;
+}
+
+/* canvas + title (step 3) */
+.dw-canvas {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+}
+
+.dw-canvas-opt {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  cursor: pointer;
+}
+
+.dw-place-label {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-dim, #8a93a6);
+}
+
+.dw-num {
+  width: 64px;
+  padding: 2px 4px;
+  font-size: 12px;
+}
+
+.dw-title {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  border: 1px solid #bbb;
+  border-radius: 5px;
+  font-size: 13px;
+}
+
+/* confirmation summary (step 4) */
+.dw-summary {
+  font-size: 12px;
+  color: #333;
+  background: #fff;
+  border: 1px solid #e3e8ee;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.dw-sum-line {
+  margin: 3px 0;
+}
+
+.dw-sum-last {
+  color: #166534;
+  font-weight: 500;
+}
+
+/* right preview column */
+.dw-preview {
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background: #fff;
+  min-height: 160px;
+  text-align: center;
+}
+
+.dw-preview-cap {
+  font-size: 11px;
+  color: #999;
+  text-align: center;
+  margin-top: 6px;
+}
+
+/* narrow dialog (< ~760px): single column, whole body scrolls */
+@media (max-width: 760px) {
+  .dw-cols {
+    flex-direction: column;
+    overflow-y: auto;
+  }
+  .dw-main {
+    overflow: visible;
+    flex: none;
+  }
+  .dw-side {
+    flex: none;
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid var(--border-light);
+  }
+}
+
 /* ---------------- Toast ---------------- */
 
 #toast-root {
@@ -497,20 +1227,24 @@ body.ai-split-dragging {
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
 }
 
-#toast-root > .toast-error { background: var(--danger); }
-#toast-root > .toast-success { background: var(--success); }
+#toast-root > .toast-error,
+#toast-root > .ui-toast-error { background: var(--danger); }
+#toast-root > .toast-success,
+#toast-root > .ui-toast-success { background: var(--success); }
 
 /* ---------------- Scrollbars ---------------- */
 
 #stage::-webkit-scrollbar,
 #side-pane .panel::-webkit-scrollbar,
-.modal-body::-webkit-scrollbar {
+.modal-body::-webkit-scrollbar,
+.ui-modal-body::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 
 #side-pane .panel::-webkit-scrollbar-thumb,
-.modal-body::-webkit-scrollbar-thumb {
+.modal-body::-webkit-scrollbar-thumb,
+.ui-modal-body::-webkit-scrollbar-thumb {
   background: #c2c7cf;
   border-radius: 5px;
 }
@@ -623,7 +1357,7 @@ body[data-variant="c"] #variant-badge { background: #7c4dff; }
 
 /* Entity/relation editor stays inside the upper tool pane; the AI pane is unchanged. */
 #tabs { flex-wrap: wrap; }
-#tabs button { flex: 1 0 10%; min-width: 34px; }
+#tabs button { flex: 1 1 0; min-width: max-content; padding: 6px 3px; }
 .diagram-toolbar, .diagram-section, .diagram-record-head { display:flex;align-items:center;justify-content:space-between;gap:6px; }
 .diagram-toolbar { position:sticky;top:-10px;z-index:2;padding:4px 0;background:var(--bg-panel); }
 .diagram-live-preview { margin:8px 0;border:1px solid var(--border-light);background:white;overflow:auto; }
@@ -636,3 +1370,80 @@ body[data-variant="c"] #variant-badge { background: #7c4dff; }
 .diagram-record-head { font-size:11px;margin-bottom:4px; }
 .diagram-json-wrap textarea { width:100%;min-height:180px;font-family:Consolas,monospace;font-size:10px; }
 #diagram-uncertainties { min-height:65px; }
+.diagram-theme-bar { display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin:6px 0; }
+.diagram-theme-btn { display:inline-flex;flex-direction:column;align-items:center;gap:1px;
+  padding:3px 5px;border:1px solid var(--border-light);border-radius:5px;background:#fff;
+  cursor:pointer;font-size:10px;color:var(--text-muted-light); }
+.diagram-theme-btn[aria-pressed="true"] { border-color:#2563eb;background:#eff6ff; }
+.diagram-theme-btn svg { display:block; }
+.diagram-theme-name { max-width:64px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.diagram-textgen { margin:8px 0;border:1px solid #dbe2eb;border-radius:5px;padding:6px;background:#fff; }
+.diagram-textgen summary { cursor:pointer;font-size:11px;font-weight:600; }
+.diagram-textgen textarea { width:100%;font-family:Consolas,monospace;font-size:11px; }
+.diagram-textgen .diagram-grid { grid-template-columns:1fr 1fr; }
+
+/* ---------------- File drag-and-drop import hint ---------------- */
+
+.drop-hint {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(30, 60, 90, 0.18);
+  border: 3px dashed var(--accent, #1E88E5);
+  color: #123a5c;
+  font-size: 18px;
+  font-weight: 600;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* G19/G20：数据向导「读取方式」与单元格编辑 */
+.dw-parsehost { margin: 4px 0 8px; }
+.dw-parse { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; font-size: 12px; }
+.dw-parse-label { font-weight: 600; color: #374151; }
+.dw-parse-item { display: inline-flex; gap: 4px; align-items: center; }
+.dw-parse-sel { font-size: 12px; padding: 2px 4px; max-width: 220px; }
+.dw-parse-hint {
+  margin-top: 6px; padding: 6px 8px; font-size: 12px;
+  background: #fffbeb; border: 1px solid #fde68a; border-radius: 6px;
+  color: #92400e; display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+}
+.dw-tablehost { overflow: auto; max-height: 320px; }
+.dw-cell-edited { background: #fef3c7 !important; }
+.dw-cell-edited::after {
+  content: ""; display: inline-block; width: 6px; height: 6px;
+  background: #d97706; border-radius: 50%; margin-left: 4px;
+  vertical-align: middle;
+}
+.dw-table td[tabindex="0"] { outline: 2px solid #2563eb; outline-offset: -2px; }
+.dw-cell-input {
+  width: 100%; box-sizing: border-box; font: inherit; font-size: 12px;
+  padding: 1px 3px; border: 1px solid #2563eb; border-radius: 3px;
+}
+.dw-editshost { margin: 6px 0 4px; font-size: 12px; }
+.dw-edits-head { display: flex; gap: 10px; align-items: center; margin: 4px 0; }
+.dw-edits-count { color: #92400e; font-weight: 600; }
+.dw-edits-list { margin: 4px 0; }
+.dw-edits-items { margin: 4px 0 0 12px; }
+.dw-edit-item { margin: 2px 0; }
+.dw-reuse-note { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 6px 8px; }
+
+/* ---------------- 定位到原始数据（data-table.js） ---------------- */
+.dt-modal { width: min(980px, 96vw); max-width: min(980px, 96vw); }
+.dt-body { display: flex; flex-direction: column; min-height: 0; height: 70vh; }
+.dt-meta { flex: none; }
+.dt-bar { flex: none; }
+.dt-wrap { flex: 1 1 auto; min-height: 0; overflow: auto; border: 1px solid var(--border-light, #d0d7de); border-radius: 6px; }
+.dt-table { border-collapse: collapse; width: 100%; font-size: 12px; }
+.dt-table thead th { position: sticky; top: 0; background: #f6f8fa; border-bottom: 1px solid var(--border-light, #d0d7de); padding: 4px 8px; text-align: left; white-space: nowrap; z-index: 1; }
+.dt-table td { padding: 2px 8px; border-bottom: 1px solid #eef1f4; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.dt-row { height: 24px; }
+.dt-hit td { background: #fff7e6; }
+.dt-focus td { background: #ffe9b3; font-weight: 600; }
+.dt-pad td { padding: 0; border: none; }
+.dt-nav { font-size: 12px; padding: 2px 10px; cursor: pointer; border: 1px solid var(--border-light, #d0d7de); border-radius: 5px; background: #fff; }
+.dt-nav:hover { background: #f0f4ff; }
+.dt-nav:focus-visible { outline: 2px solid var(--accent, #2f6fed); outline-offset: 1px; }

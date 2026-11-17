@@ -29,12 +29,12 @@ import queue
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 PLUGIN_DIR = Path(__file__).resolve().parent
@@ -72,8 +72,6 @@ DEFAULT_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-flash")
 _VIEWER_PORT_DEFAULT = 8770
 _KEY_FROM_FILE = {"value": None}
 
-_VIEWER_STATE = {"doc": None, "lock": threading.Lock()}
-
 _BRIDGE = None
 _BRIDGE_LOCK = threading.Lock()
 
@@ -109,16 +107,6 @@ def _log(msg):
     sys.stderr.flush()
 
 
-def _save_token(doc):
-    if doc is None:
-        return None
-    canonical = json.dumps(
-        doc, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
-        allow_nan=False,
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
 # ---------------------------------------------------------------------------
 # 预设加载（journals / templates / palettes 来自 shared/presets）
 # ---------------------------------------------------------------------------
@@ -137,6 +125,7 @@ _PRESETS_RAW = {
     "journals": _load_preset_file("journals.json"),
     "templates": _load_preset_file("templates.json"),
     "palettes": _load_preset_file("palettes.json"),
+    "styles": _load_preset_file("styles.json"),
 }
 
 
@@ -2094,23 +2083,57 @@ def tool_figure_open_viewer(a):
     url = "http://127.0.0.1:%d/" % port
     if not _probe_viewer(port):
         viewer_py = PLUGIN_DIR / "viewer.py"
-        if viewer_py.is_file():
-            cmd = [sys.executable, str(viewer_py), "--port", str(port)]
-        else:
-            cmd = [sys.executable, str(Path(__file__).resolve()), "--viewer", "--port", str(port)]
+        if not viewer_py.is_file():
+            # viewer.py 随插件发布，是唯一查看器实现；缺失即安装不完整，
+            # 不再回退到任何内置备用服务（其 /api/doc 无防护，已移除）。
+            raise ToolError(
+                "插件目录缺少 viewer.py（%s），无法启动可视化工作台；"
+                "请检查插件安装完整性。" % viewer_py)
+        cmd = [sys.executable, str(viewer_py), "--port", str(port)]
         flags = 0x00000008 | 0x08000000 if os.name == "nt" else 0  # DETACHED_PROCESS | CREATE_NO_WINDOW
+        # stderr 落临时文件：导入失败/启动崩溃时就绪超时能带出真实原因。
+        err_path = None
         try:
+            err_file = tempfile.NamedTemporaryFile(
+                mode="w+b", prefix="fig-viewer-", suffix=".log",
+                delete=False)
+            err_path = err_file.name
             subprocess.Popen(cmd, cwd=str(PLUGIN_DIR), stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL, creationflags=flags)
+                             stderr=err_file, creationflags=flags)
+            err_file.close()
         except Exception as e:
-            raise ToolError("查看器进程启动失败：%s。请手动运行 python mcp_server.py --viewer --port %d 查看输出。" % (e, port))
+            if err_path:
+                try:
+                    os.unlink(err_path)
+                except OSError:
+                    pass
+            raise ToolError("查看器进程启动失败：%s。请手动运行 python %s --port %d 查看输出。"
+                            % (e, viewer_py, port))
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             if _probe_viewer(port):
                 break
             time.sleep(0.3)
         else:
-            raise ToolError("查看器未能在 10 秒内就绪（端口 %d）。请手动运行 python mcp_server.py --viewer --port %d 检查。" % (port, port))
+            hint = ""
+            if _VIEWER_IMPORT_ERROR["msg"]:
+                hint += "同进程查看器启动错误：%s；" % _VIEWER_IMPORT_ERROR["msg"]
+            if err_path:
+                try:
+                    tail = Path(err_path).read_bytes()[-2000:] \
+                        .decode("utf-8", "replace").strip()
+                    if tail:
+                        hint += "查看器进程最近输出：\n%s\n" % tail
+                except OSError:
+                    pass
+            raise ToolError("查看器未能在 10 秒内就绪（端口 %d）。%s"
+                            "请手动运行 python %s --port %d 查看输出。"
+                            % (port, hint, viewer_py, port))
+        if err_path:
+            try:
+                os.unlink(err_path)
+            except OSError:
+                pass  # Windows 上子进程仍持句柄时删除失败，留在临时目录无妨
     if a.get("doc") is not None:
         _push_doc_to_viewer(port, a["doc"])
     return {"ok": True, "url": url}
@@ -2795,144 +2818,34 @@ HANDLERS = {
 
 _VIEWER_PORT = {"value": _VIEWER_PORT_DEFAULT}
 
-_FALLBACK_VIEWER_HTML = """<!doctype html>
-<html lang="zh"><head><meta charset="utf-8"><title>图表查看器 (v3)</title>
-<style>body{font-family:system-ui,sans-serif;margin:16px;background:#f5f5f5}
-#meta{color:#555;font-size:13px;margin-bottom:8px}#stage{background:#fff;padding:8px;box-shadow:0 1px 4px rgba(0,0,0,.15)}
-svg{max-width:100%;height:auto}</style></head>
-<body><h3>图表查看器 (v3 内置精简版)</h3><div id="meta">等待文档…</div><div id="stage"></div>
-<script>
-async function load(){try{
- const r=await fetch('/api/doc');const j=await r.json();
- if(!j.ok||!j.doc){document.getElementById('meta').textContent='暂无文档：请通过 figure_open_viewer 传入 doc';return;}
- const d=j.doc;const c=d.canvas||{};
- document.getElementById('meta').textContent=(d.title||'未命名')+' — '+c.width_mm+'x'+c.height_mm+'mm @'+(c.dpi||300)+'dpi，元素 '+(d.elements||[]).length+' 个，锚点 '+(d.anchors||[]).length+' 个，历史 '+(d.history||[]).length+' 条';
- document.getElementById('stage').innerHTML=await (await fetch('/api/svg')).text();
-}catch(e){document.getElementById('meta').textContent='加载失败：'+e}}
-load();setInterval(load,4000);
-</script></body></html>
-"""
-
-
-class _ViewerHandler(BaseHTTPRequestHandler):
-    def log_message(self, fmt, *args):  # 静默，避免污染 stderr
-        pass
-
-    def _send_json(self, obj, status=200):
-        data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
-
-    def do_GET(self):
-        path = self.path.split("?")[0]
-        if path == "/api/health":
-            with _VIEWER_STATE["lock"]:
-                has = _VIEWER_STATE["doc"] is not None
-            self._send_json({"ok": True, "viewer": True, "version": SERVER_INFO["version"], "has_doc": has})
-        elif path == "/api/doc":
-            with _VIEWER_STATE["lock"]:
-                doc = _VIEWER_STATE["doc"]
-            if doc is None:
-                self._send_json({"ok": False, "error": "暂无文档，请先通过 figure_open_viewer 传入 doc"}, 404)
-            else:
-                self._send_json({
-                    "ok": True, "doc": doc, "save_token": _save_token(doc),
-                })
-        elif path == "/api/svg":
-            with _VIEWER_STATE["lock"]:
-                doc = _VIEWER_STATE["doc"]
-            if doc is None:
-                self._send_json({"ok": False, "error": "暂无文档"}, 404)
-                return
-            try:
-                svg = bcall("render.to_svg", doc=doc, scale=1)
-                if isinstance(svg, dict):
-                    svg = svg.get("svg") or svg.get("result")
-                body = str(svg).encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "image/svg+xml; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-            except Exception as e:
-                self._send_json({"ok": False, "error": "渲染失败：%s" % e}, 500)
-        elif path in ("/", "/index.html"):
-            body = _FALLBACK_VIEWER_HTML.encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-        else:
-            self._serve_static(path)
-
-    def _serve_static(self, path):
-        static_dir = (PLUGIN_DIR / "viewer_static").resolve()
-        rel = path.lstrip("/")
-        target = (static_dir / rel).resolve()
-        if not str(target).startswith(str(static_dir)) or not target.is_file():
-            self._send_json({"ok": False, "error": "未找到资源：%s" % path}, 404)
-            return
-        ctype = {"html": "text/html; charset=utf-8", "js": "text/javascript; charset=utf-8",
-                 "css": "text/css; charset=utf-8", "svg": "image/svg+xml"}.get(
-                     target.suffix.lstrip("."), "application/octet-stream")
-        body = target.read_bytes()
-        self.send_response(200)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def do_POST(self):
-        path = self.path.split("?")[0]
-        if path != "/api/doc":
-            self._send_json({"ok": False, "error": "不支持的 POST 路径：%s" % path}, 404)
-            return
-        try:
-            length = int(self.headers.get("Content-Length") or 0)
-            obj = json.loads(self.rfile.read(length).decode("utf-8"))
-            doc = obj.get("doc") if isinstance(obj, dict) and "doc" in obj else obj
-            if not isinstance(doc, dict) or "canvas" not in doc:
-                raise ValueError("doc 结构无效")
-            conditional = isinstance(obj, dict) and isinstance(obj.get("doc"), dict) \
-                and "base_token" in obj
-            with _VIEWER_STATE["lock"]:
-                current_token = _save_token(_VIEWER_STATE["doc"])
-                conflict = conditional and obj.get("base_token") != current_token
-                if not conflict:
-                    _VIEWER_STATE["doc"] = doc
-            if conflict:
-                self._send_json({
-                    "ok": False, "error": "文档已更新，请重新加载后再保存",
-                    "save_conflict": True, "save_token": current_token,
-                }, 409)
-            else:
-                self._send_json({"ok": True, "doc": doc, "save_token": _save_token(doc)})
-        except Exception as e:
-            self._send_json({"ok": False, "error": "写入文档失败：%s" % e}, 400)
+_VIEWER_IMPORT_ERROR = {"msg": None}
 
 
 def _start_viewer_server(port):
-    """优先复用 viewer.py 的服务入口，否则使用内置精简查看器。"""
+    """启动 viewer.py 查看器服务（viewer.py 随插件发布，为唯一查看器实现）。
+
+    导入失败时记录明确错误（含异常）且不启动任何服务——不再回退到内置
+    备用查看器（其 /api/doc 无任何防护，已随本轮安全加固移除）。"""
     def worker():
         try:
-            import viewer  # noqa: F401 — 并行任务的查看器实现
-            for name in ("serve", "run", "main"):
-                fn = getattr(viewer, name, None)
-                if callable(fn):
+            import viewer  # noqa: F401 — 查看器实现随包发布
+        except Exception as e:
+            _VIEWER_IMPORT_ERROR["msg"] = "%s: %s" % (type(e).__name__, e)
+            _log("viewer.py 导入失败，未启动查看器服务（端口 %d）：%s"
+                 % (port, _VIEWER_IMPORT_ERROR["msg"]))
+            return
+        for name in ("serve", "run", "main"):
+            fn = getattr(viewer, name, None)
+            if callable(fn):
+                _VIEWER_IMPORT_ERROR["msg"] = None
+                try:
                     fn(port)
-                    return
-            _log("viewer.py 未暴露 serve/run/main 入口，改用内置查看器")
-        except Exception as e:
-            _log("viewer.py 不可用，改用内置查看器：%s" % e)
-        try:
-            server = ThreadingHTTPServer(("127.0.0.1", port), _ViewerHandler)
-            server.serve_forever()
-        except Exception as e:
-            _log("内置查看器启动失败（端口 %d）：%s" % (port, e))
+                except Exception as e:
+                    _VIEWER_IMPORT_ERROR["msg"] = "%s: %s" % (type(e).__name__, e)
+                    _log("viewer.py %s(%d) 运行失败：%s" % (name, port, e))
+                return
+        _VIEWER_IMPORT_ERROR["msg"] = "viewer.py 未暴露 serve/run/main 入口"
+        _log("viewer.py 未暴露 serve/run/main 入口，未启动查看器服务")
     threading.Thread(target=worker, daemon=True).start()
 
 

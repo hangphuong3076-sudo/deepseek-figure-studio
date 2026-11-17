@@ -478,8 +478,16 @@
     return s;
   }
 
-  function kernelPreview(s, footer, template) {
+  var LAST_SPEC = null;   // 最近一次 kernelPreview 合并后的完整 spec
+  var PREVIEW_POST = {};  // preview id → function(s) 合并后补注（峰标注等）
+
+  function kernelPreview(s, footer, template, postId) {
     s = applyTemplateDefaults(s, template);
+    s = applyOverridesForPreview(s, template); // R7 chart_overrides
+    // R7 返工：postId 命中的 PREVIEW_POST 在模板合并之后补注示例标注
+    // （如表征峰标注——模板 characterization 会整体替换，先设会被覆盖）
+    if (postId && PREVIEW_POST[postId]) s = PREVIEW_POST[postId](s);
+    LAST_SPEC = s; // R7 返工：specFor 经此取回与缩略图完全一致的合并后 spec
     var fragment = localKernel(s);
     var cachedBackend = !!fragment && /^<svg(\s|>)/i.test(fragment);
     var source = fragment ? (cachedBackend ? "Backend.renderChart" : "FigData.renderChartSVG") : "local-deterministic-fallback";
@@ -547,6 +555,146 @@
       { x: "Class", y: "Share" }, {});
   };
 
+
+  // R10：13 个补图型的合成预览数据（kernelPreview → renderChartSVG 真实渲染）
+  G.barStacked = function () {
+    var rows = [];
+    [["Control", 0.45, 0.30, 0.25], ["Treatment A", 0.55, 0.28, 0.17],
+     ["Treatment B", 0.38, 0.42, 0.20], ["Treatment C", 0.60, 0.22, 0.18]].forEach(function (v, i) {
+      ["Fraction 1", "Fraction 2", "Fraction 3"].forEach(function (g, j) {
+        rows.push([String.fromCharCode(65 + i), g, +(v[j] + (i * 0.013 + j * 0.007)).toFixed(3)]);
+      });
+    });
+    return spec("bar_stacked", ["Condition", "Fraction", "Share"], rows,
+      { x: "Condition", y: "Share", group: "Fraction" }, { yLabel: "Share" });
+  };
+  G.violin = function () {
+    var rows = [], specs = [["Control", 0, 1], ["Treatment A", 0.8, 1.2], ["Treatment B", 1.6, 0.8]];
+    specs.forEach(function (sp) {
+      for (var i = 0; i < 26; i++) {
+        var t = i / 25;
+        var v = sp[1] + sp[2] * (Math.sin(t * Math.PI * 2 + sp[0].length) * 0.35 +
+          (hashish(i * 7 + sp[1] * 13) - 0.5) * 0.5);
+        rows.push([sp[0], +v.toFixed(3)]);
+      }
+    });
+    function hashish(n) { var x = Math.sin(n * 12.9898) * 43758.5453; return x - Math.floor(x); }
+    return spec("violin", ["Group", "Response"], rows, { x: "Group", y: "Response" }, { yLabel: "Response" });
+  };
+  G.dotplot = function () {
+    var rows = [];
+    [["Low", 1.2, 5], ["Mid", 2.4, 8], ["High", 3.6, 4]].forEach(function (sp) {
+      for (var i = 0; i < sp[2]; i++) rows.push([+(sp[1] + (i % 3) * 0.15 - 0.1).toFixed(2), sp[0]]);
+    });
+    return spec("dotplot", ["Score", "Group"], rows, { x: "Score", y: "Group" }, { xLabel: "Score" });
+  };
+  G.paired = function () {
+    var rows = [];
+    for (var s = 0; s < 8; s++) {
+      var base = 2.5 + (s % 3) * 0.5;
+      rows.push(["Baseline", +(base + 0.2).toFixed(2), "Subject " + (s + 1)]);
+      rows.push(["Follow-up", +(base - 0.5 - (s % 2) * 0.3).toFixed(2), "Subject " + (s + 1)]);
+      rows.push(["Endpoint", +(base - 0.9 + (s % 2) * 0.2).toFixed(2), "Subject " + (s + 1)]);
+    }
+    var sp = spec("paired", ["Timepoint", "Score", "Subject"], rows,
+      { x: "Timepoint", y: "Score", group: "Subject" }, { yLabel: "Score" });
+    sp.presentation = { plot: { pairedSummary: true } };
+    return sp;
+  };
+  G.marginal = function () {
+    return spec("marginal", ["Variable x", "Variable y"], numericRows(42, function (i) {
+      var x = 0.5 + i * 0.23;
+      return [+x.toFixed(2), +(0.8 + x * 0.9 + Math.sin(i * 1.9) * 0.7).toFixed(2)];
+    }), { x: "Variable x", y: "Variable y" }, { xLabel: "Variable x", yLabel: "Variable y" });
+  };
+  G.volcano = function () {
+    var rows = [];
+    for (var i = 0; i < 60; i++) {
+      var fc = -4 + i * 0.14 + Math.sin(i * 2.7) * 0.5;
+      var p = 0.5 + Math.abs(fc) * 0.9 + Math.cos(i * 1.3) * 0.6;
+      var neg = Math.min(8, Math.max(0.2, p));
+      rows.push([+fc.toFixed(2), +neg.toFixed(2), "Gene" + String(i + 1).padStart(2, "0")]);
+    }
+    var sp = spec("volcano", ["log2FC", "-log10(p)", "Gene"], rows,
+      { x: "log2FC", y: "-log10(p)", label: "Gene" }, { xLabel: "log2 fold change", yLabel: "-log10(p)" });
+    sp.thresholds = { fc: 1.0, p_neglog10: 1.3 };
+    sp.presentation = { plot: { labelTop: 6 } };
+    return sp;
+  };
+  G.forest = function () {
+    var rows = [
+      [0.42, "Study A", 0.18, 0.66], [0.85, "Study B", 0.55, 1.15],
+      [0.31, "Study C", 0.05, 0.57], [1.20, "Study D", 0.90, 1.50],
+      [0.66, "Study E", 0.40, 0.92]
+    ];
+    var sp = spec("forest", ["Effect", "Study", "CI low", "CI high"], rows,
+      { x: "Effect", y: "Study", lo: "CI low", hi: "CI high" }, { xLabel: "Effect size" });
+    sp.presentation = { plot: { nullValue: 0 } };
+    return sp;
+  };
+  G.survival = function () {
+    var rows = [];
+    [["Control", 0.12], ["Treatment", 0.07]].forEach(function (g) {
+      for (var i = 0; i < 30; i++) {
+        var t = 1 + i * 0.8 + (i % 5) * 0.2;
+        rows.push([+t.toFixed(1), (i * 7 + g[0].length) % 9 === 0 ? 0 : 1, g[0]]);
+      }
+    });
+    return spec("survival", ["Time", "Event", "Group"], rows,
+      { x: "Time", y: "Event", group: "Group" }, { xLabel: "Time", yLabel: "Survival" });
+  };
+  G.roc = function () {
+    var rowsA = [], rowsB = [];
+    for (var i = 0; i <= 20; i++) {
+      var f = i / 20;
+      rowsA.push([+f.toFixed(2), +Math.min(1, f * (0.7 + f * 0.5)).toFixed(3), "Model A"]);
+      rowsB.push([+f.toFixed(2), +Math.min(1, f * (0.9 - f * 0.35)).toFixed(3), "Model B"]);
+    }
+    return spec("roc", ["FPR", "TPR", "Model"], rowsA.concat(rowsB),
+      { x: "FPR", y: "TPR", group: "Model" }, { xLabel: "False positive rate", yLabel: "True positive rate" });
+  };
+  G.pca = function () {
+    var rows = [];
+    [["Cluster 1", 0, 0], ["Cluster 2", 3, 2.4]].forEach(function (g) {
+      for (var i = 0; i < 22; i++) {
+        var a = i * 2.39996;
+        rows.push([+(g[1] + Math.cos(a) * (1.1 + (i % 4) * 0.18) + Math.sin(i) * 0.3).toFixed(2),
+                   +(g[2] + Math.sin(a) * (0.9 + (i % 3) * 0.15) + Math.cos(i * 0.7) * 0.3).toFixed(2), g[0]]);
+      }
+    });
+    var sp = spec("pca", ["PC1", "PC2", "Cluster"], rows,
+      { x: "PC1", y: "PC2", group: "Cluster" }, { xLabel: "PC1 (42%)", yLabel: "PC2 (28%)" });
+    sp.presentation = { plot: { ellipse: true } };
+    return sp;
+  };
+  G.venn = function () {
+    var rows = [];
+    for (var i = 0; i < 40; i++) {
+      var a = i % 3 !== 0, b = i % 4 !== 0, c = i % 5 !== 0;
+      if (i % 11 === 0) { a = true; b = true; c = true; }
+      rows.push([a ? 1 : 0, b ? 1 : 0, c ? 1 : 0]);
+    }
+    return spec("venn", ["Set A", "Set B", "Set C"], rows, { ys: ["Set A", "Set B", "Set C"] }, {});
+  };
+  G.sankey = function () {
+    var rows = [
+      ["Raw reads", "QC passed", 120], ["Raw reads", "QC failed", 18],
+      ["QC passed", "Assembly", 95], ["QC passed", "Host removal", 25],
+      ["Host removal", "Assembly", 22], ["Assembly", "Annotation", 110],
+      ["Annotation", "Published", 96]
+    ];
+    return spec("sankey", ["Stage", "Next", "Weight"], rows,
+      { x: "Stage", y: "Next", size: "Weight" }, {});
+  };
+  G.taylor = function () {
+    var rows = [[1.0, 0.98, "Ref"], [1.25, 0.93, "Model A"], [1.5, 0.86, "Model B"],
+      [0.8, 0.90, "Model C"], [1.1, 0.80, "Model D"]];
+    var sp = spec("taylor", ["Std", "Correlation", "Model"], rows,
+      { x: "Std", y: "Correlation", group: "Model" }, {});
+    sp.reference_std = 1.0;
+    return sp;
+  };
+
   var P = {};
   P.bar = function (template) { return kernelPreview(G.bar(), FOOTER_CHART, template); };
   P.bar_grouped = function (template) { return kernelPreview(G.barGrouped(), FOOTER_CHART, template); };
@@ -557,63 +705,13 @@
   P.histogram = function (template) { return kernelPreview(G.histogram(), FOOTER_CHART, template); };
   P.pie = function (template) { return kernelPreview(G.pie(), FOOTER_CHART, template); };
 
-  P.bar_stacked = function () {
-    var rows = [[0.42, 0.33, 0.25], [0.55, 0.27, 0.18], [0.35, 0.4, 0.25]], out = chartFrame(28, 8, 136, 73, "Composition", "Fraction");
-    for (var i = 0; i < rows.length; i++) {
-      var base = 81;
-      for (var j = 0; j < rows[i].length; j++) {
-        var bh = 68 * rows[i][j];
-        out += '<rect x="' + (47 + i * 38) + '" y="' + fmt(base - bh) + '" width="22" height="' + fmt(bh) +
-          '" fill="' + SERIES[j] + '" stroke="#ffffff" stroke-width="0.7"/>';
-        base -= bh;
-      }
-      out += text(58 + i * 38, 87, String.fromCharCode(65 + i), 6);
-    }
-    return frame(out);
-  };
+  P.bar_stacked = function (template) { return kernelPreview(G.barStacked(), FOOTER_CHART, template); };
 
-  P.marginal = function () {
-    var points = [], top = [6, 12, 19, 14, 8], right = [8, 14, 19, 11, 6];
-    for (var i = 0; i < 24; i++) {
-      var x = 30 + i * 4.4;
-      points.push([x, 75 - i * 1.7 - Math.sin(i * 1.7) * 6]);
-    }
-    var out = chartFrame(28, 25, 119, 57, "Variable x", "", false) + dots(points, SERIES[0], 1.45);
-    for (i = 0; i < 5; i++) {
-      out += '<rect x="' + (33 + i * 22) + '" y="' + (23 - top[i]) + '" width="17" height="' + top[i] + '" fill="' + SERIES[0] + '" opacity="0.65"/>';
-      out += '<rect x="149" y="' + (29 + i * 10) + '" width="' + right[i] + '" height="8" fill="' + SERIES[1] + '" opacity="0.55"/>';
-    }
-    return frame(out);
-  };
+  P.marginal = function (template) { return kernelPreview(G.marginal(), FOOTER_CHART, template); };
 
-  P.paired = function () {
-    var before = [67, 56, 61, 43, 49], after = [59, 46, 48, 36, 29];
-    var out = chartFrame(24, 8, 139, 74, "Paired measurements", "");
-    for (var i = 0; i < before.length; i++) {
-      out += line(67, before[i], 118, after[i], "#cbd5e1", 1.1) +
-        dots([[67, before[i]]], SERIES[0], 2.4) + dots([[118, after[i]]], SERIES[1], 2.4);
-    }
-    out += text(67, 90, "Before", 6.3) + text(118, 90, "After", 6.3);
-    return frame(out);
-  };
+  P.paired = function (template) { return kernelPreview(G.paired(), FOOTER_CHART, template); };
 
-  P.violin = function () {
-    var out = chartFrame(24, 8, 139, 74, "Distribution", "");
-    [69, 116].forEach(function (cx, i) {
-      var left = [], right = [];
-      for (var j = 0; j <= 32; j++) {
-        var t = j / 32;
-        var width = 4 + 14 * Math.exp(-Math.pow((t - (0.38 + i * 0.12)) / 0.25, 2)) + 5 * Math.exp(-Math.pow((t - 0.78) / 0.13, 2));
-        left.push([cx - width, 12 + t * 65]);
-        right.push([cx + width, 12 + t * 65]);
-      }
-      var shape = left.concat(right.reverse());
-      var d = shape.map(function (p, k) { return (k ? "L" : "M") + fmt(p[0]) + " " + fmt(p[1]); }).join(" ") + " Z";
-      out += '<path d="' + d + '" fill="' + SERIES[i] + '" fill-opacity="0.28" stroke="' + SERIES[i] + '" stroke-width="1"/>' +
-        line(cx - 6, 46 + i * 5, cx + 6, 46 + i * 5, INK, 1);
-    });
-    return frame(out);
-  };
+  P.violin = function (template) { return kernelPreview(G.violin(), FOOTER_CHART, template); };
 
   P.heatmap = function () {
     var values = [[0.1, 0.24, 0.48, 0.72, 0.58], [0.18, 0.42, 0.78, 0.9, 0.64], [0.06, 0.31, 0.54, 0.67, 0.36], [0.22, 0.5, 0.83, 0.74, 0.45]];
@@ -634,128 +732,23 @@
     return frame(out);
   };
 
-  P.dotplot = function () {
-    var out = chartFrame(35, 7, 128, 74, "Effect size", "Group");
-    var values = [[0.2, 0.46], [0.52, 0.78], [0.35, 0.64], [0.7, 0.88]];
-    for (var i = 0; i < values.length; i++) {
-      var y = 18 + i * 17;
-      out += line(35, y, 163, y, GRID, 0.55) + text(30, y + 2, "G" + (i + 1), 5.8, "end", MUTED);
-      for (var j = 0; j < 2; j++) {
-        out += '<circle cx="' + (43 + values[i][j] * 111) + '" cy="' + y + '" r="' + (2.2 + values[i][j] * (j ? 3.5 : 2)) +
-          '" fill="' + SERIES[j] + '" fill-opacity="0.78"/>';
-      }
-    }
-    return frame(out);
-  };
+  P.dotplot = function (template) { return kernelPreview(G.dotplot(), FOOTER_CHART, template); };
 
-  P.roc = function () {
-    var out = chartFrame(30, 7, 132, 73, "1 − specificity", "Sensitivity");
-    var diagonal = [[30, 80], [162, 7]];
-    out += pathLine(diagonal, "#94a3b8", 0.75, ' stroke-dasharray="3 2"');
-    [0, 1].forEach(function (k) {
-      var points = numericRows(41, function (i, n) {
-        var t = i / (n - 1);
-        return [30 + 132 * t, 80 - 73 * Math.pow(t, 0.34 + k * 0.25)];
-      });
-      out += pathLine(points, SERIES[k], 1.15);
-    });
-    out += text(117, 57, "ROC", 6.5, "middle", MUTED);
-    return frame(out);
-  };
+  P.roc = function (template) { return kernelPreview(G.roc(), FOOTER_CHART, template); };
 
-  P.volcano = function () {
-    var out = chartFrame(31, 7, 130, 73, "Effect", "−log10 p");
-    var neutral = [], left = [], right = [];
-    for (var i = 0; i < 46; i++) {
-      var x = 40 + (i * 37 % 113);
-      var y = 75 - (i * 19 % 35) - Math.abs(x - 96) * 0.18;
-      var p = [x, y];
-      if (x < 67 && y < 48) left.push(p);
-      else if (x > 126 && y < 48) right.push(p);
-      else neutral.push(p);
-    }
-    out += dots(neutral, "#94a3b8", 1.25) + dots(left, SERIES[0], 1.5) + dots(right, SERIES[1], 1.5) +
-      line(70, 7, 70, 80, MUTED, 0.65, "3 2") + line(122, 7, 122, 80, MUTED, 0.65, "3 2") +
-      line(31, 50, 161, 50, MUTED, 0.65, "3 2");
-    return frame(out);
-  };
+  P.volcano = function (template) { return kernelPreview(G.volcano(), FOOTER_CHART, template); };
 
-  P.forest = function () {
-    var studies = [{ e: -0.55, ci: 0.28 }, { e: 0.2, ci: 0.4 }, { e: -0.08, ci: 0.22 }, { e: 0.55, ci: 0.32 }];
-    var out = text(14, 9, "Study", 6, "start", MUTED) + text(126, 9, "Effect (95% CI)", 6, "middle", MUTED);
-    var x0 = 62, x1 = 163, center = 111;
-    out += line(center, 12, center, 77, MUTED, 0.65, "3 2");
-    studies.forEach(function (s, i) {
-      var y = 20 + i * 14, x = center + s.e * 40, half = s.ci * 40;
-      out += text(14, y + 2, String.fromCharCode(65 + i), 6.1, "start") +
-        line(x - half, y, x + half, y, INK, 0.9) + line(x - half, y - 2, x - half, y + 2, INK, 0.7) +
-        line(x + half, y - 2, x + half, y + 2, INK, 0.7) +
-        '<rect x="' + fmt(x - 2.2) + '" y="' + (y - 2.2) + '" width="4.4" height="4.4" fill="' + SERIES[0] + '"/>';
-    });
-    out += '<path d="M108 78 L115 83 L108 88 L101 83 Z" fill="' + SERIES[1] + '"/>' +
-      text(61, 91, "← left", 5.6, "start", MUTED) + text(163, 91, "right →", 5.6, "end", MUTED);
-    return frame(out);
-  };
+  P.forest = function (template) { return kernelPreview(G.forest(), FOOTER_CHART, template); };
 
-  P.survival = function () {
-    var out = chartFrame(28, 5, 134, 57, "Time", "Survival");
-    var a = [[28, 5], [62, 5], [62, 16], [88, 16], [88, 28], [124, 28], [124, 41], [162, 41]];
-    var b = [[28, 5], [50, 5], [50, 20], [79, 20], [79, 35], [110, 35], [110, 51], [162, 51]];
-    out += pathLine(a, SERIES[0], 1.15) + pathLine(b, SERIES[1], 1.15) +
-      line(62, 5, 60, 9, SERIES[0], 0.8) + line(88, 16, 86, 20, SERIES[0], 0.8) +
-      line(79, 20, 77, 24, SERIES[1], 0.8) + line(110, 35, 108, 39, SERIES[1], 0.8);
-    out += text(28, 74, "At risk", 5.8, "start", MUTED) + text(50, 74, "A", 5.8, "start", SERIES[0]) + text(50, 85, "B", 5.8, "start", SERIES[1]);
-    var va = [18, 14, 9], vb = [18, 11, 6];
-    [82, 119, 156].forEach(function (x, i) {
-      out += line(x, 62, x, 91, GRID, 0.5) + text(x, 75, va[i], 6) + text(x, 86, vb[i], 6);
-    });
-    return frame(out);
-  };
+  P.survival = function (template) { return kernelPreview(G.survival(), FOOTER_CHART, template); };
 
-  P.pca = function () {
-    var a = [], b = [];
-    for (var i = 0; i < 14; i++) {
-      a.push([51 + Math.sin(i * 2.3) * 17, 57 + Math.cos(i * 1.7) * 10]);
-      b.push([122 + Math.sin(i * 1.9) * 15, 31 + Math.cos(i * 2.1) * 11]);
-    }
-    var out = chartFrame(25, 7, 137, 74, "PC1", "PC2") +
-      '<ellipse cx="51" cy="57" rx="25" ry="16" fill="' + SERIES[0] + '" fill-opacity="0.08" stroke="' + SERIES[0] + '" stroke-width="0.8"/>' +
-      '<ellipse cx="122" cy="31" rx="24" ry="17" fill="' + SERIES[1] + '" fill-opacity="0.08" stroke="' + SERIES[1] + '" stroke-width="0.8"/>' +
-      dots(a, SERIES[0], 1.55) + dots(b, SERIES[1], 1.55);
-    return frame(out);
-  };
+  P.pca = function (template) { return kernelPreview(G.pca(), FOOTER_CHART, template); };
 
-  P.venn = function () {
-    return frame(
-      '<circle cx="72" cy="42" r="26" fill="' + SERIES[0] + '" fill-opacity="0.3" stroke="' + SERIES[0] + '" stroke-width="0.9"/>' +
-      '<circle cx="108" cy="42" r="26" fill="' + SERIES[1] + '" fill-opacity="0.28" stroke="' + SERIES[1] + '" stroke-width="0.9"/>' +
-      '<circle cx="90" cy="65" r="24" fill="' + SERIES[2] + '" fill-opacity="0.24" stroke="' + SERIES[2] + '" stroke-width="0.9"/>' +
-      text(53, 30, "A", 7, "middle", INK, "bold") + text(127, 30, "B", 7, "middle", INK, "bold") + text(90, 88, "C", 7, "middle", INK, "bold"));
-  };
+  P.venn = function (template) { return kernelPreview(G.venn(), FOOTER_CHART, template); };
 
-  P.sankey = function () {
-    var out = "";
-    var left = [18, 43, 68], right = [29, 65];
-    for (var i = 0; i < 3; i++) out += '<rect x="20" y="' + left[i] + '" width="7" height="14" rx="1" fill="' + SERIES[i] + '"/>';
-    for (i = 0; i < 2; i++) out += '<rect x="153" y="' + right[i] + '" width="7" height="18" rx="1" fill="' + SERIES[i + 3] + '"/>';
-    var flows = [[25, 36, 8, 0], [50, 36, 5, 1], [50, 73, 9, 1], [75, 73, 11, 2], [25, 73, 4, 0]];
-    flows.forEach(function (f) {
-      out += '<path d="M27 ' + f[0] + ' C76 ' + f[0] + ' 104 ' + f[1] + ' 153 ' + f[1] + '" fill="none" stroke="' + SERIES[f[3]] + '" stroke-width="' + f[2] + '" stroke-opacity="0.33"/>';
-    });
-    out += text(23, 90, "Source", 5.8) + text(157, 90, "Target", 5.8);
-    return frame(out);
-  };
+  P.sankey = function (template) { return kernelPreview(G.sankey(), FOOTER_CHART, template); };
 
-  P.taylor = function () {
-    var out = '<path d="M32 82 A58 58 0 0 1 148 82" fill="#fcfdff" stroke="' + INK + '" stroke-width="0.75"/>';
-    [20, 38, 56].forEach(function (r) {
-      out += '<path d="M' + (90 - r) + ' 82 A' + r + ' ' + r + ' 0 0 1 ' + (90 + r) + ' 82" fill="none" stroke="' + GRID + '" stroke-width="0.6"/>';
-    });
-    out += line(90, 82, 44, 39, GRID, 0.55) + line(90, 82, 90, 24, GRID, 0.55) + line(90, 82, 136, 39, GRID, 0.55);
-    [[52, 49], [77, 34], [111, 39], [132, 57]].forEach(function (p, i) { out += dots([p], SERIES[i], 2.2); });
-    out += dots([[90, 82]], INK, 2.2) + text(90, 92, "Reference", 5.8) + text(66, 20, "Correlation", 5.8);
-    return frame(out);
-  };
+  P.taylor = function (template) { return kernelPreview(G.taylor(), FOOTER_CHART, template); };
 
   function miniLine(x, y, w, h, color) {
     var points = numericRows(15, function (i, n) {
@@ -1198,6 +1191,464 @@
   T["tpl-particle-size"] = function (template) { return kernelPreview(G.particle(), FOOTER_SPECTRUM, template); };
   T["tpl-nmr"] = function (template) { return kernelPreview(G.nmr(), FOOTER_SPECTRUM, template); };
 
+  // R7：chart_overrides 预览合并——与 templateFromStats 同语义（深合并，
+  // 模板键覆盖骨架键）。style_id 换成 paletteId/legend 近似（预览缩略图
+  // 不跑 apply_chart_style 全量 token 重建）。
+  function _mergePrev(dst, src) {
+    var out = JSON.parse(JSON.stringify(dst || {}));
+    Object.keys(src || {}).forEach(function (k) {
+      var sv = src[k];
+      if (sv && typeof sv === "object" && !Array.isArray(sv) &&
+          out[k] && typeof out[k] === "object" && !Array.isArray(out[k])) {
+        out[k] = _mergePrev(out[k], sv);
+      } else {
+        out[k] = JSON.parse(JSON.stringify(sv));
+      }
+    });
+    return out;
+  }
+  function applyOverridesForPreview(s, template) {
+    var ov = template && template.chart_overrides;
+    if (!ov || typeof ov !== "object") return s;
+    if (ov.axes) s.axes = _mergePrev(s.axes || {}, ov.axes);
+    if (ov.presentation) s.presentation = _mergePrev(s.presentation || {}, ov.presentation);
+    if (ov.characterization && s.characterization) {
+      s.characterization = _mergePrev(s.characterization, ov.characterization);
+    }
+    if (typeof ov.style_id === "string" && ov.style_id && global.FigPresets &&
+        typeof FigPresets.style === "function") {
+      var st = null;
+      try { st = FigPresets.style(ov.style_id); } catch (e) { st = null; }
+      if (st) {
+        var pal = st.tokens && st.tokens.palette;
+        var palId = typeof pal === "string" ? pal : (pal && pal.id);
+        if (palId) s.paletteId = palId;
+        var lp = st.tokens && st.tokens.legend && st.tokens.legend.position;
+        if (lp && !(s.presentation && s.presentation.legend &&
+            s.presentation.legend.position)) {
+          s.presentation = s.presentation || {};
+          s.presentation.legend = s.presentation.legend || {};
+          s.presentation.legend.position = lp;
+        }
+      }
+    }
+    return s;
+  }
+
+  // ------------------------------------------------ R7 合成示例数据
+  // 全部为明确标注的合成示例（页脚已有「示例非真实数据」机制），
+  // 只进缩略图/本地预览，绝不写入用户文档。
+
+  function _specRows(xName, yName, gName, groups, xs, yFn) {
+    var rows = [];
+    groups.forEach(function (g, gi) {
+      xs.forEach(function (x) {
+        rows.push([x, yFn(gi, x), g]);
+      });
+    });
+    return spec("line_multi", [xName, yName, gName], rows,
+      { x: xName, y: yName, group: gName }, {}, "right");
+  }
+  function _linspace(a, b, n) {
+    var out = [];
+    for (var i = 0; i < n; i++) out.push(a + (b - a) * i / (n - 1));
+    return out;
+  }
+  function _peak(x, c, w, h) { return h * Math.exp(-Math.pow((x - c) / w, 2)); }
+  // 确定性伪噪声 [-1,1]（预览可复现，不用 Math.random）
+  function _nz(i, seed) {
+    var v = Math.sin(i * 12.9898 + (seed || 1) * 78.233) * 43758.5453;
+    v = v - Math.floor(v);
+    return v * 2 - 1;
+  }
+
+  var PREVIEW = {};
+
+  PREVIEW["xrd-stack"] = function (template) {
+    // 平坦基线 + 若干尖锐峰；各样品峰位 ±0.3° 内微差、强度略降、少量噪声。
+    // 标准卡 sticks 位置与主峰位对应（示例值，仅预览不进文档）。
+    var xs = _linspace(10, 80, 281), groups = ["Sample A", "Sample B", "Sample C"];
+    var peaks = [[25.3, 0.55], [26.6, 1.0], [36.5, 0.75], [37.9, 0.28], [44.9, 0.5],
+      [50.1, 0.6], [53.9, 0.35], [62.7, 0.3], [68.1, 0.45], [75.0, 0.3]];
+    var s = _specRows("2θ", "Intensity", "Sample", groups, xs, function (gi, x) {
+      var y = 1.5;
+      for (var pi = 0; pi < peaks.length; pi++) {
+        var p = peaks[pi];
+        var shift = (gi === 0 ? 0 : (gi === 1 ? 1 : -1)) * (0.22 + 0.04 * pi);
+        y += _peak(x, p[0] + shift, 0.12 + p[1] * 0.08, p[1] * (1 - gi * 0.07));
+      }
+      return +(y + _nz(x * 11.3 + gi * 7.7, 1.7) * 0.12).toFixed(3);
+    });
+    s.references = [{ label: "TiO₂ anatase", source: "JCPDS 21-1272",
+      style: "sticks",
+      positions: [25.3, 26.6, 36.5, 44.9, 50.1, 53.9, 62.7, 68.1, 75.0],
+      heights: [0.55, 1.0, 0.75, 0.5, 0.6, 0.35, 0.3, 0.45, 0.3] }];
+    return kernelPreview(s, FOOTER_LOCAL_SPECTRUM, template);
+  };
+
+  PREVIEW["xps-fit"] = function (template) {
+    return kernelPreview(G.xpsFit(), FOOTER_SPECTRUM, template);
+  };
+
+  PREVIEW["xps-stack"] = function (template) {
+    // XPS survey：C1s/N1s/O1s 主峰 + 卫星峰；样品间峰位/强度微差。
+    // lines 参考线位置与主峰对应（示例值，仅预览）。
+    var xs = _linspace(280, 560, 281), groups = ["Sample A", "Sample B", "Sample C"];
+    var peaks = [[285.0, 1.0, 3.0], [400.2, 0.32, 2.2], [531.8, 0.78, 2.6],
+      [288.5, 0.18, 1.2], [545.0, 0.12, 1.5]];
+    var s = _specRows("Binding energy", "Intensity", "Sample", groups, xs, function (gi, x) {
+      var y = 0.8;
+      for (var pi = 0; pi < peaks.length; pi++) {
+        var p = peaks[pi];
+        var shift = (gi === 0 ? 0 : (gi === 1 ? 0.6 : -0.5)) * (pi % 2 ? 1 : 0.6);
+        y += _peak(x, p[0] + shift, p[2], p[1] * (1 - gi * 0.1 + (pi === 1 ? gi * 0.12 : 0)));
+      }
+      return +(y + _nz(x * 3.7 + gi * 5.1, 2.3) * 0.03).toFixed(3);
+    });
+    s.references = [
+      { label: "C 1s", style: "lines", positions: [285.0], color: "#D62728" },
+      { label: "N 1s", style: "lines", positions: [400.2], color: "#1F77B4" },
+      { label: "O 1s", style: "lines", positions: [531.8], color: "#2CA02C" }];
+    return kernelPreview(s, FOOTER_LOCAL_SPECTRUM, template);
+  };
+
+  PREVIEW["raman-stack"] = function (template) {
+    // bands 覆盖 G.ramanMulti 的 D(~1440)/G(~1690) 特征峰（示例值，仅预览）
+    var s = G.ramanMulti();
+    s.bands = [
+      { x0: 1360, x1: 1520, color: "#BBDEFB", opacity: 0.5, label: "D band" },
+      { x0: 1600, x1: 1760, color: "#C8E6C9", opacity: 0.5, label: "G band" }];
+    return kernelPreview(s, FOOTER_LOCAL_SPECTRUM, template);
+  };
+
+  PREVIEW["ftir-stack"] = function (template) {
+    // 3 样品；基线 96–99%，6 个明显吸收峰（深 15–38%）→ 透过率约 60–100%；
+    // 样品间峰位 ±6 cm⁻¹ 微差、深度略异（示例值，仅预览）。
+    var xs = _linspace(4000, 400, 181), groups = ["Sample A", "Sample B", "Sample C"];
+    var dips = [[3600, 26, 60], [2950, 34, 45], [1715, 30, 40], [1600, 22, 35],
+      [1450, 18, 30], [1100, 38, 55]]; // [峰位, 深%, 宽]
+    return kernelPreview(_specRows("Wavenumber", "Transmittance", "Sample", groups, xs,
+      function (gi, x) {
+        var t = 98.5 - gi * 1.2;
+        dips.forEach(function (d, di) {
+          var depth = d[1] * (1 - gi * 0.08 + (di === 2 ? gi * 0.1 : 0));
+          t -= _peak(x, d[0] + (gi - 1) * (5 + di * 1.5), d[2] * 0.28, depth);
+        });
+        return +Math.max(55, t + _nz(x * 0.11 + gi * 2.9, 8.3) * 0.35).toFixed(2);
+      }), FOOTER_LOCAL_SPECTRUM, template);
+  };
+
+  PREVIEW["uvvis-time"] = function (template) {
+    var xs = _linspace(300, 800, 101), groups = [0, 5, 10];
+    return kernelPreview(_specRows("Wavelength", "Absorbance", "Time", groups, xs,
+      function (gi, x) {
+        return +(0.15 + gi * 0.22 * Math.exp(-Math.pow((x - 420 - gi * 15) / 55, 2)) +
+          0.1 * Math.sin(x / 90 + gi)).toFixed(3);
+      }), FOOTER_LOCAL_SPECTRUM, template);
+  };
+
+  PREVIEW["pl-time"] = function (template) {
+    var xs = _linspace(450, 750, 121), groups = [25, 50, 100];
+    return kernelPreview(_specRows("Wavelength", "Intensity", "Power", groups, xs,
+      function (gi, x) {
+        return +(0.05 + (0.3 + gi * 0.35) * Math.exp(-Math.pow((x - 520) / 38, 2)) +
+          0.5 * Math.exp(-Math.pow((x - 620 - gi * 6) / 30, 2)) +
+          0.08 * Math.sin(x / 70)).toFixed(3);
+      }), FOOTER_LOCAL_SPECTRUM, template);
+  };
+
+  PREVIEW["cv-scanrate"] = function (template) {
+    // 闭合 CV 回线：正扫（-0.2→1.0 V）氧化峰、反扫（1.0→-0.2 V）还原峰，
+    // 峰电流随扫速（扩散控制 ~√v）增大；行序保留扫描方向（CV 不排序）。
+    var groups = [20, 50, 100, 200]; // mV s⁻¹
+    var cols = ["Potential", "Current", "Scan rate"], rows = [];
+    groups.forEach(function (v, gi) {
+      var k = Math.sqrt(v / 20);
+      var seq = [];
+      for (var i = 0; i <= 60; i++) seq.push({ e: -0.2 + i * 1.2 / 60, dir: 1 });
+      for (i = 1; i <= 60; i++) seq.push({ e: 1.0 - i * 1.2 / 60, dir: -1 });
+      seq.forEach(function (p, pi) {
+        var e = p.e;
+        var j = 0.012 + 0.004 * e + (p.dir > 0 ? 0.004 * k : -0.004 * k);
+        if (p.dir > 0) j += k * 1.5 * _peak(e, 0.62, 0.055, 1);   // 正扫氧化峰
+        else j -= k * 1.1 * _peak(e, 0.45, 0.06, 1);               // 反扫还原峰
+        rows.push([+e.toFixed(4), +(j + _nz(pi * 1.31 + gi * 9.7, 3.1) * 0.006 * k).toFixed(4), v]);
+      });
+    });
+    return kernelPreview(spec("line_multi", cols, rows,
+      { x: "Potential", y: "Current", group: "Scan rate" }, {},
+      undefined, "right"), FOOTER_LOCAL_SPECTRUM, template);
+  };
+
+  PREVIEW["lsv-multi"] = function (template) {
+    // OER 极化曲线：起始电位以上电流密度指数上升（Tafel 区），
+    // 各样品起始电位/交换电流不同；右端行内标签由渲染层防重叠。
+    var xs = _linspace(1.2, 1.8, 121), groups = ["Sample A", "Sample B", "Sample C"];
+    var onset = [1.50, 1.55, 1.60], j0 = [0.5, 0.8, 1.2];
+    return kernelPreview(_specRows("Potential", "Current density", "Sample", groups, xs,
+      function (gi, x) {
+        var j = 0.0015 + j0[gi] * Math.exp((x - onset[gi]) / 0.058);
+        return +(j + _nz(x * 5.7 + gi * 3.3, 4.7) * 0.004).toFixed(4);
+      }), FOOTER_LOCAL_SPECTRUM, template);
+  };
+
+  PREVIEW["gcd-cycles"] = function (template) {
+    // 多圈放电平台曲线：电压随比容量下降、末端陡降；可用容量随圈数
+    // 递减（cycle 越大 x 末端越短）；颜色沿 viridis 按圈数渐变。
+    var groups = [1, 10, 50, 100], cols = ["Specific capacity", "Voltage", "Cycle"], rows = [];
+    groups.forEach(function (cyc, gi) {
+      var qmax = 190 * (1 - 0.0009 * cyc); // 容量衰减
+      for (var i = 0; i <= 80; i++) {
+        var d = i / 80, cap = d * qmax;
+        var v = 3.62 - 0.55 * Math.pow(d, 1.4) - gi * 0.02;
+        if (d > 0.88) v -= 0.57 * Math.pow((d - 0.88) / 0.12, 2); // 末端陡降
+        rows.push([+cap.toFixed(1), +Math.max(1.5, v + _nz(i * 0.9 + gi * 4.1, 5.3) * 0.008).toFixed(3), cyc]);
+      }
+    });
+    return kernelPreview(spec("line_multi", cols, rows,
+      { x: "Specific capacity", y: "Voltage", group: "Cycle" }, {},
+      undefined, "right"), FOOTER_LOCAL_SPECTRUM, template);
+  };
+
+  PREVIEW["cycling-dual"] = function (template) {
+    // 双 y 轴：左=容量（实心圆）、右=库仑效率（空心方块，markerFill
+    // 逐系列覆盖——R7 新字段）；容量缓慢衰减、CE 早期爬升后稳定。
+    var cols = ["Cycle", "Capacity", "Coulombic efficiency"], rows = [];
+    for (var i = 1; i <= 200; i++) {
+      rows.push([i, +(186 - 0.15 * i - 1.5 * Math.exp(-i / 8) +
+        _nz(i * 1.13, 5.9) * 0.9).toFixed(2),
+        +(98.6 + 1.1 * (1 - Math.exp(-i / 15)) - 0.05 * Math.exp(-i / 80) +
+          _nz(i * 2.71, 6.7) * 0.12).toFixed(3)]);
+    }
+    var s = spec("scatter", cols, rows,
+      { x: "Cycle", ys: ["Capacity", "Coulombic efficiency"] },
+      { xLabel: "Cycle", yLabel: "Capacity (mAh g⁻¹)",
+        y2: { series: ["Coulombic efficiency"], label: "Coulombic efficiency (%)", min: 98, max: 100 } },
+      undefined, "right");
+    s.presentation = { version: 1, series: {
+      "series|Capacity|s:Capacity": { marker: "circle", markerSizePt: 3 },
+      "series|Coulombic efficiency|s:Coulombic efficiency":
+        { marker: "square", markerSizePt: 3, markerFill: "hollow" } } };
+    return kernelPreview(s, FOOTER_LOCAL_CHART, template);
+  };
+
+  PREVIEW["rate-cap"] = function (template) {
+    // 倍率性能：x=循环圈数（1–60），容量按倍率分段阶梯下降、末段回到
+    // 低倍率回升（仍低于初始=衰减）；每段一个 bands 底色 + 倍率标签
+    // （示例值，仅预览）。
+    var rates = [0.1, 0.2, 0.5, 1, 2, 5, 0.1];
+    var caps = [186, 181, 172, 158, 131, 95, 168];
+    var labels = ["0.1 C", "0.2 C", "0.5 C", "1 C", "2 C", "5 C", "0.1 C"];
+    var widths = [9, 9, 9, 9, 8, 8, 8]; // 合计 60 圈
+    var cols = ["Cycle", "Capacity"], rows = [], bands = [];
+    var start = 1;
+    rates.forEach(function (r, si) {
+      var n = widths[si];
+      for (var i = 0; i < n; i++) {
+        var cyc = start + i;
+        var cap = caps[si] * (1 - 0.004 * i) + _nz(cyc * 1.7 + si * 3.3, 6.1) * 2.2;
+        rows.push([cyc, +cap.toFixed(1)]);
+      }
+      bands.push({ x0: start - 0.5, x1: start + n - 0.5, opacity: 0.45,
+        color: ["#E3F2FD", "#E8F5E9", "#FFF9C4", "#FCE4EC", "#F3E5F5", "#ECEFF1", "#E0F2F1"][si],
+        label: labels[si] });
+      start += n;
+    });
+    var s = spec("scatter", cols, rows,
+      { x: "Cycle", y: "Capacity" },
+      { xLabel: "Cycle number", yLabel: "Capacity (mAh g⁻¹)" },
+      undefined, "none");
+    s.bands = bands;
+    return kernelPreview(s, FOOTER_LOCAL_CHART, template);
+  };
+
+  PREVIEW["nyquist-fit"] = function (template) {
+    // Randles + Warburg 扩散：高频→低频先半圆（电荷转移）、低频 45°
+    // 扩散尾（Warburg 实部=虚部）；右端无回钩。fit 列为平滑示例拟合。
+    var cols = ["Z′", "−Z″", "Fit"], rows = [];
+    var Rs = 10, Rct = 50, Cdl = 0.02, sigW = 5; // 半圆 10→60 Ω，顶点≈(40,30)
+    for (var i = 0; i <= 90; i++) {
+      var f = Math.pow(10, 4 - i * 6 / 90); // 1e4 → 1e-2 Hz
+      var w = 2 * Math.PI * f, rc = w * Cdl * Rct;
+      var warb = sigW / Math.sqrt(w);
+      var zr = Rs + Rct / (1 + rc * rc) + warb;
+      var zi = Rct * rc / (1 + rc * rc) + warb;
+      rows.push([+zr.toFixed(3), +zi.toFixed(3), +(zi * 0.985 + 0.3).toFixed(3)]);
+    }
+    var s = spec("line", cols, rows,
+      { x: "Z′", y: "−Z″", fit: "Fit" },
+      { xLabel: "Z′ (Ω)", yLabel: "−Z″ (Ω)" },
+      { technique: "EIS Nyquist", x_reverse: false, x_scale: "linear",
+        x_label: "Z′ (Ω)", y_label: "−Z″ (Ω)",
+        curves: [{ role: "fit", column: "Fit", label: "fit" }],
+        fit_model: null, fit_source: "provided_by_user_fit",
+        peak_annotations: [], normalize: "none", offset_each_series: null,
+        equal_aspect: true }, "right");
+    return kernelPreview(s, FOOTER_LOCAL_SPECTRUM, template);
+  };
+
+  PREVIEW["bet-iso"] = function (template) {
+    // Type IV 等温线：低压快速上升 → 中压平台 → P/P₀≈0.86 毛细凝聚阶跃；
+    // 脱附支在 0.45–0.9 回滞环内位于吸附支上方、~0.9 处汇合。
+    // 吸附实心圆 / 脱附空心方块（series.markerFill 逐系列覆盖，仅预览）。
+    var cols = ["P/P₀", "Adsorbed amount", "Branch"], rows = [];
+    function nAds(x) {
+      return 0.55 * x / (1 - x + 0.02) +
+        1.15 / (1 + Math.exp(-(x - 0.86) / 0.025)) +
+        0.12 * Math.exp(-Math.pow((x - 0.5) / 0.2, 2));
+    }
+    function nDes(x) {
+      return nAds(x) + 0.3 * Math.exp(-Math.pow((x - 0.68) / 0.12, 2));
+    }
+    var xa = [];
+    for (var i = 0; i <= 36; i++) xa.push(0.005 * Math.pow(198, i / 36)); // 0.005→0.99 对数
+    for (i = 0; i <= 30; i++) xa.push(0.5 + i * 0.49 / 30);               // 0.5→0.99 线性
+    xa.forEach(function (x, i) {
+      rows.push([+x.toFixed(4), +(nAds(x) + _nz(i * 1.9, 7.7) * 0.006).toFixed(4), "Adsorption"]);
+    });
+    for (i = 0; i <= 40; i++) {
+      var xd = 0.99 - i * 0.54 / 40; // 0.99→0.45
+      rows.push([+xd.toFixed(4), +(nDes(xd) + _nz(i * 2.3, 8.9) * 0.006).toFixed(4), "Desorption"]);
+    }
+    var s = spec("line_multi", cols, rows,
+      { x: "P/P₀", y: "Adsorbed amount", group: "Branch" }, {},
+      undefined, "right");
+    s.presentation = { version: 1, series: {
+      "group|Branch|s:Adsorption": { marker: "circle", markerSizePt: 4.5 },
+      "group|Branch|s:Desorption": { marker: "square", markerSizePt: 4.5, markerFill: "hollow" } } };
+    return kernelPreview(s, FOOTER_LOCAL_SPECTRUM, template);
+  };
+
+  PREVIEW["tga-dtg"] = function (template) {
+    // 质量分数单调台阶式下降（logistic 累计失重），DTG 峰位与台阶中点
+    // 一一对应；宽表双轴 Mass 左 / DTG 右。
+    var steps = [[150, 5, 18], [350, 32, 30], [560, 14, 26]]; // [峰温, 失重%, 宽度]
+    var cols = ["Temperature", "Mass (%)", "DTG (%/min)"], rows = [];
+    for (var i = 0; i <= 120; i++) {
+      var t = 30 + i * 770 / 120;
+      var mass = 100, dtg = 0;
+      steps.forEach(function (st) {
+        var sig = 1 / (1 + Math.exp(-(t - st[0]) / st[2] * 4));
+        mass -= st[1] * sig;
+        dtg += st[1] * sig * (1 - sig) * 4 / st[2] * 1.1; // 峰值≈失重率/宽度
+      });
+      rows.push([+t.toFixed(1), +mass.toFixed(3), +dtg.toFixed(4)]);
+    }
+    var s = spec("line_multi", cols, rows,
+      { x: "Temperature", ys: ["Mass (%)", "DTG (%/min)"] },
+      { xLabel: "Temperature (°C)", yLabel: "Mass (%)",
+        y2: { series: ["DTG (%/min)"], label: "DTG (%/min)", min: 0, max: 1.5 } },
+      undefined, "right");
+    return kernelPreview(s, FOOTER_LOCAL_CHART, template);
+  };
+
+  PREVIEW["tafel"] = function (template) {
+    // x = log|j| (mA cm⁻²)、y = 过电位 (mV)：中段 Tafel 线性区 +
+    // 低电流端弯向 0、高电流端传质上翘；Fit 列为纯线性示例拟合线。
+    var cols = ["log_j", "Overpotential", "Fit"], rows = [];
+    for (var i = 0; i <= 60; i++) {
+      var lj = -2.3 + i * 3.2 / 60; // -2.3 → 0.9
+      var eta = 120 * (lj + 2.3) + 55 * Math.pow(Math.max(0, lj - 0.25), 2) -
+        30 * Math.exp(-Math.pow((lj + 2.2) / 0.35, 2));
+      rows.push([+lj.toFixed(3), +Math.max(2, eta + _nz(i * 1.9, 9.3) * 4).toFixed(2),
+        +(120 * (lj + 2.3)).toFixed(2)]);
+    }
+    var s = spec("line", cols, rows,
+      { x: "log_j", y: "Overpotential", fit: "Fit" },
+      { xLabel: "log |j| (mA cm⁻²)", yLabel: "Overpotential (mV)" },
+      { technique: "Tafel", x_reverse: false, x_scale: "linear",
+        x_label: "log |j| (mA cm⁻²)", y_label: "Overpotential (mV)",
+        curves: [{ role: "fit", column: "Fit", label: "fit" }],
+        fit_model: null, fit_source: "provided_by_user_fit",
+        peak_annotations: [], normalize: "none", offset_each_series: null },
+      "none");
+    return kernelPreview(s, FOOTER_LOCAL_CHART, template);
+  };
+
+  PREVIEW_POST["xanes-stack"] = function (s) {
+    // 峰标注须在模板 characterization 合并之后注入（applyTemplateDefaults
+    // 会整体替换 characterization）；示例值仅预览。
+    if (s.characterization) {
+      s.characterization.peak_annotations = [
+        { x: 574, label: "white line" }, { x: 712, label: "post-edge" }];
+    }
+    return s;
+  };
+  PREVIEW["xanes-stack"] = function (template) {
+    var xs = _linspace(450, 900, 181), groups = ["Sample A", "Sample B", "Sample C"];
+    return kernelPreview(_specRows("Energy", "Absorption", "Sample", groups, xs,
+      function (gi, x) {
+        var edge = 540 + gi * 4;
+        var s = 0.15 + 0.8 / (1 + Math.exp(-(x - edge) / 6));
+        s += 0.25 * Math.exp(-Math.pow((x - 560 - gi) / 8, 2));
+        s += 0.12 * Math.exp(-Math.pow((x - 700) / 10, 2));
+        return +(s + Math.sin(x * 0.3 + gi) * 0.01).toFixed(3);
+      }), FOOTER_LOCAL_SPECTRUM, template, "xanes-stack");
+  };
+
+  PREVIEW["bar-sig"] = function (template) {
+    var cols = ["Condition", "Response", "Group"], rows = [];
+    var cats = ["Control", "Low", "High"], grps = ["A", "B"];
+    cats.forEach(function (c, ci) {
+      grps.forEach(function (g, gi) {
+        rows.push([c, +(3 + ci * 1.2 + gi * 0.8 + (ci === 2 ? 0.9 : 0)).toFixed(1), g]);
+      });
+    });
+    var s = spec("bar_grouped", cols, rows,
+      { x: "Condition", y: "Response", group: "Group" },
+      { yLabel: "Response" }, undefined, "right");
+    // 示例显著性/字母只进预览 spec，不写入用户文档
+    s.significance = [{ a: "Control", b: "High", label: "**", group: "A" }];
+    s.letters = { "Control|A": "a", "Low|A": "b", "High|A": "c" };
+    return kernelPreview(s, FOOTER_LOCAL_CHART, template);
+  };
+
+  PREVIEW["bar-hatch"] = function (template) {
+    // 黑白打印：白/浅灰填充 + 黑色描边 + 黑色斜线（不同系列不同纹理）。
+    // 填充经 series.stroke、描边经 points[bar|类别|分组].stroke（示例值，
+    // 仅预览；真实文档由用户在「系列样式」逐系列设置）。
+    var cols = ["Condition", "Response", "Group"], rows = [];
+    var cats = ["Control", "Low", "High"], grps = ["A", "B"];
+    cats.forEach(function (c, ci) {
+      grps.forEach(function (g, gi) {
+        rows.push([c, +(3 + ci * 1.2 + gi * 0.8 + Math.sin(ci * 3 + gi) * 0.4).toFixed(1), g]);
+      });
+    });
+    var s = spec("bar_grouped", cols, rows,
+      { x: "Condition", y: "Response", group: "Group" },
+      { yLabel: "Response" }, undefined, "right");
+    var fills = { "A": "#ffffff", "B": "#d9dee4" };
+    var hatches = { "A": "/", "B": "x" };
+    var series = {}, points = {};
+    grps.forEach(function (g) {
+      series["group|Group|s:" + g] = { stroke: fills[g], hatch: hatches[g] };
+      cats.forEach(function (c) {
+        points["bar|" + c + "|" + g] = { stroke: "#111827", strokeWidthPt: 0.75 };
+      });
+    });
+    s.presentation = { version: 1, series: series, points: points };
+    return kernelPreview(s, FOOTER_LOCAL_CHART, template);
+  };
+
+  PREVIEW["line-band"] = function (template) {
+    // 均值±SD 误差带：statistics.column 误差来源 + errorStyle:"band"
+    // （模板 chart_overrides 已带 band；SD 列与 statistics 仅预览）。
+    var cols = ["Time", "Mean", "SD", "Group"], rows = [];
+    ["Control", "Treated"].forEach(function (g, gi) {
+      var base = 10 + gi * 0.8;
+      for (var i = 0; i < 30; i++) {
+        var mean = base + i * 0.05;
+        rows.push([i, +mean.toFixed(2),
+          +(mean * (0.03 + 0.02 * gi)).toFixed(3), g]); // SD≈均值 3–5%
+      }
+    });
+    var s = spec("line_multi", cols, rows,
+      { x: "Time", y: "Mean", group: "Group" },
+      { xLabel: "Time", yLabel: "Mean" }, undefined, "right");
+    s.statistics = { uncertainty_source: "column", spread: "SD", uncertainty_column: "SD" };
+    return kernelPreview(s, FOOTER_LOCAL_CHART, template);
+  };
+
   function byTemplateId(template) {
     if (global.FigDiagram && typeof global.FigDiagram.supportsTemplate === "function" &&
         global.FigDiagram.supportsTemplate(template).supported) {
@@ -1205,6 +1656,10 @@
       var actual = global.FigDiagram.previewSVG(raw);
       return frame(fitRenderedSVG(actual, 0, 0, W, 94),
         "FigDiagram 原生矢量 · 合成示例非论文/官方案例", "FigDiagram+FigRender");
+    }
+    // R7：preview 字段指定的合成示例生成器优先于 chart_type 通用预览
+    if (template.preview && PREVIEW[template.preview]) {
+      return PREVIEW[template.preview](template);
     }
     return T[template.id] ? T[template.id](template) : null;
   }
@@ -1221,17 +1676,28 @@
       if (!out && P[template.chart_type || ""]) out = P[template.chart_type || ""](template);
       if (!out && template.category === "composite") out = templateGrid(template, 2, 2, null);
       if (!out && template.category === "diagram") out = T["tpl-diagram-flow"](template);
-      if (!out) out = frame(fallbackEmpty("该类型暂无实际内核预览"), FOOTER_CHART);
+      if (!out) out = frame(fallbackEmpty("这种图暂时没有可用预览"), FOOTER_CHART);
       return tagTemplate(out, template);
     } finally {
       SERIES = DEFAULT_SERIES;
     }
   }
 
+  // R7 返工：返回与缩略图完全一致的合并后 chart spec（默认映射 +
+  // chart_overrides + 示例标注），供 _shot_r7.py 等直接建文档拼图。
+  // 只对带 preview 生成器的模板有效；其余返回 null。
+  function specFor(template) {
+    if (!template || !template.preview || !PREVIEW[template.preview]) return null;
+    PREVIEW[template.preview](template); // 渲染一次以取得 LAST_SPEC（SVG 丢弃）
+    return LAST_SPEC ? JSON.parse(JSON.stringify(LAST_SPEC)) : null;
+  }
+
   function specForTemplate(template) {
     var makers = {
       "tpl-xps-survey": G.xpsSurvey,
       "tpl-xps-highres-fit": G.xpsFit,
+      "xps-fit": G.xpsFit,
+      "raman-stack": G.ramanMulti,
       "tpl-raman-single": G.raman,
       "tpl-raman-multi-compare": G.ramanMulti,
       "tpl-xrd": G.xrd,
@@ -1308,5 +1774,5 @@
     return svgAsync(template, opts).then(elementForMarkup);
   }
 
-  global.TemplatePreview = { svg: svg, draw: draw, svgAsync: svgAsync, drawAsync: drawAsync };
+  global.TemplatePreview = { svg: svg, draw: draw, svgAsync: svgAsync, drawAsync: drawAsync, specFor: specFor };
 })(typeof globalThis !== "undefined" ? globalThis : this);

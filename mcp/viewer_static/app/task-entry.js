@@ -18,25 +18,7 @@
   var teachingLoaded = false;
 
   function h(tag, attrs, children) {
-    var el = document.createElement(tag);
-    if (attrs) {
-      Object.keys(attrs).forEach(function (k) {
-        var v = attrs[k];
-        if (v === null || v === undefined) return;
-        if (k === 'class') el.className = v;
-        else if (k === 'text') el.textContent = v;
-        else if (k.slice(0, 2) === 'on' && typeof v === 'function') {
-          // 事件名大小写不敏感（onClick/onclick 均注册为 'click'）：
-          // addEventListener 的事件类型是大小写敏感的
-          el.addEventListener(String(k.slice(2)).toLowerCase(), v);
-        } else el.setAttribute(k, v);
-      });
-    }
-    (children || []).forEach(function (c) {
-      if (c === null || c === undefined) return;
-      el.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
-    });
-    return el;
+    return global.Ui.h(tag, attrs, children);
   }
 
   function docIsEmpty() {

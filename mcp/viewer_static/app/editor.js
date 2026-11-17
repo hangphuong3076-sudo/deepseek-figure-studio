@@ -48,6 +48,13 @@
   var PASTE_STEP_MM = 2;         // paste/duplicate offset per repetition
   var SEL_COLOR = '#1E88E5';
   var GUIDE_COLOR = '#FF3B5C';
+  var HANDLE_CURSORS = {
+    nw: 'nwse-resize', se: 'nwse-resize',
+    ne: 'nesw-resize', sw: 'nesw-resize',
+    n: 'ns-resize', s: 'ns-resize',
+    e: 'ew-resize', w: 'ew-resize',
+    rotate: 'grab'
+  };
 
   var S = {
     mounted: false,
@@ -59,7 +66,7 @@
     marquee: null,         // {x0,y0,x1,y1,shift} for marquee & anchor tools
     creating: null,        // {tool,x0,y0,x1,y1,shift} for draw tools
     previewDoc: null,      // transient doc shown while dragging (never App.doc)
-    guides: { v: [], h: [] },
+    guides: { v: [], h: [], gaps: [] },
     handleLayout: [],      // [{key,x,y}] in mm, for hit testing
     raf: 0,
     textEditor: null,      // {box,id,orig}
@@ -69,7 +76,17 @@
     pendingAfterDoc: null, // {select,textEdit} re-applied when the doc update lands
     appliedZoom: null, appliedW: null, appliedH: null,
     contextMenu: null,       // transient DOM only; never enters the figure document
-    contextTarget: null
+    contextTarget: null,
+    spaceArmed: false,       // Space held → canvas pan armed (idle, select tool)
+    altDown: false,          // Alt held → copy cursor / measure overlay
+    pan: null,               // {x0,y0,sl,st} client-px start + scroll start while panning
+    hoverEvt: null,          // last mousemove snapshot {clientX,clientY,over,ctrlKey,altKey,metaKey}
+    hoverRaf: 0,
+    hoverSig: '',            // last rendered hover signature (avoid redundant overlay redraws)
+    hoverBoxEl: null,        // element under cursor eligible for .fig-hover-box
+    hoverEl: null,           // any element under cursor (cursor/measure)
+    hoverHandle: null,       // handle key under cursor
+    measure: null            // transient Alt-measure segments [{axis,f,t,at}]
   };
 
   // ------------------------------------------------------------------
@@ -313,9 +330,9 @@
       throw new Error('Editor.mount 需要一个 DOM 元素作为画布挂载点');
     }
     var A = global.App;
-    if (!A) throw new Error('App 未加载，Editor 无法挂载');
+    if (!A) throw new Error('编辑器未加载，无法启动');
     if (typeof FigDoc === 'undefined' || typeof FigRender === 'undefined' || typeof FigOps === 'undefined') {
-      throw new Error('共享内核（FigDoc/FigOps/FigRender）未加载，Editor 无法挂载');
+      throw new Error('编辑器内核未加载，无法启动');
     }
     unmount();
     ensureUiDefaults(A);
@@ -366,6 +383,9 @@
       contextOutside: onDocumentMouseDown,
       contextKey: onContextMenuKeyDown,
       wheel: onStageWheel,
+      keyup: onKeyUp,
+      blur: onWindowBlur,
+      focusin: onFocusIn,
       scroll: function () { closeContextMenu(); syncBadges(); },
       resize: function () { closeContextMenu(); syncBadges(); }
     };
@@ -380,7 +400,10 @@
     document.addEventListener('mousedown', h.contextOutside, true);
     document.addEventListener('keydown', h.contextKey, true);
     document.addEventListener('keydown', h.key);
+    document.addEventListener('keyup', h.keyup);
+    document.addEventListener('focusin', h.focusin, true);
     window.addEventListener('resize', h.resize);
+    window.addEventListener('blur', h.blur);
 
     S.unsub = [
       A.on('doc:changed', onDocChanged),
@@ -412,7 +435,10 @@
       document.removeEventListener('mousedown', h.contextOutside, true);
       document.removeEventListener('keydown', h.contextKey, true);
       document.removeEventListener('keydown', h.key);
+      document.removeEventListener('keyup', h.keyup);
+      document.removeEventListener('focusin', h.focusin, true);
       window.removeEventListener('resize', h.resize);
+      window.removeEventListener('blur', h.blur);
     }
     closeContextMenu();
     S.handlers = null;
@@ -427,7 +453,7 @@
     S.stageEl = null; S.svg = null; S.overlay = null;
     S.badgeSize = null; S.badgeZoom = null;
     S.mode = null; S.drag = null; S.marquee = null; S.creating = null;
-    S.previewDoc = null; S.guides = { v: [], h: [] };
+    S.previewDoc = null; S.guides = { v: [], h: [], gaps: [] };
     S.handleLayout = []; S.clipboard = null; S.pasteCount = 0;
     S.appliedZoom = null; S.appliedW = null; S.appliedH = null;
     if (global.App && global.App.stage) global.App.stage = null;
@@ -490,10 +516,47 @@
     });
   }
 
+  function isSelectedId(id) {
+    var A = global.App;
+    if (!A) return false;
+    if (A.selectionSet && typeof A.selectionSet.has === 'function') return A.selectionSet.has(id);
+    var sel = (A.selection && A.selection()) || [];
+    return sel.indexOf(id) >= 0;
+  }
+
+  function modalOpen() {
+    try {
+      return !!(typeof document !== 'undefined' && document.querySelector &&
+        document.querySelector('.ui-modal-overlay'));
+    } catch (e) { return false; }
+  }
+
+  // Space-pan / Alt-measure only arm while the canvas is idle and editable.
+  function canvasIdle() {
+    return !!(global.App && global.App.doc && S.mounted && !S.mode && !S.editingId && !modalOpen());
+  }
+
+  function computeCursor() {
+    var A = global.App;
+    if (!A || !A.ui) return 'default';
+    if (S.mode === 'pan') return 'grabbing';
+    if (S.spaceArmed) return 'grab';
+    var tool = A.ui.tool || 'select';
+    if (tool !== 'select') return 'crosshair';
+    if (S.mode === 'move') return (S.drag && S.drag.duplicate) ? 'copy' : 'move';
+    if (S.mode === 'resize') return (S.drag && HANDLE_CURSORS[S.drag.handle]) || 'default';
+    if (S.mode === 'rotate') return 'grab';
+    if (S.mode) return 'crosshair'; // marquee / anchor / create rubber bands
+    if (S.hoverHandle) return HANDLE_CURSORS[S.hoverHandle] || 'default';
+    if (S.altDown && S.hoverEl) return 'copy';
+    if (S.hoverEl && isSelectedId(S.hoverEl.id)) return 'move';
+    return 'default';
+  }
+
   function updateCursor() {
     var A = global.App;
     if (!S.stageEl || !A || !A.ui) return;
-    S.stageEl.style.cursor = (A.ui.tool === 'select') ? 'default' : 'crosshair';
+    S.stageEl.style.cursor = computeCursor();
   }
 
   // ------------------------------------------------------------------
@@ -501,7 +564,7 @@
   // ------------------------------------------------------------------
 
   function svgInnerOf(doc) {
-    var s = FigRender.toSVG(doc, { includeGuides: false });
+    var s = FigRender.toSVG(doc, { includeGuides: false, compactMarks: true });
     return s.slice(s.indexOf('>') + 1, s.lastIndexOf('</svg>'));
   }
 
@@ -516,6 +579,7 @@
       inner = '';
     }
     S.svg.innerHTML = inner;
+    refreshChartPartMark();
     applyZoomSizes();
     renderOverlay();
     updateBadges();
@@ -615,10 +679,175 @@
     renderOverlay();
   }
 
+  // 预览快路径：move/rotate/add_element 只浅克隆被触及的元素（transform/
+  // style 复制，其余子树——含 chart.data.inline.rows——与 App.doc 共享），
+  // 避免每帧多次深克隆大数据文档。语义镜像 ops.js 的 opMove/opRotate/
+  // shiftRecursive；遇到无法镜像的情形（未知 op、diagramNodeId）返回 null，
+  // 由调用方回退到 FigOps.applyAll 全量路径。
+  function previewApplyFast(doc, ops) {
+    var F = global.FigDoc;
+    if (!F || typeof F.children !== 'function' || !Array.isArray(doc.elements)) {
+      return null;
+    }
+    var n = doc.elements.length;
+    var idxOf = Object.create(null);
+    for (var i = 0; i < n; i++) idxOf[doc.elements[i].id] = i;
+    var orig = doc.elements;
+
+    function shallowEl(e) {
+      var c = {};
+      var ks = Object.keys(e);
+      for (var i = 0; i < ks.length; i++) c[ks[i]] = e[ks[i]];
+      if (e.transform && typeof e.transform === 'object') {
+        var t = {};
+        var tk = Object.keys(e.transform);
+        for (var j = 0; j < tk.length; j++) t[tk[j]] = e.transform[tk[j]];
+        c.transform = t;
+      }
+      if (e.style && typeof e.style === 'object') {
+        var s = {};
+        var sk = Object.keys(e.style);
+        for (var j2 = 0; j2 < sk.length; j2++) s[sk[j2]] = e.style[sk[j2]];
+        c.style = s;
+      }
+      return c;
+    }
+
+    var clones = Object.create(null);
+    function elFor(id) {
+      var c = clones[id];
+      if (c) return c;
+      var ix = idxOf[id];
+      if (ix === undefined) return null;
+      c = shallowEl(orig[ix]);
+      clones[id] = c;
+      return c;
+    }
+
+    function subtreeHasDiagram(el) {
+      if (!el) return false;
+      if (el.diagramNodeId) return true;
+      var desc = F.descendants ? F.descendants(doc, el.id, { includeSelf: false }) : [];
+      for (var i = 0; i < desc.length; i++) {
+        if (desc[i] && desc[i].diagramNodeId) return true;
+      }
+      return false;
+    }
+
+    // 预扫描：只接受 move/rotate/add_element；目标子树含 diagramNodeId 时放弃。
+    var adds = [];
+    for (i = 0; i < ops.length; i++) {
+      var op = ops[i];
+      if (!op || typeof op !== 'object') return null;
+      if (op.op === 'add_element') {
+        if (!op.element || typeof op.element !== 'object') return null;
+        adds.push(op.element);
+        continue;
+      }
+      if (op.op !== 'move' && op.op !== 'rotate') return null;
+      var tg = Array.isArray(op.targets) ? op.targets : [];
+      for (var j = 0; j < tg.length; j++) {
+        var id = tg[j];
+        if (idxOf[id] === undefined) return null;
+        if (subtreeHasDiagram(orig[idxOf[id]])) return null;
+      }
+    }
+
+    // shiftRecursive 镜像：目标自身 panelRelative 时按父 panel 内尺寸折算；
+    // 子孙中 panelRelative 的跳过（随父面板走），其余递归平移。
+    function shiftRec(el, dx, dy, skip) {
+      var t = el.transform;
+      if (!t || typeof t !== 'object') t = el.transform = { x: 0, y: 0, w: 0, h: 0 };
+      if (el.style && el.style.panelRelative === true) {
+        // 镜像 ops.js findParentPanelOf：沿 parent_id 向上找最近的 panel。
+        var panel = null, pide = el.parent_id, pguard = 0;
+        while (pide && pguard++ < 20) {
+          var pi = idxOf[pide];
+          if (pi === undefined) break;
+          var pe = orig[pi];
+          if (pe && pe.type === 'panel') { panel = pe; break; }
+          pide = pe && pe.parent_id;
+        }
+        if (panel && panel.transform) {
+          var lay = (panel.panelLayout && typeof panel.panelLayout === 'object')
+            ? panel.panelLayout : {};
+          var pad = lay.padding_mm === undefined ? 0 : Number(lay.padding_mm);
+          if (!isFinite(pad) || pad < 0) pad = 0;
+          var iw = Math.max(0, (Number(panel.transform.w) || 0) - 2 * pad);
+          var ih = Math.max(0, (Number(panel.transform.h) || 0) - 2 * pad);
+          t.x += dx / (iw || 1);
+          t.y += dy / (ih || 1);
+        } else {
+          t.x += dx; t.y += dy;
+        }
+      } else {
+        t.x += dx; t.y += dy;
+      }
+      var kids = F.children(doc, el.id) || [];
+      for (var i = 0; i < kids.length; i++) {
+        var kid = kids[i];
+        if (!kid || skip[kid.id]) continue;
+        if (kid.style && kid.style.panelRelative === true) continue;
+        var kc = elFor(kid.id);
+        if (kc) shiftRec(kc, dx, dy, skip);
+      }
+    }
+
+    // 保持 ops 原顺序对同一元素的累积效果：move 与 rotate 作用在不同字段，
+    // 顺序无关；多个 move 按 ops 顺序累加。
+    for (i = 0; i < ops.length; i++) {
+      op = ops[i];
+      if (op.op === 'add_element') continue;
+      var targets = Array.isArray(op.targets) ? op.targets : [];
+      if (op.op === 'rotate') {
+        for (j = 0; j < targets.length; j++) {
+          var re = elFor(targets[j]);
+          if (!re) continue;
+          var rt = re.transform;
+          if (!rt || typeof rt !== 'object') rt = re.transform = { x: 0, y: 0, w: 0, h: 0 };
+          if (op.rotation != null) rt.rotation = op.rotation;
+          else if (typeof op.angle === 'number') rt.rotation = (rt.rotation || 0) + op.angle;
+        }
+      } else { // move
+        var skip = Object.create(null);
+        for (j = 0; j < targets.length; j++) skip[targets[j]] = true;
+        for (j = 0; j < targets.length; j++) {
+          var me = elFor(targets[j]);
+          if (!me) continue;
+          var dx, dy;
+          if (op.x != null || op.y != null) {
+            dx = (op.x != null ? op.x : me.transform.x) - me.transform.x;
+            dy = (op.y != null ? op.y : me.transform.y) - me.transform.y;
+          } else {
+            dx = op.dx || 0; dy = op.dy || 0;
+          }
+          if (dx === 0 && dy === 0) continue;
+          shiftRec(me, dx, dy, skip);
+        }
+      }
+    }
+
+    var newElements = new Array(n + adds.length);
+    for (i = 0; i < n; i++) {
+      var oid = orig[i].id;
+      newElements[i] = clones[oid] || orig[i];
+    }
+    for (i = 0; i < adds.length; i++) newElements[n + i] = adds[i];
+    var out = {};
+    var dk = Object.keys(doc);
+    for (i = 0; i < dk.length; i++) out[dk[i]] = doc[dk[i]];
+    out.elements = newElements;
+    if (doc.meta && typeof doc.meta === 'object') {
+      out.meta = Object.assign({}, doc.meta);
+    }
+    return out;
+  }
+
   function previewOps(ops) {
     var A = global.App;
     try {
-      S.previewDoc = FigOps.applyAll(FigDoc.clone(A.doc), ops, { label: '预览' }).doc;
+      S.previewDoc = previewApplyFast(A.doc, ops) ||
+        FigOps.applyAll(FigDoc.clone(A.doc), ops, { label: '预览' }).doc;
     } catch (e) {
       S.previewDoc = null;
     }
@@ -745,7 +974,229 @@
       }
     }
 
+    // hover outline for the unselected element under the cursor (idle only)
+    if (S.hoverBoxEl && S.hoverBoxEl.id && S.mode === null) {
+      var hbEl = FigDoc.get(d, S.hoverBoxEl.id);
+      if (hbEl) {
+        var hb = FigDoc.bbox(d, S.hoverBoxEl.id, { recursive: true });
+        var hrot = (hbEl.transform && hbEl.transform.rotation) || 0;
+        out.push(tag('rect', {
+          x: r3(hb.x), y: r3(hb.y),
+          width: r3(Math.abs(hb.w)), height: r3(Math.abs(hb.h)),
+          fill: 'none', stroke: SEL_COLOR, 'stroke-width': sw,
+          'stroke-opacity': '0.55', 'class': 'fig-hover-box',
+          transform: hrot ? ('rotate(' + r3(hrot) + ' ' + r3(hb.x + hb.w / 2) + ' ' + r3(hb.y + hb.h / 2) + ')') : null
+        }));
+      }
+    }
+
+    // equal-spacing gap labels + Alt-hover measurement (transient, never exported)
+    (S.guides.gaps || []).forEach(function (s) { dimSeg(out, s, 'fig-gap-label', z, sw); });
+    (S.measure || []).forEach(function (s) { dimSeg(out, s, 'fig-measure', z, sw); });
+
     S.overlay.innerHTML = out.join('');
+  }
+
+  // ------------------------------------------------------------------
+  // pan / hover / gap-snap / alt-duplicate / alt-measure helpers
+  // ------------------------------------------------------------------
+
+  function beginPan(evt) {
+    var st = S.stageEl;
+    if (!st) return;
+    S.mode = 'pan';
+    S.pan = { x0: evt.clientX, y0: evt.clientY, sl: st.scrollLeft, st: st.scrollTop };
+    resetHover();
+    evt.preventDefault();
+    updateCursor();
+    renderOverlay(); // hide selection handles while panning
+  }
+
+  function panTo(evt) {
+    var st = S.stageEl, pn = S.pan;
+    if (!st || !pn) return;
+    st.scrollLeft = pn.sl - (evt.clientX - pn.x0);
+    st.scrollTop = pn.st - (evt.clientY - pn.y0);
+  }
+
+  function endPan() {
+    S.mode = null; S.pan = null; S.drag = null;
+    updateCursor();
+    renderOverlay();
+  }
+
+  // Top-level visible peers (not dragged, not descendants of dragged) used by
+  // equal-spacing snapping. Each entry is a normalized {l,r,t,b} box in mm.
+  function collectPeerBoxes(doc, ids) {
+    var ex = Object.create(null);
+    (ids || []).forEach(function (id) {
+      ex[id] = true;
+      var desc = FigDoc.descendants(doc, id, { includeSelf: false }) || [];
+      desc.forEach(function (dd) { ex[dd.id] = true; });
+    });
+    var out = [];
+    (doc.elements || []).forEach(function (el) {
+      if (!el || ex[el.id] || el.visible === false || el.parent_id) return;
+      var b = FigDoc.bbox(doc, el.id, { recursive: true });
+      var l = Math.min(b.x, b.x + b.w), r = Math.max(b.x, b.x + b.w);
+      var t = Math.min(b.y, b.y + b.h), bt = Math.max(b.y, b.y + b.h);
+      if (r - l > 0.01 && bt - t > 0.01) out.push({ l: l, r: r, t: t, b: bt });
+    });
+    return out;
+  }
+
+  // Equal-spacing snap for one axis. pos/size = dragged box's current left/top
+  // and width/height on that axis; peers = [{a,b}] near/far edge coords sorted
+  // input. Returns {pos,dist,segs:[{f,t}]} for the best candidate or null.
+  function gapSnapAxis(pos, size, peers) {
+    var before = peers.filter(function (pb) { return pb.b <= pos + 1e-6; })
+      .sort(function (p, q) { return q.b - p.b; }); // nearest-left first
+    var after = peers.filter(function (pb) { return pb.a >= pos + size - 1e-6; })
+      .sort(function (p, q) { return p.a - q.a; }); // nearest-right first
+    var L = before[0], L2 = before[1], R = after[0], R2 = after[1];
+    var cands = [];
+    if (L && R) {
+      var cx = (L.b + R.a - size) / 2;
+      cands.push({ pos: cx, segs: [{ f: L.b, t: cx }, { f: cx + size, t: R.a }] });
+    }
+    if (L2 && L) {
+      var g = L.a - L2.b;
+      if (g > 0) {
+        var xr = L.b + g;
+        cands.push({ pos: xr, segs: [{ f: L.b, t: xr }, { f: L2.b, t: L.a }] });
+      }
+    }
+    if (R2 && R) {
+      var g2 = R2.a - R.b;
+      if (g2 > 0) {
+        var xl = R.a - g2 - size;
+        cands.push({ pos: xl, segs: [{ f: xl + size, t: R.a }, { f: R.b, t: R2.a }] });
+      }
+    }
+    var best = null;
+    cands.forEach(function (c) {
+      var dist = Math.abs(pos - c.pos);
+      if (!best || dist < best.dist) best = { pos: c.pos, dist: dist, segs: c.segs };
+    });
+    return best;
+  }
+
+  // Alt-hover measurement between the selection bbox and another element.
+  function computeMeasure(selIds, hoverEl) {
+    var A = global.App, doc = A.doc;
+    var SB = unionSelBBox(doc, selIds);
+    if (!SB) return null;
+    var HB = FigDoc.bbox(doc, hoverEl.id, { recursive: true });
+    var hb = normRect({ x0: HB.x, y0: HB.y, x1: HB.x + HB.w, y1: HB.y + HB.h });
+    var sl = SB.x, sr = SB.x + SB.w, st = SB.y, sb = SB.y + SB.h;
+    var hl = hb.x, hr = hb.x + hb.w, ht = hb.y, hbb = hb.y + hb.h;
+    var xOverlap = sl < hr && hl < sr;
+    var yOverlap = st < hbb && ht < sb;
+    var segs = [];
+    if (!xOverlap) {
+      var from, to;
+      if (sr <= hl) { from = sr; to = hl; } else { from = hr; to = sl; }
+      if (to - from > 0.01) {
+        var y = yOverlap ? (Math.max(st, ht) + Math.min(sb, hbb)) / 2
+                         : ((SB.y + SB.h / 2) + (hb.y + hb.h / 2)) / 2;
+        segs.push({ axis: 'x', f: from, t: to, at: y });
+      }
+    }
+    if (!yOverlap) {
+      var f2, t2;
+      if (sb <= ht) { f2 = sb; t2 = ht; } else { f2 = hbb; t2 = st; }
+      if (t2 - f2 > 0.01) {
+        var x = xOverlap ? (Math.max(sl, hl) + Math.min(sr, hr)) / 2
+                         : ((SB.x + SB.w / 2) + (hb.x + hb.w / 2)) / 2;
+        segs.push({ axis: 'y', f: f2, t: t2, at: x });
+      }
+    }
+    return segs.length ? segs : null;
+  }
+
+  function fmtGap(v) {
+    var n = Math.round(v * 10) / 10;
+    if (Math.abs(n - Math.round(n)) < 1e-9) return String(Math.round(n));
+    return n.toFixed(1);
+  }
+
+  // One dimension segment: line + two end ticks + "<n> mm" text label.
+  function dimSeg(out, s, cls, z, sw) {
+    var fs = r3(11 / z), tick = r3(3 / z);
+    var val = fmtGap(Math.abs(s.t - s.f)) + ' mm';
+    var mx, my, tx, ty, anchor;
+    if (s.axis === 'x') {
+      mx = (s.f + s.t) / 2; my = s.at;
+      tx = mx; ty = my - fs * 0.9; anchor = 'middle';
+      out.push(tag('line', { x1: r3(s.f), y1: r3(my), x2: r3(s.t), y2: r3(my), stroke: GUIDE_COLOR, 'stroke-width': sw }));
+      out.push(tag('line', { x1: r3(s.f), y1: r3(my - tick / 2), x2: r3(s.f), y2: r3(my + tick / 2), stroke: GUIDE_COLOR, 'stroke-width': sw }));
+      out.push(tag('line', { x1: r3(s.t), y1: r3(my - tick / 2), x2: r3(s.t), y2: r3(my + tick / 2), stroke: GUIDE_COLOR, 'stroke-width': sw }));
+    } else {
+      mx = s.at; my = (s.f + s.t) / 2;
+      tx = mx + fs * 0.4; ty = my + fs * 0.35; anchor = 'start';
+      out.push(tag('line', { x1: r3(mx), y1: r3(s.f), x2: r3(mx), y2: r3(s.t), stroke: GUIDE_COLOR, 'stroke-width': sw }));
+      out.push(tag('line', { x1: r3(mx - tick / 2), y1: r3(s.f), x2: r3(mx + tick / 2), y2: r3(s.f), stroke: GUIDE_COLOR, 'stroke-width': sw }));
+      out.push(tag('line', { x1: r3(mx - tick / 2), y1: r3(s.t), x2: r3(mx + tick / 2), y2: r3(s.t), stroke: GUIDE_COLOR, 'stroke-width': sw }));
+    }
+    out.push('<text x="' + r3(tx) + '" y="' + r3(ty) + '" text-anchor="' + anchor +
+      '" fill="' + GUIDE_COLOR + '" font-size="' + fs + '" class="' + cls + '">' + val + '</text>');
+  }
+
+  function resetHover() {
+    S.hoverBoxEl = null; S.hoverEl = null; S.hoverHandle = null;
+    S.measure = null; S.hoverSig = '';
+  }
+
+  function trackHover(evt) {
+    if (!S.stageEl) return;
+    var over = (S.stageEl.contains && evt.target) ? S.stageEl.contains(evt.target) : true;
+    S.hoverEvt = {
+      clientX: evt.clientX, clientY: evt.clientY, over: over,
+      ctrlKey: !!evt.ctrlKey, altKey: !!evt.altKey, metaKey: !!evt.metaKey,
+      shiftKey: !!evt.shiftKey
+    };
+    if (S.hoverRaf) return;
+    var run = function () { S.hoverRaf = 0; updateHover(); };
+    if (typeof requestAnimationFrame === 'function') S.hoverRaf = requestAnimationFrame(run);
+    else run();
+  }
+
+  function refreshHover() { updateHover(); }
+
+  function updateHover() {
+    var A = global.App;
+    var prevSig = S.hoverSig;
+    S.hoverBoxEl = null; S.hoverEl = null; S.hoverHandle = null; S.measure = null;
+    var sig = '-';
+    if (A && A.doc && S.svg && S.stageEl && S.hoverEvt && S.hoverEvt.over) {
+      var tool = (A.ui && A.ui.tool) || 'select';
+      if (tool === 'select' && !S.mode && !S.editingId) {
+        var evt = S.hoverEvt;
+        var r = S.svg.getBoundingClientRect();
+        var z = zoomOf();
+        var p = { x: (evt.clientX - r.left) / z, y: (evt.clientY - r.top) / z };
+        var clean = !evt.ctrlKey && !evt.altKey && !evt.metaKey && !S.altDown;
+        var el = hitElement(p);
+        if (el) {
+          S.hoverEl = el;
+          if (clean && !isSelectedId(el.id)) S.hoverBoxEl = el;
+          if (S.altDown && !isSelectedId(el.id)) {
+            var sel = topmostSelected(A.doc);
+            if (sel.length) S.measure = computeMeasure(sel, el);
+          }
+        }
+        var hd = handleAt({ clientX: evt.clientX, clientY: evt.clientY });
+        if (hd) S.hoverHandle = hd.key;
+        sig = (S.hoverBoxEl ? S.hoverBoxEl.id : '-') + '|' +
+          (S.hoverEl ? S.hoverEl.id : '-') + '|' + (S.hoverHandle || '-') + '|' +
+          (S.measure ? S.measure.length : 0);
+      }
+    }
+    if (sig !== S.hoverSig) {
+      S.hoverSig = sig;
+      renderOverlay();
+    }
+    updateCursor();
   }
 
   // ------------------------------------------------------------------
@@ -755,6 +1206,10 @@
   function onStageMouseDown(evt) {
     var A = global.App;
     if (!A || !A.doc || !S.svg) return;
+    if (evt.button === 1) {           // middle-button drag pans the canvas
+      if (!S.mode && !S.editingId) beginPan(evt);
+      return;
+    }
     if (evt.button !== 0) return;
     var t = evt.target;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
@@ -763,6 +1218,9 @@
     evt.preventDefault();
     var tool = (A.ui && A.ui.tool) || 'select';
     var p = evtMm(evt);
+    resetHover();
+
+    if (S.spaceArmed && canvasIdle()) { beginPan(evt); return; } // Space+drag pans
 
     if (tool === 'text') {
       var existingText = textElementAt(p);
@@ -804,8 +1262,8 @@
       }
       // R04：图表部件命中（系列/图例/轴标题/峰标注）→ 记录语义部件引用，
       // 供属性面板做局部样式编辑；整体拖动仍以 chart 元素为对象。
-      setChartPartRef(el, evt.target);
-      beginMove(p);
+      setChartPartRef(el, evt.target, evt);
+      if (evt.altKey) beginDuplicate(p); else beginMove(p);
       return;
     }
     clearChartPartRef();
@@ -813,15 +1271,13 @@
   }
 
   // R04：从点击目标向上找 data-chart-part / data-series-key / data-peak-id
-  // 与所属 chart 的 data-fig-id；仅当命中的顶层元素是 chart 时生效。
-  function setChartPartRef(chartEl, targetNode) {
+  // 与所属 chart 的 data-fig-id；命中的图表按 data-fig-id 解析（嵌在
+  // panel/group 里的 chart 同样支持点选部件）。
+  function setChartPartRef(chartEl, targetNode, evt) {
     var A = global.App;
     if (!A.ui || typeof A.ui !== 'object') A.ui = {};
-    if (!chartEl || chartEl.type !== 'chart') {
-      clearChartPartRef();
-      return null;
-    }
     var node = targetNode, part = null, key = null, peakId = null, figId = null;
+    var pointKey = null, rowAttr = null, compactNode = null;
     var guard = 0;
     while (node && node !== S.svg && guard++ < 40) {
       if (node.getAttribute) {
@@ -829,26 +1285,185 @@
         if (!key) key = node.getAttribute('data-series-key');
         if (!peakId) peakId = node.getAttribute('data-peak-id');
         if (!figId) figId = node.getAttribute('data-fig-id');
+        if (!pointKey) pointKey = node.getAttribute('data-point-key');
+        if (!compactNode && node.getAttribute('data-compact-marks')) compactNode = node;
+        if (rowAttr === null) { var ra = node.getAttribute('data-row'); if (ra !== null) rowAttr = ra; }
       }
       node = node.parentNode;
     }
-    if (!figId || figId !== chartEl.id) {
-      // 部件未携带所属 chart 标识（如旧渲染输出）：视为整图选择
+    if (!figId) {
+      // 部件未携带所属元素标识（如旧渲染输出）：视为整图选择
       clearChartPartRef();
       return null;
     }
-    if (!part) {
+    var realChart = (A.doc && typeof FigDoc !== 'undefined' && FigDoc.get)
+      ? FigDoc.get(A.doc, figId) : null;
+    if (!realChart || realChart.type !== 'chart') {
       clearChartPartRef();
       return null;
     }
+    // 大数据图的 compact 标记路径：按指针位置在命中索引里找最近点，
+    // 命中则与逐点标记走同一 chartPart 结构（多 compact:true 与局部坐标
+    // 供选中高亮环使用）；未命中则落到下方常规 series 分支。
+    if (compactNode && evt && typeof FigData !== 'undefined' &&
+        typeof FigData.chartHitIndex === 'function') {
+      var hit = compactHitAt(compactNode, evt, realChart);
+      if (hit) {
+        A.ui.chartPart = {
+          chartId: realChart.id,
+          part: 'point',
+          seriesKey: hit.seriesKey || key || null,
+          pointKey: hit.key,
+          row: String(hit.row),
+          peakId: null,
+          compact: true,
+          compactX: hit.x, compactY: hit.y, compactR: hit.r
+        };
+        if (typeof A.emit === 'function') A.emit('ui:changed', { chartPart: A.ui.chartPart });
+        refreshChartPartMark();
+        return A.ui.chartPart;
+      }
+    }
+    // 数据点/柱子标记：data-point-key 存在时 part 由键前缀决定（覆盖
+    // data-chart-part="series"）；否则沿用 data-chart-part 原值。
+    var effPart = part;
+    if (pointKey) effPart = (pointKey.indexOf('bar|') === 0) ? 'bar' : 'point';
+    else if (!effPart) { clearChartPartRef(); return null; }
     A.ui.chartPart = {
-      chartId: chartEl.id,
-      part: part,
+      chartId: realChart.id,
+      part: effPart,
       seriesKey: key || null,
+      pointKey: pointKey || null,
+      row: rowAttr,
       peakId: peakId || null
     };
     if (typeof A.emit === 'function') A.emit('ui:changed', { chartPart: A.ui.chartPart });
+    refreshChartPartMark();
     return A.ui.chartPart;
+  }
+
+  // compact 标记路径的最近点命中：指针经 getScreenCTM 逆变换到路径局部
+  // 坐标（与渲染片段同单位），在 FigData.chartHitIndex 里取半径+3px 容差内
+  // 最近的标记；返回 {x,y,r,row,key,seriesKey}（片段像素单位）。
+  function compactHitAt(pathNode, evt, realChart) {
+    if (!pathNode.getScreenCTM || typeof DOMPoint === 'undefined') return null;
+    var ctm = pathNode.getScreenCTM();
+    if (!ctm || !ctm.inverse) return null;
+    var loc;
+    try {
+      loc = new DOMPoint(evt.clientX, evt.clientY).matrixTransform(ctm.inverse());
+    } catch (e) { return null; }
+    var A = global.App;
+    var dpi = (A.doc && A.doc.canvas && typeof A.doc.canvas.dpi === 'number' &&
+      isFinite(A.doc.canvas.dpi) && A.doc.canvas.dpi > 0) ? A.doc.canvas.dpi : 300;
+    var box = (typeof ChartRender !== 'undefined' && ChartRender.resolveBoxMm)
+      ? ChartRender.resolveBoxMm(A.doc, realChart) : null;
+    var st = (realChart.style && typeof realChart.style === 'object') ? realChart.style : {};
+    var hits = FigData.chartHitIndex(realChart.chart, {
+      width_mm: box ? box.w : (Number(realChart.transform && realChart.transform.w) || 0),
+      height_mm: box ? box.h : (Number(realChart.transform && realChart.transform.h) || 0),
+      dpi: dpi,
+      fontSizePt: st.fontSizePt,
+      fontFamily: st.fontFamily
+    });
+    if (!hits || !hits.length) return null;
+    var sk = pathNode.getAttribute('data-series-key');
+    var best = null, bd = Infinity;
+    for (var i = 0; i < hits.length; i++) {
+      var h = hits[i];
+      if (sk && h.seriesKey !== sk) continue;
+      var dx = h.x - loc.x, dy = h.y - loc.y;
+      var d = Math.sqrt(dx * dx + dy * dy);
+      if (d <= h.r + 3 && d < bd) { bd = d; best = h; }
+    }
+    return best;
+  }
+
+  // 当前 chartPart 的数据点/柱子 SVG 节点：先定位 data-fig-id=chartId 的
+  // <g>，再在其内部逐个比对 data-point-key（键不拼进选择器，避免注入/转义）。
+  function chartPartTargetNode() {
+    var A = global.App;
+    var cp = A && A.ui && A.ui.chartPart;
+    if (!cp || !cp.pointKey || !S.svg || !S.svg.querySelectorAll) return null;
+    var hosts = S.svg.querySelectorAll('[data-fig-id]');
+    var host = null;
+    for (var i = 0; i < hosts.length; i++) {
+      if (hosts[i].getAttribute('data-fig-id') === cp.chartId) { host = hosts[i]; break; }
+    }
+    if (!host) return null;
+    var marks = host.querySelectorAll('[data-point-key]');
+    for (var j = 0; j < marks.length; j++) {
+      if (marks[j].getAttribute('data-point-key') === cp.pointKey) return marks[j];
+    }
+    return null;
+  }
+
+  // 选中描边：每次画布重绘/选中变化后重打 data-part-selected；节点已随数据
+  // 替换消失时清掉 chartPart（覆盖不再生效但仍留在文档里）。compact 点没有
+  // 独立 DOM 节点，在 overlay 层画一个等效选中环（mm 用户单位，与画布同步）。
+  function refreshChartPartMark() {
+    if (!S.svg || !S.svg.querySelectorAll) return;
+    var prev = S.svg.querySelectorAll('[data-part-selected]');
+    for (var i = 0; i < prev.length; i++) prev[i].removeAttribute('data-part-selected');
+    var oldRing = S.overlay && S.overlay.querySelectorAll
+      ? S.overlay.querySelectorAll('[data-compact-ring]') : [];
+    for (var rI = 0; rI < oldRing.length; rI++) {
+      if (oldRing[rI].parentNode) oldRing[rI].parentNode.removeChild(oldRing[rI]);
+    }
+    var A = global.App;
+    var cp = A && A.ui && A.ui.chartPart;
+    if (!cp || !cp.pointKey) return;
+    var node = chartPartTargetNode();
+    if (!node) {
+      if (cp.compact) { drawCompactPartRing(cp); return; }
+      clearChartPartRef();
+      return;
+    }
+    node.setAttribute('data-part-selected', '1');
+  }
+
+  // compact 点选中环：把命中点的片段局部坐标经路径 CTM 转成画布 mm，
+  // 在 overlay（与 #svg-stage 同 viewBox）画 circle；半径按 CTM 比例换算。
+  function drawCompactPartRing(cp) {
+    if (!S.overlay || !S.svg || !S.svg.querySelectorAll) return;
+    var hosts = S.svg.querySelectorAll('[data-fig-id]');
+    var host = null;
+    for (var i = 0; i < hosts.length; i++) {
+      if (hosts[i].getAttribute('data-fig-id') === cp.chartId) { host = hosts[i]; break; }
+    }
+    if (!host) { clearChartPartRef(); return; }
+    var paths = host.querySelectorAll('[data-compact-marks]');
+    var pathNode = null;
+    for (var j = 0; j < paths.length; j++) {
+      if (paths[j].getAttribute('data-series-key') === cp.seriesKey) {
+        pathNode = paths[j]; break;
+      }
+    }
+    if (!pathNode || !pathNode.getCTM || typeof DOMPoint === 'undefined') {
+      clearChartPartRef();
+      return;
+    }
+    var ctm;
+    try { ctm = pathNode.getCTM(); } catch (e) { ctm = null; }
+    if (!ctm) { clearChartPartRef(); return; }
+    var c, c2;
+    try {
+      c = new DOMPoint(cp.compactX, cp.compactY).matrixTransform(ctm);
+      c2 = new DOMPoint(cp.compactX + 1, cp.compactY).matrixTransform(ctm);
+    } catch (e) { clearChartPartRef(); return; }
+    var unit = Math.sqrt((c2.x - c.x) * (c2.x - c.x) + (c2.y - c.y) * (c2.y - c.y));
+    if (!isFinite(unit) || unit <= 0) { clearChartPartRef(); return; }
+    var circle = document.createElementNS(SVG_NS, 'circle');
+    circle.setAttribute('cx', String(c.x));
+    circle.setAttribute('cy', String(c.y));
+    circle.setAttribute('r', String((cp.compactR || 0) * unit + 0.4));
+    circle.setAttribute('fill', 'none');
+    circle.setAttribute('stroke', '#FF3B5C');
+    circle.setAttribute('stroke-width', '2');
+    circle.setAttribute('vector-effect', 'non-scaling-stroke');
+    circle.setAttribute('data-compact-ring', '1');
+    circle.setAttribute('data-part-selected', '1');
+    S.overlay.appendChild(circle);
   }
 
   function clearChartPartRef() {
@@ -857,6 +1472,7 @@
       A.ui.chartPart = null;
       if (typeof A.emit === 'function') A.emit('ui:changed', { chartPart: null });
     }
+    refreshChartPartMark();
   }
 
   function beginMarquee(p, evt, isAnchor) {
@@ -879,8 +1495,60 @@
       start: p,
       dx: 0, dy: 0,
       bbox: unionSelBBox(A.doc, ids),
-      lines: collectSnapLines(A.doc, ids)
+      lines: collectSnapLines(A.doc, ids),
+      peerBoxes: collectPeerBoxes(A.doc, ids)
     };
+  }
+
+  // Alt+drag: copy the current selection; the duplicate (fixed new ids, built
+  // once) is previewed at the drag offset and committed once on mouse-up.
+  function beginDuplicate(p) {
+    var A = global.App;
+    var ids = topmostSelected(A.doc);
+    if (!ids.length) return;
+    var stmts = [], newIds = [];
+    ids.forEach(function (id) {
+      var desc = FigDoc.descendants(A.doc, id, { includeSelf: true });
+      var map = Object.create(null);
+      desc.forEach(function (e) { map[e.id] = FigDoc.uid('el'); });
+      sortedByDepth(desc).forEach(function (e) { // parents before children
+        var c = JSON.parse(JSON.stringify(e));
+        c.id = map[e.id];
+        c.parent_id = (e.parent_id && map[e.parent_id]) ? map[e.parent_id] : null;
+        if (Array.isArray(c.children)) {
+          c.children = c.children.map(function (cid) { return map[cid] || cid; });
+        }
+        c.transform = c.transform || { x: 0, y: 0, w: 0, h: 0 };
+        stmts.push({ el: c });
+        if (e.id === id) newIds.push(c.id);
+      });
+    });
+    if (!stmts.length) return;
+    S.mode = 'move';
+    S.drag = {
+      ids: ids, start: p, dx: 0, dy: 0,
+      bbox: unionSelBBox(A.doc, ids),
+      lines: collectSnapLines(A.doc, ids),
+      peerBoxes: collectPeerBoxes(A.doc, ids),
+      duplicate: true, dupStmts: stmts, dupNewIds: newIds
+    };
+  }
+
+  // add_element ops for the pending duplicate at drag offset (dx,dy). Each call
+  // clones the fixed-id statements so transforms never accumulate. 浅克隆共享
+  // chart/style 等子树（提交时 applyAll 会整体深克隆，不会污染文档）。
+  function dupOps(d, dx, dy) {
+    return (d.dupStmts || []).map(function (s) {
+      var src = s.el;
+      var el = {};
+      var ks = Object.keys(src);
+      for (var i = 0; i < ks.length; i++) el[ks[i]] = src[ks[i]];
+      el.transform = (src.transform && typeof src.transform === 'object')
+        ? Object.assign({}, src.transform) : { x: 0, y: 0, w: 0, h: 0 };
+      el.transform.x = (el.transform.x || 0) + dx;
+      el.transform.y = (el.transform.y || 0) + dy;
+      return { op: 'add_element', element: el };
+    });
   }
 
   function beginHandle(hd, p) {
@@ -932,9 +1600,10 @@
   }
 
   function onWindowMouseMove(evt) {
-    if (!S.mode) return;
     var A = global.App;
+    if (!S.mode) { trackHover(evt); return; }
     if (!A || !A.doc) return;
+    if (S.mode === 'pan') { panTo(evt); return; }
     var p = evtMm(evt);
     switch (S.mode) {
       case 'move': moveTo(p, evt); break;
@@ -958,27 +1627,34 @@
     var mode = S.mode;
     if (!mode) return;
     var d = S.drag;
-    var todo = null, label = '';
+    var todo = null, label = '', dupSelect = null;
 
+    if (mode === 'pan') { endPan(); return; }
     if (mode === 'marquee') {
       finishMarquee();
-      S.mode = null; S.marquee = null; S.guides = { v: [], h: [] };
+      S.mode = null; S.marquee = null; S.guides = { v: [], h: [], gaps: [] };
       renderOverlay();
       return;
     }
     if (mode === 'anchor') {
       finishAnchor();
-      S.mode = null; S.marquee = null; S.guides = { v: [], h: [] };
+      S.mode = null; S.marquee = null; S.guides = { v: [], h: [], gaps: [] };
       renderOverlay();
       return;
     }
     if (mode === 'create') {
       finishCreate();
-      S.mode = null; S.creating = null; S.guides = { v: [], h: [] };
+      S.mode = null; S.creating = null; S.guides = { v: [], h: [], gaps: [] };
       renderOverlay();
       return;
     }
-    if (mode === 'move' && d && ((d.dx || 0) !== 0 || (d.dy || 0) !== 0)) {
+    if (mode === 'move' && d && d.duplicate) {
+      if ((d.dx || 0) !== 0 || (d.dy || 0) !== 0) {
+        todo = dupOps(d, d.dx, d.dy);
+        label = '拖动复制';
+        dupSelect = d.dupNewIds;
+      }
+    } else if (mode === 'move' && d && ((d.dx || 0) !== 0 || (d.dy || 0) !== 0)) {
       todo = [{ op: 'move', targets: d.ids, dx: d.dx, dy: d.dy }];
       label = '移动元素';
     } else if (mode === 'resize' && d && d.changed && d.lastOps && d.lastOps.length) {
@@ -990,8 +1666,20 @@
     }
 
     S.mode = null; S.drag = null; S.previewDoc = null;
-    S.guides = { v: [], h: [] };
-    if (todo) commit(todo, label);
+    S.guides = { v: [], h: [], gaps: [] };
+    if (todo) {
+      if (dupSelect && dupSelect.length) {
+        commit(todo, label, function (done) {
+          if (done && done.applied > 0) {
+            var ready = dupSelect.every(function (id) { return !!FigDoc.get(A.doc, id); });
+            if (ready) { if (typeof A.select === 'function') A.select(dupSelect); }
+            else S.pendingAfterDoc = { select: dupSelect, textEdit: null };
+          }
+        });
+      } else {
+        commit(todo, label);
+      }
+    }
     render();
   }
 
@@ -1001,7 +1689,16 @@
     var t = evt.target;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
     if (S.editingId || S.mode) return;
-    var el = textElementAt(evtMm(evt));
+    var p = evtMm(evt);
+    var c = A.doc.canvas || {};
+    var W = c.width_mm, H = c.height_mm;
+    if (typeof W === 'number' && typeof H === 'number' &&
+        (p.x < 0 || p.y < 0 || p.x > W || p.y > H)) {
+      evt.preventDefault();
+      fit();
+      return;
+    }
+    var el = textElementAt(p);
     if (el && el.type === 'text') {
       evt.preventDefault();
       startTextEditor(el.id);
@@ -1323,27 +2020,63 @@
     if (evt && evt.shiftKey) {
       if (Math.abs(dx) > Math.abs(dy)) dy = 0; else dx = 0;
     }
-    S.guides = { v: [], h: [] };
+    S.guides = { v: [], h: [], gaps: [] };
     if (A.ui.snap) {
       var z = zoomOf();
       var thr = SNAP_RADIUS_PX / z;
       var B = d.bbox;
+      var D = { x: B.x + dx, y: B.y + dy, w: B.w, h: B.h };
       var bestX = null;
       [B.x + dx, B.x + B.w / 2 + dx, B.x + B.w + dx].forEach(function (v) {
         var s = nearestLine(v, d.lines.v, thr);
-        if (s && (!bestX || s.diff < bestX.diff)) bestX = { s: s, val: v };
+        if (s && (!bestX || s.diff < bestX.diff)) bestX = { s: s, val: v, diff: s.diff };
       });
-      if (bestX) { dx += bestX.s.line - bestX.val; S.guides.v = [bestX.s.line]; }
       var bestY = null;
       [B.y + dy, B.y + B.h / 2 + dy, B.y + B.h + dy].forEach(function (v) {
         var s = nearestLine(v, d.lines.h, thr);
-        if (s && (!bestY || s.diff < bestY.diff)) bestY = { s: s, val: v };
+        if (s && (!bestY || s.diff < bestY.diff)) bestY = { s: s, val: v, diff: s.diff };
       });
-      if (bestY) { dy += bestY.s.line - bestY.val; S.guides.h = [bestY.s.line]; }
+      // Equal-spacing candidates (only vs top-level peers overlapping on the
+      // cross axis). Winner replaces that axis's full-length guide line.
+      var gapX = null, gapY = null;
+      if (d.peerBoxes && d.peerBoxes.length) {
+        var peersX = [], peersY = [];
+        d.peerBoxes.forEach(function (pb) {
+          if (pb.t < D.y + D.h && D.y < pb.b) peersX.push({ a: pb.l, b: pb.r });
+          if (pb.l < D.x + D.w && D.x < pb.r) peersY.push({ a: pb.t, b: pb.b });
+        });
+        var gx = gapSnapAxis(D.x, D.w, peersX);
+        if (gx && gx.dist <= thr) gapX = gx;
+        var gy = gapSnapAxis(D.y, D.h, peersY);
+        if (gy && gy.dist <= thr) gapY = gy;
+      }
+      var xGapSegs = null, yGapSegs = null;
+      if (gapX && (!bestX || gapX.dist <= bestX.diff)) {
+        dx = gapX.pos - B.x;
+        xGapSegs = gapX.segs;
+      } else if (bestX) {
+        dx += bestX.s.line - bestX.val; S.guides.v = [bestX.s.line];
+      }
+      if (gapY && (!bestY || gapY.dist <= bestY.diff)) {
+        dy = gapY.pos - B.y;
+        yGapSegs = gapY.segs;
+      } else if (bestY) {
+        dy += bestY.s.line - bestY.val; S.guides.h = [bestY.s.line];
+      }
+      // Label positions use the final dragged-box center on the cross axis.
+      if (xGapSegs) {
+        var fcy = B.y + dy + B.h / 2;
+        xGapSegs.forEach(function (s) { S.guides.gaps.push({ axis: 'x', f: s.f, t: s.t, at: fcy }); });
+      }
+      if (yGapSegs) {
+        var fcx = B.x + dx + B.w / 2;
+        yGapSegs.forEach(function (s) { S.guides.gaps.push({ axis: 'y', f: s.f, t: s.t, at: fcx }); });
+      }
     }
     d.dx = dx; d.dy = dy;
     if (dx !== 0 || dy !== 0) {
-      previewOps([{ op: 'move', targets: d.ids, dx: dx, dy: dy }]);
+      if (d.duplicate) previewOps(dupOps(d, dx, dy));
+      else previewOps([{ op: 'move', targets: d.ids, dx: dx, dy: dy }]);
     } else {
       S.previewDoc = null;
       schedulePreview();
@@ -1367,7 +2100,7 @@
     if (h.indexOf('n') >= 0) t = Math.min(local.y, b - MIN_SIZE_MM);
     if (h.indexOf('s') >= 0) b = Math.max(local.y, t + MIN_SIZE_MM);
 
-    S.guides = { v: [], h: [] };
+    S.guides = { v: [], h: [], gaps: [] };
     if (A.ui.snap) {
       var thr = SNAP_RADIUS_PX / z;
       if (h.indexOf('w') >= 0) {
@@ -1916,10 +2649,11 @@
     var hadPreview = !!S.previewDoc;
     if (S.mode) {
       S.mode = null; S.drag = null; S.marquee = null; S.creating = null;
-      S.previewDoc = null; S.guides = { v: [], h: [] };
+      S.previewDoc = null; S.guides = { v: [], h: [], gaps: [] };
       had = true;
     }
     if (S.editingId) { cancelTextEditor(false); had = true; }
+    resetHover();
     if (hadPreview) render();
     else if (had) renderOverlay();
     if (A.selectionSet && A.selectionSet.size) {
@@ -1929,11 +2663,26 @@
     if (had) A.status('已取消当前操作');
   }
 
+  // H2：页面存在非空文本选区且选区不在画布 SVG 内时，Ctrl+C 交给浏览器复制文本，
+  // 不拦截为「复制画布元素」。
+  function textSelectionOutsideCanvas() {
+    try {
+      var sel = (typeof window !== 'undefined' && window.getSelection) ? window.getSelection() : null;
+      if (!sel || sel.isCollapsed || !sel.rangeCount) return false;
+      var txt = sel.toString();
+      if (!txt || !txt.trim()) return false;
+      var node = sel.anchorNode;
+      if (S && S.svg && node && typeof S.svg.contains === 'function' && S.svg.contains(node)) return false;
+      return true;
+    } catch (e) { return false; }
+  }
+
   function onKeyDown(evt) {
     var A = global.App;
     if (!A || !S.mounted || !A.doc) return;
     var t = evt.target;
-    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' ||
+              t.tagName === 'SELECT' || t.isContentEditable)) return;
     if (S.editingId) return;
     var k = evt.key;
     var mod = evt.ctrlKey || evt.metaKey;
@@ -1941,17 +2690,79 @@
 
     if (mod && (k === 'z' || k === 'Z')) { stop(); if (evt.shiftKey) redo(); else undo(); return; }
     if (mod && (k === 'y' || k === 'Y')) { stop(); redo(); return; }
-    if (mod && (k === 'c' || k === 'C')) { stop(); copySelection(); return; }
+    if (mod && (k === 'c' || k === 'C')) {
+      if (textSelectionOutsideCanvas()) return; // 画布外文本选区 → 浏览器复制文本
+      stop(); copySelection(); return;
+    }
     if (mod && (k === 'v' || k === 'V')) { stop(); pasteClipboard(); return; }
     if (mod && (k === 'd' || k === 'D')) { stop(); duplicateSelection(); return; }
     if (mod && (k === 'a' || k === 'A')) { stop(); selectAll(); return; }
     if (mod) return;
     if (k === 'Delete' || k === 'Backspace') { stop(); deleteSelection(); return; }
     if (k === 'Escape') { stop(); escapeAction(); return; }
+    if (evt.code === 'Digit1' && evt.shiftKey && !mod && !evt.altKey) {
+      stop(); fit(); return;
+    }
+    if (k === 'Alt') {
+      S.altDown = true;
+      if (canvasIdle()) evt.preventDefault(); // keep browser menu from stealing focus
+      refreshHover();
+      return;
+    }
+    if (k === ' ' || evt.code === 'Space') {
+      // 焦点在可激活元素上时让位：键盘 Tab 聚焦（focusin 时 :focus-visible
+      // 为真）的按钮保留原生空格激活；鼠标点出来的焦点先 blur 再走平移。
+      // 注意不能在此刻重查 :focus-visible——按 Space 本身会把按钮翻成
+      // focus-visible，无法区分两种焦点来源，故用 onFocusIn 的快照。
+      var ae = document.activeElement;
+      if (ae && typeof ae.matches === 'function' &&
+          ae.matches('button, a, summary, [role="button"]')) {
+        var kbdFocused = (ae.__kbdFocus !== undefined) ? !!ae.__kbdFocus
+          : (function () { try { return ae.matches(':focus-visible'); }
+                            catch (e) { return false; } })();
+        if (kbdFocused) return;
+        try { ae.blur(); } catch (e2) { /* ignore */ }
+      }
+      if (canvasIdle()) { S.spaceArmed = true; evt.preventDefault(); updateCursor(); }
+      return;
+    }
     if (k === 'ArrowLeft' || k === 'ArrowRight' || k === 'ArrowUp' || k === 'ArrowDown') {
       stop();
       nudge(k, evt.shiftKey);
     }
+  }
+
+  // 在焦点落下的瞬间快照 :focus-visible（此时 Tab→true、鼠标→false，
+  // 尚未被后续按键翻成 focus-visible）。Space 处理据此区分「键盘 Tab
+  // 聚焦的按钮」（保留原生空格激活）与「鼠标点出来的焦点」（先 blur 再平移）。
+  function onFocusIn(evt) {
+    var t = evt.target;
+    if (t && t.nodeType === 1) {
+      try { t.__kbdFocus = !!t.matches(':focus-visible'); }
+      catch (e) { t.__kbdFocus = false; }
+    }
+  }
+
+  function onKeyUp(evt) {
+    if (!S.mounted) return;
+    var k = evt.key;
+    if (k === 'Alt' && S.altDown) {
+      S.altDown = false;
+      refreshHover();
+    } else if ((k === ' ' || evt.code === 'Space') && S.spaceArmed) {
+      S.spaceArmed = false;
+      evt.preventDefault();
+      updateCursor();
+    }
+  }
+
+  function onWindowBlur() {
+    var wasPan = S.mode === 'pan';
+    S.spaceArmed = false; S.altDown = false;
+    if (wasPan) { S.mode = null; S.pan = null; S.drag = null; }
+    updateCursor();
+    refreshHover();
+    if (wasPan) renderOverlay();
   }
 
   // ------------------------------------------------------------------
@@ -1960,7 +2771,8 @@
 
   function onDocChanged() {
     S.previewDoc = null;
-    S.guides = { v: [], h: [] };
+    S.guides = { v: [], h: [], gaps: [] };
+    resetHover();
     var A = global.App;
     if (S.editingId && (!A || !A.doc || !FigDoc.get(A.doc, S.editingId))) {
       cancelTextEditor(false);
@@ -1983,7 +2795,9 @@
   }
 
   function onSelectionChanged() {
+    resetHover(); // hovered element may now be selected; box/measure/cursor refresh
     renderOverlay();
+    updateCursor();
   }
 
   function onUiChanged() {
@@ -1996,6 +2810,7 @@
     updateToolbarActive();
     renderOverlay();
     updateBadges();
+    refreshChartPartMark();
     if (S.editingId) positionTextEditor();
   }
 
@@ -2019,7 +2834,7 @@
 
   function setZoom(zv, opts) {
     var A = global.App;
-    if (!A) throw new Error('App 未加载，无法设置缩放');
+    if (!A) throw new Error('编辑器未加载，无法缩放');
     if (typeof zv !== 'number' || !isFinite(zv)) throw new Error('缩放值必须是有限数字');
     zv = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zv));
     var center = opts && opts.center;
@@ -2093,7 +2908,10 @@
     zoom: zoom,
     fit: fit,
     setZoom: setZoom,
-    selectedBBox: selectedBBox
+    selectedBBox: selectedBBox,
+    chartPartNode: function () { return chartPartTargetNode(); },
+    spaceArmed: function () { return !!S.spaceArmed; }, // 测试只读钩子
+    previewApplyFast: previewApplyFast // 测试只读钩子：与 FigOps.applyAll 对拍
   };
 
 })(typeof globalThis !== 'undefined' ? globalThis : this);

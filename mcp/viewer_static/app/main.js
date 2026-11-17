@@ -734,7 +734,7 @@
     },
     {
       "id": "tpl-dotplot",
-      "name": "点图 (dotplot)",
+      "name": "点图",
       "category": "chart",
       "chart_type": "dotplot",
       "panels": [
@@ -1427,7 +1427,7 @@
       },
       "journal_default": "nature-single",
       "palette_default": "aaas",
-      "notes": "本模板显式申报 max_to_unity 渲染归一（原始数据不变）；需要堆叠时在属性面板设置 offset_each_series（仅视觉位移）。"
+      "notes": "本模板显式申报「最大值归一」渲染归一（原始数据不变）；需要堆叠时在属性面板设置「叠加偏移」（仅视觉位移）。"
     },
     {
       "id": "tpl-xrd",
@@ -1491,7 +1491,7 @@
       },
       "journal_default": "nature-single",
       "palette_default": "npg",
-      "notes": "纵轴以你的列为准：透过率数据保留 Transmittance (%)，吸光度数据请在属性面板把 y_label 改为 Absorbance；轴向可按需反转。"
+      "notes": "纵轴以你的列为准：透过率数据保留 Transmittance (%)，吸光度数据请在属性面板把「Y轴标签」改为 Absorbance；轴向可按需反转。"
     },
     {
       "id": "tpl-uvvis-pl",
@@ -1890,9 +1890,9 @@
         "pie", "histogram", "heatmap", "box"
     ];
     var CAPABILITY_TEXT = {
-        full: "full：本地真实 SVG（需有效数据）",
-        layout: "layout：仅创建空版式，不自动填图",
-        unsupported: "unsupported：仅示意，暂不支持真实生成，禁止应用"
+        full: "完整预览：用真实数据画出来（需要先导入数据）",
+        layout: "只创建空版式，不会自动填图",
+        unsupported: "这种图暂时还不能生成，只是样式示意，不能应用"
     };
     var runtimeInstalled = false;
 
@@ -1972,13 +1972,13 @@
     function requireTemplateApplicable(id) {
         var tpl = capabilityForId(id);
         if (tpl.capability === "unsupported") {
-            throw new Error("模板「" + tpl.name + "」仅为结构示意，当前没有本地真实 SVG 生成实现；已禁止应用，不会导出占位图");
+            throw new Error("模板「" + tpl.name + "」目前还不能生成，这里只是示意；已禁止应用，不会导出占位图");
         }
         if (tpl.capability === "layout") return tpl;
         if (tpl.category === "diagram" && global.FigDiagram &&
             global.FigDiagram.supportsTemplate(tpl).supported) return tpl;
         if (liveRenderTypes().indexOf(tpl.chart_type) < 0) {
-            throw new Error("模板「" + tpl.name + "」所需 chartType=" + tpl.chart_type + " 当前不可真实渲染，已禁止应用");
+            throw new Error("模板「" + tpl.name + "」需要的图型（" + (global.FigData && typeof global.FigData.chartTypeName === "function" ? global.FigData.chartTypeName(tpl.chart_type) : tpl.chart_type) + "）当前还不能生成，已禁止应用");
         }
         return tpl;
     }
@@ -2013,7 +2013,7 @@
     function phase5Error(chart, err) {
         var type = chart && chart.chartType ? chart.chartType : "?";
         var reason = msgOf(err).replace(/[，；]?该图表类型需 v2 服务端渲染/g, "");
-        return new Error("图表 chartType=" + type + " 未能真实生成 SVG：" + reason + "；已禁止把占位图当作成功结果");
+        return new Error("图表（" + (global.FigData && typeof global.FigData.chartTypeName === "function" ? global.FigData.chartTypeName(type) : type) + "）未能生成图像：" + reason + "；已禁止把占位图当作成功结果");
     }
 
     function scopedCharts(doc, panelId) {
@@ -2068,7 +2068,7 @@
             var chart = el.chart;
             if (isEmptyLayoutChart(chart)) return;
             if (!chart || typeof chart.chartType !== "string" || !chart.chartType) {
-                throw new Error("图表缺少有效 chartType，也不是显式空版式，已停止导出（元素 " + el.id + "）");
+                throw new Error("图表缺少有效图型，已停止导出（元素 " + (el.name || (global.FigDoc && typeof global.FigDoc.elementTypeName === "function" ? global.FigDoc.elementTypeName(el.type) : el.type) || "未知") + "）");
             }
             if (liveRenderTypes().indexOf(chart.chartType) < 0) {
                 throw phase5Error(chart, new Error("当前没有该图型的本地真实 SVG 实现"));
@@ -2130,17 +2130,17 @@
         var fd = global.FigData;
         var inline = chartSpec.data && chartSpec.data.inline;
         if (!inline || !Array.isArray(inline.columns) || !Array.isArray(inline.rows)) {
-            throw new Error("EIS Nyquist 需要 chart.data.inline 数据");
+            throw new Error("EIS Nyquist 图需要图表内的数据");
         }
         var check = typeof fd.normalizeCharacterization === "function"
             ? fd.normalizeCharacterization(chartSpec.characterization, inline.columns)
             : { ok: true, char: chartSpec.characterization };
-        if (!check.ok) throw new Error("EIS characterization 校验失败：" + check.errors.join("；"));
+        if (!check.ok) throw new Error("EIS 表征参数校验失败：" + check.errors.join("；"));
         var ch = check.char;
-        if (ch.x_scale !== "linear") throw new Error("EIS Nyquist 必须使用线性阻抗坐标，不能使用 " + ch.x_scale);
+        if (ch.x_scale !== "linear") throw new Error("EIS Nyquist 需要线性坐标，不能使用对数刻度");
         var mapping = chartSpec.mapping || {};
         var xi = inline.columns.indexOf(mapping.x), yi = inline.columns.indexOf(mapping.y);
-        if (xi < 0 || yi < 0) throw new Error("EIS Nyquist 需要 mapping.x=Z′ 与 mapping.y=−Z″ 的真实数据列");
+        if (xi < 0 || yi < 0) throw new Error("EIS Nyquist 需要横轴映射到 Z′、纵轴映射到 −Z″ 的真实数据列");
         var ci = inline.columns.indexOf(mapping.color);
         var groups = {}, order = [], skipped = 0;
         inline.rows.forEach(function (row) {
@@ -2468,7 +2468,7 @@
                 decorate();
             });
             label.appendChild(toggle);
-            label.appendChild(doc.createTextNode("显示 unsupported（仅示意预览，禁止应用）"));
+            label.appendChild(doc.createTextNode("这张图暂时还不能生成（仅示意预览，不能应用）"));
             bar.appendChild(label);
             bar.appendChild(templateGalleryNode(doc, "div",
                 "full 需真实数据；layout 只建空版式，不自动填图。默认不推荐、不展示 unsupported。",
@@ -2501,7 +2501,7 @@
                 Store.attach();
             } else if (has("FigStore") && FigStore.adapters &&
                        typeof FigStore.adapters.localStorage === "function") {
-                warn("缺少 Store 模块（app/store.js），直接注册 FigStore 的 localStorage 适配器");
+                warn("工程存储模块未加载，改用本地存储");
                 FigStore.use(FigStore.adapters.localStorage());
             } else {
                 warn("持久化不可用：缺少 Store 与 FigStore");
@@ -2546,6 +2546,10 @@
         return tryNext();
     }
 
+    // R5：风格库兜底为空表——真实 styles.json 由 /shared/presets 提供；
+    // file:// 离线时风格画廊显示空态，不影响其他预设。
+    var FB_STYLES = { version: "1.0", styles: [] };
+
     function loadPresets() {
         if (!has("FigPresets") || typeof FigPresets.load !== "function") {
             warn("缺少 FigPresets（lib/presets.js），跳过预设加载");
@@ -2554,7 +2558,9 @@
         var spec = [
             { key: "journals", file: "journals.json", fb: FB_JOURNALS, label: "期刊预设" },
             { key: "templates", file: "templates.json", fb: FB_TEMPLATES, label: "模板" },
-            { key: "palettes", file: "palettes.json", fb: FB_PALETTES, label: "配色" }
+            { key: "palettes", file: "palettes.json", fb: FB_PALETTES, label: "配色" },
+            { key: "styles", file: "styles.json", fb: FB_STYLES, label: "风格" },
+            { key: "diagramThemes", file: "diagram_themes.json", fb: { version: "1.0", themes: {} }, label: "示意图主题" }
         ];
         return Promise.all(spec.map(function (s) {
             return loadPresetFile(s.file).then(function (obj) {
@@ -2595,7 +2601,9 @@
                     journals: FigPresets.journals().length,
                     templates: FigPresets.templates().length,
                     palettes: (has("FigPalette") && typeof FigPalette.list === "function")
-                        ? FigPalette.list().length : null
+                        ? FigPalette.list().length : null,
+                    styles: (typeof FigPresets.styles === "function")
+                        ? FigPresets.styles().length : null
                 }
             };
         });
@@ -2614,7 +2622,7 @@
     }
 
     function createDefaultDoc() {
-        if (!has("FigDoc")) throw new Error("内核未加载：缺少 FigDoc（lib/figdoc.js）");
+        if (!has("FigDoc")) throw new Error("编辑器内核未加载");
         return FigDoc.create({
             width_mm: 120,
             height_mm: 90,
@@ -2707,7 +2715,7 @@
         for (var i = 0; i < steps.length; i++) {
             var name = steps[i][0];
             if (!has(name) || typeof global[name].mount !== "function") {
-                problems.push(name + "（模块未加载）");
+                problems.push(name + "（功能未加载）");
                 continue;
             }
             try {
@@ -3123,7 +3131,7 @@
 
     function doUndo() {
         if (!has("FigOps") || !has("App") || typeof App.publishDoc !== "function") {
-            appFail(new Error("内核或 App 未就绪，无法撤销"));
+            appFail(new Error("编辑器尚未就绪，无法撤销"));
             return Promise.resolve(false);
         }
         return App.publishDoc(function (current) {
@@ -3139,7 +3147,7 @@
 
     function doRedo() {
         if (!has("FigOps") || !has("App") || typeof App.publishDoc !== "function") {
-            appFail(new Error("内核或 App 未就绪，无法重做"));
+            appFail(new Error("编辑器尚未就绪，无法重做"));
             return Promise.resolve(false);
         }
         return App.publishDoc(function (current) {
@@ -3558,7 +3566,7 @@
 
     function runBoot(presetInfo, initialDoc) {
         if (!has("App") || typeof App.setDoc !== "function") {
-            throw new Error("App 模块未加载（app/state.js），无法初始化文档");
+            throw new Error("编辑器模块未加载，无法初始化文档");
         }
         templateRuntimeInstall();
         // v3 查看器：优先使用服务端（viewer.py /api/current）返回的当前文档；
@@ -3569,6 +3577,8 @@
         applyVariant();
         mountAll();
         wireTabs();
+        // R3 #5：画布标签页栏（file:// 无 /api/tabs 时仅渲染空栏，不报错）
+        if (has("Tabs") && typeof Tabs.mount === "function") Tabs.mount();
         subscribeUiEvents();
         if (has("ChartEdit") && typeof ChartEdit.mount === "function") ChartEdit.mount();
         wireTopbar();
@@ -3633,7 +3643,8 @@
                     if (st) st.textContent = m;
                 }
             }
-            // v3 查看器：预设与当前文档并行加载；/api/current 404 或服务不在时
+            // v3 查看器：预设与当前文档并行加载；/api/current 返回空态
+            // （200 + exists:false；旧服务端为 404）或服务不在时
             // loadInitialDoc 返回 null，doBoot 回退为新建空文档。
             var serverDocPromise = (has("ViewerBoot") &&
                 typeof ViewerBoot.loadInitialDoc === "function")

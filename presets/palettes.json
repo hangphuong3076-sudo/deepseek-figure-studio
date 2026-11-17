@@ -279,6 +279,21 @@
       "license": "CC0 / matplotlib BSD"
     },
     {
+      "id": "plasma",
+      "name": "Plasma",
+      "category": "sequential",
+      "colors": [
+        "#0D0887",
+        "#7201A8",
+        "#B12A90",
+        "#ED7953",
+        "#FCA636",
+        "#F0F921"
+      ],
+      "source": "matplotlib plasma（采样点）",
+      "license": "CC0 / matplotlib BSD"
+    },
+    {
       "id": "blues",
       "name": "Blues",
       "category": "sequential",
@@ -808,6 +823,102 @@
       ],
       "source": "ColorBrewer 2.0 (Cynthia Brewer, colorbrewer2.org)",
       "license": "Apache-2.0 (ColorBrewer)"
+    },
+    {
+      "id": "tab10",
+      "name": "Matplotlib tab10",
+      "category": "qualitative",
+      "colors": [
+        "#1F77B4",
+        "#FF7F0E",
+        "#2CA02C",
+        "#D62728",
+        "#9467BD",
+        "#8C564B",
+        "#E377C2",
+        "#7F7F7F",
+        "#BCBD22",
+        "#17BECF"
+      ],
+      "roles": {
+        "primary": "#1F77B4",
+        "signal": "#D62728",
+        "accent": "#2CA02C",
+        "neutral": "#7F7F7F"
+      },
+      "source": "Matplotlib 默认分类色（tab10，源自 Tableau 10）",
+      "license": "Matplotlib License (BSD 风格)"
+    },
+    {
+      "id": "seaborn-deep",
+      "name": "Seaborn deep",
+      "category": "qualitative",
+      "colors": [
+        "#4C72B0",
+        "#DD8452",
+        "#55A868",
+        "#C44E52",
+        "#8172B3",
+        "#937860",
+        "#DA8BC3",
+        "#8C8C8C",
+        "#CCB974",
+        "#64B5CD"
+      ],
+      "roles": {
+        "primary": "#4C72B0",
+        "signal": "#C44E52",
+        "accent": "#55A868",
+        "neutral": "#8C8C8C"
+      },
+      "source": "seaborn color_palette('deep')",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "id": "ggplot-hue",
+      "name": "ggplot2 默认色相（8 色）",
+      "category": "qualitative",
+      "colors": [
+        "#F8766D",
+        "#CD9600",
+        "#7CAE00",
+        "#00BE67",
+        "#00BFC4",
+        "#00A9FF",
+        "#C77CFF",
+        "#FF61CC"
+      ],
+      "roles": {
+        "primary": "#00BFC4",
+        "signal": "#F8766D",
+        "accent": "#7CAE00",
+        "neutral": "#999999"
+      },
+      "source": "scales::hue_pal()(8)（ggplot2 默认离散色，色数不同时 R 会重新等分色相，此处固定为 8 色）",
+      "license": "MIT (scales)"
+    },
+    {
+      "id": "morandi",
+      "name": "低饱和柔和",
+      "category": "qualitative",
+      "colors": [
+        "#7895B2",
+        "#C98474",
+        "#8FA98F",
+        "#B39CC0",
+        "#D4A373",
+        "#6D8A96",
+        "#C5A3A3",
+        "#9A9483"
+      ],
+      "roles": {
+        "primary": "#7895B2",
+        "signal": "#C98474",
+        "accent": "#8FA98F",
+        "neutral": "#9A9483"
+      },
+      "source": "本项目自定的低饱和配色（不对应任何外部色板）",
+      "license": "本项目"
     }
   ]
 }

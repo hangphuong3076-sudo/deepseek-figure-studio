@@ -11,20 +11,7 @@
   }
 
   function h(tag, attrs, children) {
-    var el = document.createElement(tag);
-    Object.keys(attrs || {}).forEach(function (key) {
-      var value = attrs[key];
-      if (value === null || value === undefined) return;
-      if (key === 'text') el.textContent = value;
-      else if (key.slice(0, 2) === 'on' && typeof value === 'function') {
-        el.addEventListener(key.slice(2), value);
-      } else el.setAttribute(key, value);
-    });
-    (children || []).forEach(function (child) {
-      if (child === null || child === undefined) return;
-      el.appendChild(typeof child === 'string' ? document.createTextNode(child) : child);
-    });
-    return el;
+    return global.Ui.h(tag, attrs, children);
   }
 
   function toast(text, opts) {
@@ -40,7 +27,7 @@
 
   function requireApp() {
     if (!global.App || !isObj(global.App.doc) || typeof global.App.commit !== 'function') {
-      throw new Error('Excel 导入需要已初始化的 App.doc / App.commit');
+      throw new Error('Excel 导入需要编辑器先完成初始化');
     }
     return global.App;
   }
@@ -296,8 +283,14 @@
       });
     }
 
-    sheetSelect.addEventListener('change', reload);
-    headerInput.addEventListener('change', reload);
+    var dirty = false; // 用户改过工作表/表头/标题/模板选择后，关闭前先确认
+    sheetSelect.addEventListener('change', function () { dirty = true; reload(); });
+    headerInput.addEventListener('change', function () { dirty = true; reload(); });
+    titleInput.addEventListener('input', function () { dirty = true; });
+    // recsHost 的模板单选在每次 renderPreview 后重建，用委托监听 change。
+    recsHost.addEventListener('change', function (evt) {
+      if (evt.target && evt.target.type === 'radio') dirty = true;
+    });
     renderPreview(initialPreview);
 
     function commit() {
@@ -347,7 +340,7 @@
       ops.push({
         op: 'note',
         note: '导入工作簿 ' + fileName + '，工作表 ' + payload.sheet_name +
-          '，表头第 ' + payload.header_row + ' 行，模板 ' + picked +
+          '，表头第 ' + payload.header_row + ' 行，模板「' + (function(){try{var t=global.FigPresets&&global.FigPresets.template?global.FigPresets.template(picked):null;return t&&t.name?t.name:picked;}catch(e){return picked;}})() + '」' +
           (sha ? '，sha256=' + sha : '') +
           ((built.warnings || []).length ? '；告警：' + built.warnings.join('；') : '')
       });
@@ -387,6 +380,8 @@
     global.Ui.modal({
       title: '导入 Excel：' + fileName,
       body: body,
+      isDirty: function () { return dirty || state.busy; },
+      discardText: '放弃本次 Excel 导入？',
       actions: [{ label: '取消' }, { label: '生成图表', primary: true, onClick: commit }]
     });
   }

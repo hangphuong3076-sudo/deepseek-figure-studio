@@ -83,7 +83,8 @@ def open_native_window(url: str, title: str = WINDOW_TITLE,
     # 1) pywebview（真原生窗口，WebView2）
     try:
         import webview
-        webview.create_window(title, url, width=width, height=height, min_size=(960, 600))
+        webview.create_window(title, url, width=width, height=height,
+                              min_size=(960, 600), text_select=True)
         webview.start()
         return "pywebview"
     except Exception as e:

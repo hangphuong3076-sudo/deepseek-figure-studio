@@ -22,24 +22,7 @@
   // helpers
   // ------------------------------------------------------------------
   function h(tag, attrs, children) {
-    var el = document.createElement(tag);
-    if (attrs) {
-      for (var k in attrs) {
-        if (!Object.prototype.hasOwnProperty.call(attrs, k)) continue;
-        var v = attrs[k];
-        if (k === "style") el.setAttribute("style", v);
-        else if (k === "className") el.className = v;
-        else if (k === "text") el.textContent = v;
-        else if (k.indexOf("on") === 0 && typeof v === "function") {
-          el.addEventListener(k.slice(2).toLowerCase(), v);
-        } else el.setAttribute(k, v == null ? "" : String(v));
-      }
-    }
-    (children || []).forEach(function (c) {
-      if (c == null) return;
-      el.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
-    });
-    return el;
+    return g.Ui.h(tag, attrs, children);
   }
 
   function toast(text, opts) {
@@ -370,7 +353,7 @@
       [els.labelInput, els.addBtn]));
     panelEl.appendChild(h("div", {
       style: "font-size:11px;color:#888;margin-bottom:4px;",
-      text: "坐标单位 mm，可直接编辑；改动经 App.commit 写入 doc.anchors。"
+      text: "坐标单位是毫米，可以直接改；每次修改都能撤销。"
     }));
     panelEl.appendChild(table);
 

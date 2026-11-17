@@ -647,7 +647,30 @@ global.localStorage = {
   setItem: (key, value) => localValues.set(key, String(value)),
   removeItem: key => localValues.delete(key)
 };
-global.Ui = { toast: function () {} };
+function mockUiH(tag, attrs, children) {
+  var el = document.createElement(tag);
+  if (attrs) Object.keys(attrs).forEach(function (key) {
+    var value = attrs[key];
+    if (value === null || value === undefined || value === false) return;
+    if (key === "class" || key === "className") { el.className = String(value); el.setAttribute("class", String(value)); }
+    else if (key === "text") el.textContent = String(value);
+    else if (key === "html") el.innerHTML = String(value);
+    else if (key === "style" && value && typeof value === "object") {
+      var st = el.style || (el.style = {});
+      Object.keys(value).forEach(function (prop) { var pv = value[prop]; if (pv === null || pv === undefined) return; st[prop] = pv; });
+    } else if (key.indexOf("on") === 0 && typeof value === "function") { el.addEventListener(key.slice(2).toLowerCase(), value); }
+    else if (value === true) { el.setAttribute(key, ""); if (key === "disabled" || key === "checked") el[key] = true; } else { el.setAttribute(key, String(value)); }
+  });
+  if (children != null) {
+    var list = Array.isArray(children) ? children : [children];
+    list.forEach(function (child) {
+      if (child === null || child === undefined || child === false) return;
+      el.appendChild(typeof child === "string" || typeof child === "number" ? document.createTextNode(String(child)) : child);
+    });
+  }
+  return el;
+}
+global.Ui = { toast: function () {}, h: mockUiH };
 require('./viewer_static/app/store.js');
 const nativeDateNow = Date.now;
 try {
@@ -1075,7 +1098,30 @@ function freshHarness() {
   const context = vm.createContext(sandbox);
   for (const file of sources) vm.runInContext(fs.readFileSync(file, 'utf8'), context, { filename: file });
   const c = context;
-  c.Ui = { toast: () => {} };
+function mockUiH(tag, attrs, children) {
+    var el = document.createElement(tag);
+    if (attrs) Object.keys(attrs).forEach(function (key) {
+      var value = attrs[key];
+      if (value === null || value === undefined || value === false) return;
+      if (key === "class" || key === "className") { el.className = String(value); el.setAttribute("class", String(value)); }
+      else if (key === "text") el.textContent = String(value);
+      else if (key === "html") el.innerHTML = String(value);
+      else if (key === "style" && value && typeof value === "object") {
+        var st = el.style || (el.style = {});
+        Object.keys(value).forEach(function (prop) { var pv = value[prop]; if (pv === null || pv === undefined) return; st[prop] = pv; });
+      } else if (key.indexOf("on") === 0 && typeof value === "function") { el.addEventListener(key.slice(2).toLowerCase(), value); }
+      else if (value === true) { el.setAttribute(key, ""); if (key === "disabled" || key === "checked") el[key] = true; } else { el.setAttribute(key, String(value)); }
+    });
+    if (children != null) {
+      var list = Array.isArray(children) ? children : [children];
+      list.forEach(function (child) {
+        if (child === null || child === undefined || child === false) return;
+        el.appendChild(typeof child === "string" || typeof child === "number" ? document.createTextNode(String(child)) : child);
+      });
+    }
+    return el;
+  }
+    c.Ui = { toast: () => {}, h: mockUiH };
   c.Settings = { bridgeMode: () => false, lastModelCall: () => null };
   c.FigAI = {
     enabled: () => false,
@@ -1347,26 +1393,31 @@ function scatter(rows, characterization) {
   };
 }
 function circles(svg) {
-  return [...svg.matchAll(/<circle cx="([\d.]+)" cy="([\d.]+)"/g)]
-    .map(match => [Number(match[1]), Number(match[2])]);
+  // 只数真实数据标记（带 data-point-key）；图例色块/标记不带该属性
+  return [...svg.matchAll(/<circle[^>]*>/g)].map(m => m[0])
+    .filter(tag => tag.includes('data-point-key'))
+    .map(tag => [Number((tag.match(/cx="([\d.]+)"/) || [])[1]),
+                  Number((tag.match(/cy="([\d.]+)"/) || [])[1])]);
 }
 function lineChart() {
   return {chartType: 'line', data: {inline: {columns: ['x', 'y'], rows: [[1, 2], [3, 4]]}},
     mapping: {x: 'x', y: 'y'}, axes: {}};
 }
 (async () => {
-  await test('60模板能力同源RENDERS/FigDiagram：27 full / 12 layout / 21 unsupported且推荐最低分也不返回unsupported', () => {
+  await test('88模板能力同源RENDERS/FigDiagram：76 full / 12 layout / 0 unsupported（R10 补齐13图型）', () => {
     assert.strictEqual(FigData.supportsChartType('bar'), true);
-    assert.strictEqual(FigData.supportsChartType('pca'), false);
-    assert.strictEqual(FigData.supportsChartType('roc'), false);
+    // R10：pca/roc 等 13 图型已有真实渲染器；treemap 等仍无 RENDERS 实现
+    assert.strictEqual(FigData.supportsChartType('pca'), true);
+    assert.strictEqual(FigData.supportsChartType('roc'), true);
+    assert.strictEqual(FigData.supportsChartType('treemap'), false);
     assert.strictEqual(FigData.supportedChartTypes().includes('line'), true);
     const templates = FigData.templateCapabilities();
     const counts = templates.reduce((out, template) => {
       out[template.capability.status] = (out[template.capability.status] || 0) + 1;
       return out;
     }, {});
-    assert.strictEqual(templates.length, 60);
-    assert.deepStrictEqual(counts, {full: 27, unsupported: 21, layout: 12});
+    assert.strictEqual(templates.length, 88);
+    assert.deepStrictEqual(counts, {full: 76, layout: 12});
     for (const template of templates) {
       if (template.category === 'composite' && template.chart_type === null) {
         assert.strictEqual(template.capability.status, 'layout');
@@ -1382,18 +1433,20 @@ function lineChart() {
       {name: 'score', kind: 'numeric', nunique: 24, min: 0, max: 1},
       {name: 'group', kind: 'categorical', nunique: 2}
     ]};
-    const recommendations = FigPresets.recommend(stats, {n: 59});
+    const recommendations = FigPresets.recommend(stats, {n: 79});
     assert.ok(recommendations.length > 0);
-    assert.strictEqual(recommendations.some(rec => rec.template_id === 'tpl-roc'), false);
-    assert.strictEqual(recommendations.some(rec => rec.template_id === 'tpl-pca'), false);
+    // R10：roc/pca 已可应用，不再断言推荐排除；can_apply 仍须全真
     for (const rec of recommendations) assert.strictEqual(rec.capability.can_apply, true);
   });
 
-  await test('MCP/AI共用模板物化入口拒绝PCA/ROC，layout只创建明示空版式', () => {
+  await test('MCP/AI共用模板物化入口：R10 图型可物化，layout只创建明示空版式', () => {
+    // R10：roc/pca 有真实渲染器，templateFromStats 应产出真实 chart 元素
     for (const type of ['roc', 'pca']) {
-      const data = {columns: ['x', 'y', 'g'], rows: [[1, 2, 'a'], [3, 4, 'b']]};
-      assert.throws(() => FigPresets.templateFromStats('tpl-' + type, data, {}),
-        /没有本地实际 SVG 渲染器|不可应用/);
+      const data = {columns: ['x', 'y', 'g'], rows: [[0.1, 0.8, 'a'], [0.4, 0.6, 'b'], [1, 1, 'a']]};
+      const built = FigPresets.templateFromStats('tpl-' + type, data, {});
+      assert.ok(built.elements.some(item => item.type === 'chart' &&
+        item.chart && item.chart.chartType === type),
+        'tpl-' + type + ' 应物化为 ' + type + ' 图表');
     }
     const built = FigPresets.templateFromStats('tpl-composite-2x2', null, {});
     assert.strictEqual(built.data_bound, false);
@@ -1454,10 +1507,10 @@ function lineChart() {
   });
 
   await test('FigRender区分UnsupportedChartError与缺列/映射/非法尺寸，不再silent placeholder导出', () => {
-    const pca = lineChart();
-    pca.chartType = 'pca';
-    assert.throws(() => FigRender.toSVG(documentWith(pca)), err =>
-      err.name === 'UnsupportedChartError' && err.message.includes('pca') &&
+    const unsup = lineChart();
+    unsup.chartType = 'treemap'; // R10 后仍无 RENDERS 实现的类型
+    assert.throws(() => FigRender.toSVG(documentWith(unsup)), err =>
+      err.name === 'UnsupportedChartError' && err.message.includes('treemap') &&
       !err.message.includes('需 v2') && err.message.includes('不支持'));
     const missing = lineChart();
     missing.mapping.y = '不存在';
@@ -1475,13 +1528,13 @@ function lineChart() {
   });
 
   await test('browser ChartRender同步/异步仅允许受控unsupported preview，普通错误原样失败', async () => {
-    const pca = lineChart();
-    pca.chartType = 'pca';
-    const pcaDoc = documentWith(pca);
-    const markup = ChartRender.elementSVG(pcaDoc, pcaDoc.elements[0], {useBackend: false});
+    const unsup = lineChart();
+    unsup.chartType = 'treemap'; // R10 后仍无 RENDERS 实现的类型
+    const unsupDoc = documentWith(unsup);
+    const markup = ChartRender.elementSVG(unsupDoc, unsupDoc.elements[0], {useBackend: false});
     assert.ok(markup.includes('data-render="unsupported-preview"'));
     assert.ok(markup.includes('data-real-data="false"') && !markup.includes('需 v2'));
-    const pack = await ChartRender.elementSVGAsync(pcaDoc, pcaDoc.elements[0], {useBackend: false});
+    const pack = await ChartRender.elementSVGAsync(unsupDoc, unsupDoc.elements[0], {useBackend: false});
     assert.strictEqual(pack.source, 'unsupported-preview');
     assert.strictEqual(pack.preview, true);
     assert.ok(pack.warnings.some(text => text.includes('禁止应用与成功导出')));
@@ -1537,19 +1590,21 @@ def stage5_mcp_regression_probe(client, out_dir):
         except Exception as exc:
             results.append((name, False, "%s: %s" % (exc.__class__.__name__, exc)))
 
-    def unsupported_application():
+    def roc_application():
+        # R10：tpl-roc 已有真实渲染器，figure_create_chart 应成功建图
         base = client.call_tool("figure_create", {
-            "title": "第五阶段不支持模板隔离", "width_mm": 140, "height_mm": 65})["doc"]
+            "title": "第五阶段ROC应用", "width_mm": 140, "height_mm": 65})["doc"]
         data = {"inline": {"columns": ["fpr", "tpr", "group"],
-                           "rows": [[0, 0, "m"], [1, 1, "m"]]}}
+                           "rows": [[0, 0, "m"], [0.5, 0.8, "m"], [1, 1, "m"]]}}
         payload = client.call_tool("figure_create_chart", {
             "doc": base, "data": data, "template_id": "tpl-roc", "chart_type": "roc"})
-        error = str(payload.get("error") or "")
-        return (payload.get("ok") is False and "roc" in error.lower() and "禁止" in error
-                and "需 v2" not in error and base["elements"] == [],
-                error)
+        charts = [item for item in (payload.get("doc") or {}).get("elements") or []
+                  if item.get("type") == "chart"]
+        return (payload.get("ok") is True and len(charts) == 1
+                and charts[0].get("chart", {}).get("chartType") == "roc",
+                str(payload.get("error") or payload.get("warnings")))
 
-    capture("真实MCP直接应用ROC仍被能力校验拒绝且不创建占位元素", unsupported_application)
+    capture("真实MCP直接应用ROC模板成功创建真实图表元素", roc_application)
 
     def layout_application():
         base = client.call_tool("figure_create", {
@@ -1577,8 +1632,8 @@ def stage5_mcp_regression_probe(client, out_dir):
             "data": {"inline": {"columns": ["x", "y"], "rows": [[1, 2], [3, 4]]}}})
         unsupported_doc = clone(created["doc"])
         chart = next(item for item in unsupported_doc["elements"] if item["type"] == "chart")
-        chart["chart"]["chartType"] = "pca"
-        pca_path = out_dir / "stage5-pca-must-not-exist.png"
+        chart["chart"]["chartType"] = "treemap" # R10 后仍无 RENDERS 实现
+        pca_path = out_dir / "stage5-treemap-must-not-exist.png"
         unsupported = client.call_tool("figure_export", {
             "doc": unsupported_doc, "format": "png", "out_path": str(pca_path)})
         unsupported_error = str(unsupported.get("error") or "")
@@ -1589,7 +1644,7 @@ def stage5_mcp_regression_probe(client, out_dir):
         mapped = client.call_tool("figure_export", {
             "doc": mapped_doc, "format": "svg", "out_path": str(mapping_path)})
         mapping_error = str(mapped.get("error") or "")
-        return (unsupported.get("ok") is False and "pca" in unsupported_error
+        return (unsupported.get("ok") is False and "treemap" in unsupported_error
                 and "不支持真实 SVG" in unsupported_error and "需 v2" not in unsupported_error
                 and not pca_path.exists() and mapped.get("ok") is False
                 and "mapping.y" in mapping_error and "line" in mapping_error
@@ -1926,7 +1981,7 @@ def export_scope_security_regression_probe(out_dir):
 def xps_chart_scope_regression_probe(out_dir):
     """Export both real XPS chart ids through MCP and HTTP using only scoped frames."""
     import fitz
-    from PIL import Image, ImageChops, ImageStat
+    from PIL import Image, ImageChops, ImageFilter, ImageStat
 
     results = []
 
@@ -1954,6 +2009,10 @@ def xps_chart_scope_regression_probe(out_dir):
             full = source.convert("RGB")
         white = Image.new("RGBA", scoped_png.size, (255, 255, 255, 255))
         target = Image.alpha_composite(white, scoped_png).convert("RGB")
+        # 子像素排版差异只产生 1px 边缘抗锯齿毛边；先 1px BoxBlur 再比差，
+        # 阈值与 ±2px 搜索窗口不变。
+        blur = ImageFilter.BoxBlur(1)
+        target = target.filter(blur)
         best = 1e308
         best_offset = None
         for dx in range(-2, 3):
@@ -1964,6 +2023,7 @@ def xps_chart_scope_regression_probe(out_dir):
                         or top + target.height > full.height:
                     continue
                 reference = full.crop((left, top, left + target.width, top + target.height))
+                reference = reference.filter(blur)
                 rms = sum(ImageStat.Stat(ImageChops.difference(target, reference)).rms) / 3
                 if rms < best:
                     best = rms
@@ -2414,6 +2474,7 @@ class Element {
     child.parentNode = null; return child;
   }
   setAttribute(key, value) { this.attributes[key] = String(value); }
+  removeAttribute(key) { delete this.attributes[key]; }
   getAttribute(key) { return this.attributes[key] == null ? null : this.attributes[key]; }
   addEventListener(name, handler) { (this.listeners[name] || (this.listeners[name] = [])).push(handler); }
   click() { for (const handler of this.listeners.click || []) handler({target: this}); }
@@ -2426,7 +2487,31 @@ global.document = {
 };
 const modals = [];
 const notices = [];
+function mockUiH(tag, attrs, children) {
+  var el = document.createElement(tag);
+  if (attrs) Object.keys(attrs).forEach(function (key) {
+    var value = attrs[key];
+    if (value === null || value === undefined || value === false) return;
+    if (key === "class" || key === "className") { el.className = String(value); el.setAttribute("class", String(value)); }
+    else if (key === "text") el.textContent = String(value);
+    else if (key === "html") el.innerHTML = String(value);
+    else if (key === "style" && value && typeof value === "object") {
+      var st = el.style || (el.style = {});
+      Object.keys(value).forEach(function (prop) { var pv = value[prop]; if (pv === null || pv === undefined) return; st[prop] = pv; });
+    } else if (key.indexOf("on") === 0 && typeof value === "function") { el.addEventListener(key.slice(2).toLowerCase(), value); }
+    else if (value === true) { el.setAttribute(key, ""); if (key === "disabled" || key === "checked") el[key] = true; } else { el.setAttribute(key, String(value)); }
+  });
+  if (children != null) {
+    var list = Array.isArray(children) ? children : [children];
+    list.forEach(function (child) {
+      if (child === null || child === undefined || child === false) return;
+      el.appendChild(typeof child === "string" || typeof child === "number" ? document.createTextNode(String(child)) : child);
+    });
+  }
+  return el;
+}
 global.Ui = {
+  h: mockUiH,
   modal(options) { const item = {options, closed: false}; modals.push(item);
     return {close() { item.closed = true; }, root: options.body}; },
   toast(text, options) { notices.push({text: String(text), options}); }
@@ -2989,18 +3074,20 @@ def main():
         default_templates = (client.call_tool("figure_templates", {})
                              .get("templates") or [])
         record("模板推荐默认仅含 full/layout，不包含 unsupported",
-               len(default_templates) == 39
+               len(default_templates) == 88
                and all(t.get("capability") in ("full", "layout")
                        and t.get("can_apply") is True for t in default_templates),
                "templates=%d" % len(default_templates))
         template_payload = client.call_tool("figure_templates", {"include_unsupported": True})
         templates = template_payload.get("templates") or []
-        record("模板能力表覆盖60个模板及 XPS / Raman 表征谱图",
-               len(templates) == 60
+        record("模板能力表覆盖88个模板及 XPS / Raman / R7 表征谱图 / R9 示意图",
+               len(templates) == 88
                and all(t.get("capability") in ("full", "layout", "unsupported")
                        for t in templates)
                and any(t.get("id") == "tpl-xps-highres-fit" for t in templates)
-               and any(t.get("id") == "tpl-raman-single" for t in templates),
+               and any(t.get("id") == "tpl-raman-single" for t in templates)
+               and any(t.get("id") == "tpl-xrd-stack" for t in templates)
+               and any(t.get("id") == "tpl-diagram-feedback" for t in templates),
                "templates=%d" % len(templates))
         for name, passed, detail in stage5_node_browser_regression_probe():
             record(name, passed, detail)
@@ -3054,16 +3141,16 @@ def main():
         paint_order = [node for node in xps_root.iter()
                        if node.tag == "{http://www.w3.org/2000/svg}polyline"]
         xps_fit_lines = [node for node in paint_order
-                         if node.get("stroke-dasharray") == "6 3"]
+                         if node.get("stroke-dasharray") == "18.75 9.38"]
         xps_baseline_lines = [node for node in paint_order
-                              if node.get("stroke-dasharray") == "2 3"]
+                              if node.get("stroke-dasharray") == "6.25 9.38"]
         raw_marker_colors = {node.get("fill") for node in xps_root.iter(
             "{http://www.w3.org/2000/svg}circle")}
         xps_raw_lines = [node for node in paint_order
                          if node.get("stroke-dasharray") is None
                          and node.get("stroke") in raw_marker_colors]
-        assert len(xps_fit_lines) == 1, "XPS SVG 未得到唯一 stroke-dasharray=6 3 拟合线"
-        assert len(xps_baseline_lines) == 1, "XPS SVG 未得到唯一基线"
+        assert len(xps_fit_lines) == 1, "XPS SVG 未得到唯一 stroke-dasharray=18.75 9.38 拟合线"
+        assert len(xps_baseline_lines) == 1, "XPS SVG 未得到唯一基线 stroke-dasharray=6.25 9.38"
         assert len(xps_raw_lines) == 1, "XPS SVG 未得到唯一原始曲线"
         xps_fit_points = svg_points(xps_fit_lines[0])
         xps_raw_points = svg_points(xps_raw_lines[0])

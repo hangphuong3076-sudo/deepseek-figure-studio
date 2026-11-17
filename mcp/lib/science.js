@@ -105,6 +105,24 @@
     return String(v);
   }
 
+  // 元素/图表类型 → 中文名（界面可见文案；未知时回退原值）
+  function chartTypeZh(t) {
+    var FDat = global.FigData;
+    if (FDat && typeof FDat.chartTypeName === "function") {
+      var n = FDat.chartTypeName(t);
+      if (n && n !== String(t == null ? "" : t)) return n;
+    }
+    return String(t == null ? "" : t);
+  }
+  function elementTypeZh(t) {
+    var FD = global.FigDoc;
+    if (FD && typeof FD.elementTypeName === "function") {
+      var n = FD.elementTypeName(t);
+      if (n && n !== String(t == null ? "" : t)) return n;
+    }
+    return String(t == null ? "" : t);
+  }
+
   var NUM_RE = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
 
   function toNum(v) {
@@ -769,7 +787,7 @@
           "面板 " + (p.label || pid) + " 绑定的元素 " + pid + " 不存在（可能已被删除）", pid, "warning");
       } else if (el && el.type !== "chart" && el.type !== "panel") {
         pushW(warnings, "PANEL_TARGET_NOT_CHART",
-          "面板 " + (p.label || pid) + " 绑定的是 " + el.type + " 元素：导入 SVG 的统计口径无法识别，需人工标注 scope", pid, "warning");
+          "面板 " + (p.label || pid) + " 绑定的是 " + elementTypeZh(el.type) + " 元素：导入 SVG 的统计口径无法识别，需人工标注范围", pid, "warning");
       }
       if (!p.evidence_role) {
         pushW(warnings, "PANEL_MISSING_ROLE",
@@ -826,7 +844,7 @@
           contract.hero_panel, "error");
       } else if (heroEl.type !== "chart" && heroEl.type !== "panel") {
         pushW(warnings, "HERO_PANEL_TARGET_NOT_CHART",
-          "hero_panel 引用的是 " + heroEl.type + " 元素，必须指向 chart/panel",
+          "主图引用的是 " + elementTypeZh(heroEl.type) + " 元素，必须指向图表或面板",
           contract.hero_panel, "error");
       }
     }
@@ -855,6 +873,36 @@
       var st = cel.chart.statistics;
       var ctype = typeof cel.chart.chartType === "string" ? cel.chart.chartType : "";
       reviewCharacterization(warnings, cel);
+      // R4-HB：双纵轴提示——左右刻度独立，需在图注说明每条曲线对应哪一侧
+      var y2ax = cel.chart.axes && isObj(cel.chart.axes.y2) ? cel.chart.axes.y2 : null;
+      if (y2ax && Array.isArray(y2ax.series) && y2ax.series.length) {
+        pushW(warnings, "DUAL_AXIS_NOTE",
+          "图表 " + cel.id + "（" + chartTypeZh(ctype) + "）使用双纵轴：左右刻度相互独立，请在图注说明每条曲线对应哪一侧",
+          cel.id, "info");
+      }
+      // G19/G20：导入时的手工修改与非默认读取方式如实进入审查（info 级）
+      var celSrc = cel.chart.data && isObj(cel.chart.data.source_info)
+        ? cel.chart.data.source_info : null;
+      if (celSrc) {
+        var celName = cel.name ||
+          (global.FigData && typeof global.FigData.chartTypeName === "function"
+            ? global.FigData.chartTypeName(ctype) : ctype) || "未命名图表";
+        var me = celSrc.manual_edits;
+        if (isObj(me) && typeof me.count === "number" && me.count > 0) {
+          pushW(warnings, "data_manual_edits",
+            "图表「" + celName + "」的数据在导入时手工修改了 " + me.count +
+            " 个单元格（原值记录在数据来源里）",
+            cel.id, "info");
+        }
+        var po = celSrc.parse_options;
+        if (isObj(po) && po.number_format && po.number_format !== "plain") {
+          var fmtZh = po.number_format === "comma_decimal" ? "逗号是小数点"
+            : (po.number_format === "comma_thousands" ? "逗号是千分位" : po.number_format);
+          pushW(warnings, "data_parse_options",
+            "图表「" + celName + "」的数据按「" + fmtZh + "」读取",
+            cel.id, "info");
+        }
+      }
       var declared = statsBasePresent(st);
       var dataReview = cel.chart.statistics_review;
       if (isObj(dataReview) && dataReview.status === "required") {
@@ -869,7 +917,7 @@
         if (cel.chart.data && isObj(cel.chart.data.inline) &&
             Array.isArray(cel.chart.data.inline.rows) && cel.chart.data.inline.rows.length) {
           pushW(warnings, "STATS_NO_TRACE",
-            "图表 " + cel.id + "（" + ctype + "）有内联数据但未申报统计（n/center/spread），数据→图的溯源缺失",
+            "图表 " + cel.id + "（" + chartTypeZh(ctype) + "）有内联数据但未申报统计（n/center/spread），数据→图的溯源缺失",
             cel.id, "warning");
         }
         continue;
@@ -939,7 +987,7 @@
       if (st.uncertainty_source) {
         if (ERRORBAR_CHART_TYPES.indexOf(ctype) < 0) {
           pushW(warnings, "SCOPE_NOT_COVERED",
-            "图表 " + cel.id + " 的类型为 " + (ctype || "未知") + "：误差线渲染当前只承诺 bar/bar_grouped，该图不视为已覆盖（not covered，不判 PASS）",
+            "图表 " + cel.id + " 的类型为 " + (ctype ? chartTypeZh(ctype) : "未知") + "：误差线渲染当前只承诺柱状图/分组柱状图，该图不视为已覆盖（不在覆盖范围，不判通过）",
             cel.id, "warning");
         } else {
           var cellWarn = errorbarCellReport(cel.chart, st);
@@ -1159,7 +1207,7 @@
         name: "physical_size",
         status: finalSizeOk ? "pass" : "warn",
         detail: finalSizeOk
-          ? "画布 " + canvas.width_mm + "×" + canvas.height_mm + "mm @" + canvas.dpi + "dpi，物理尺寸检查可执行"
+          ? "画布 " + canvas.width_mm + "×" + canvas.height_mm + " mm、" + canvas.dpi + " DPI，可以检查实际印刷尺寸"
           : "画布宽/高/dpi 缺失或非法，物理尺寸检查不可执行"
       }
     ];

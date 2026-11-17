@@ -281,7 +281,30 @@ FigPresets.load({
   palettes: JSON.parse(fs.readFileSync(presetDir + '/palettes.json', 'utf8'))
 });
 let modal = null;
-global.Ui = { modal: opts => { modal = opts; return {close() {}}; }, toast() {} };
+function mockUiH(tag, attrs, children) {
+  var el = document.createElement(tag);
+  if (attrs) Object.keys(attrs).forEach(function (key) {
+    var value = attrs[key];
+    if (value === null || value === undefined || value === false) return;
+    if (key === "class" || key === "className") { el.className = String(value); el.setAttribute("class", String(value)); }
+    else if (key === "text") el.textContent = String(value);
+    else if (key === "html") el.innerHTML = String(value);
+    else if (key === "style" && value && typeof value === "object") {
+      var st = el.style || (el.style = {});
+      Object.keys(value).forEach(function (prop) { var pv = value[prop]; if (pv === null || pv === undefined) return; st[prop] = pv; });
+    } else if (key.indexOf("on") === 0 && typeof value === "function") { el.addEventListener(key.slice(2).toLowerCase(), value); }
+    else if (value === true) { el.setAttribute(key, ""); } else { el.setAttribute(key, String(value)); }
+  });
+  if (children != null) {
+    var list = Array.isArray(children) ? children : [children];
+    list.forEach(function (child) {
+      if (child === null || child === undefined || child === false) return;
+      el.appendChild(typeof child === "string" || typeof child === "number" ? document.createTextNode(String(child)) : child);
+    });
+  }
+  return el;
+}
+global.Ui = { h: mockUiH, modal: opts => { modal = opts; return {close() {}}; }, toast() {} };
 require('./viewer_static/app/import.js');
 require('./viewer_static/app/spreadsheet-import.js');
 const panel = new Node('section');

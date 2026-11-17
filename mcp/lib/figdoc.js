@@ -21,6 +21,16 @@
   const ID_PATTERN = /^[A-Za-z0-9_.:-]+$/;
   const COLOR_MODES = ['RGB', 'CMYK', 'GRAY'];
 
+  // 面向用户的元素类型中文名（界面文案用；未知类型回退原值，不臆造）
+  const ELEMENT_TYPE_NAMES = {
+    rect: '矩形', ellipse: '椭圆', line: '直线', arrow: '箭头', path: '路径',
+    text: '文本', image: '图片', chart: '图表', group: '组', panel: '面板',
+    connector: '连接线'
+  };
+  function elementTypeName(type) {
+    return ELEMENT_TYPE_NAMES[type] || String(type == null ? '' : type);
+  }
+
   // ------------------------------------------------------------------
   // Small generic helpers
   // ------------------------------------------------------------------
@@ -1052,6 +1062,7 @@
 
   const FigDoc = {
     SCHEMA_VERSION,
+    ELEMENT_TYPES, elementTypeName,
     create, uid,
     mmToPx, pxToMm, ptToPx, normToMm, mmToNorm,
     get, byType, children, descendants, ancestors, bbox, hitTest,

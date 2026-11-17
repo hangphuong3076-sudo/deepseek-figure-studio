@@ -3,7 +3,8 @@
  *
  * 职责（PLUGIN-API.md：viewer_static = 编辑 + 导出 + 历史的复核查看器）：
  *   1. 页面加载时优先从 GET /api/current 载入当前 doc（含 history，可撤销）；
- *      服务端暂无文档（404）或服务不在（如 file:// 直开）时回退为前端新建空文档。
+ *      服务端暂无文档（200 + exists:false；旧服务端为 404）或服务不在
+ *      （如 file:// 直开）时回退为前端新建空文档。
  *   2. doc:changed（包括 commit，不含 boot）是唯一保存入口，发布时同步把
  *      evt.doc debounce POST 回 /api/current，不等待 commit Promise 回调。
  *      GET 提供 save_token，POST 必须带本次保存自己的 base_token；空文档
@@ -21,9 +22,14 @@
   "use strict";
 
   var CURRENT_URL = "/api/current";
+  var HEALTH_URL = "/api/health";
   var DEBOUNCE_MS = 800;          // 实际 doc:changed 发布后等待回写的防抖时长
   var SAVE_TIMEOUT_MS = 10000;    // 单次回写超时
   var SAVE_FAIL_TOASTS = 3;       // 连续失败达到该次数后每次都弹提示
+  var HEALTH_INTERVAL_MS = 15000; // 后端存活轮询间隔
+  var HEALTH_TIMEOUT_MS = 5000;   // 单次健康检查超时
+  var BACKEND_DOWN_TEXT =
+    "后台服务已断开：保存、导出、拆分和 AI 暂不可用。请从 DSH 重新打开窗口";
 
   var saveTimer = null;
   var pending = null;             // 最新未发送版本 {doc,version,reason}
@@ -38,6 +44,12 @@
   var dirty = false;
   var saveConflict = null;
   var beaconHeld = false;         // 无响应 beacon 后保持 dirty，不盲目重发同一版本
+  var backendDown = false;        // /api/health 连续不可达 → 常驻横幅
+  var healthTimer = null;
+  var healthInFlight = false;
+  var healthFails = 0;            // 连续失败次数；满 2 次才亮横幅（防抖）
+  var healthRecheckTimer = null;
+  var backendBanner = null;
 
   function has(name) {
     return typeof global[name] !== "undefined" && global[name] !== null;
@@ -78,12 +90,19 @@
     try {
       var res = await fetch(CURRENT_URL, { cache: "no-store" });
       if (res.status === 404) {
+        // 旧版服务端的空态是 404；新版为 200 + exists:false（见下）。
         // 空文档初次保存必须把 base_token 明确发送为 null。
         console.info("[ViewerBoot] 服务端暂无文档，将新建空文档");
         return null;
       }
       if (!res.ok) throw new Error("HTTP " + res.status);
       var j = await res.json();
+      if (j && j.ok && j.exists === false) {
+        // 显式空态是正常响应（console.info），不是需要警告的异常；
+        // baseToken 保持 null，首次保存以 base_token:null 条件写入。
+        console.info("[ViewerBoot] 服务端暂无文档（exists:false），将新建空文档");
+        return null;
+      }
       if (j && j.ok && j.doc && typeof j.doc === "object" && j.doc.canvas) {
         baseToken = typeof j.save_token === "string" ? j.save_token : null;
         status("已从查看器服务载入文档（GET " + CURRENT_URL + "）");
@@ -178,6 +197,8 @@
     console.warn("[ViewerBoot] " + text);
     if (consecutiveFailures >= SAVE_FAIL_TOASTS || !has("App")) notifyError(text);
     else status(text + "；可继续编辑产生新版本，或点击保存重试");
+    // 保存失败可能意味着后端已退出：立刻补一次健康检查，不等下一个轮询点。
+    checkBackendHealth();
   }
 
   function blockOnConflict(err) {
@@ -278,6 +299,85 @@
   }
 
   // ------------------------------------------------------------------
+  // 2b. 后端存活监视：窗口还开着但 viewer.py 已退出时给出常驻提示。
+  //     file:// 直开没有后端可连，不启用；恢复后自动撤下横幅。
+  // ------------------------------------------------------------------
+
+  function ensureBackendBanner() {
+    if (backendBanner || typeof document === "undefined" || !document.body) return backendBanner;
+    backendBanner = document.createElement("div");
+    backendBanner.setAttribute("data-backend-down", "true");
+    backendBanner.setAttribute("role", "alert");
+    backendBanner.textContent = BACKEND_DOWN_TEXT;
+    backendBanner.style.cssText =
+      "position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:9999;" +
+      "max-width:80%;padding:8px 16px;border-radius:8px;background:#7f1d1d;color:#fff;" +
+      "font-size:13px;line-height:1.5;box-shadow:0 2px 10px rgba(0,0,0,.3);display:none;";
+    document.body.appendChild(backendBanner);
+    return backendBanner;
+  }
+
+  function setBackendDown(down) {
+    if (down === backendDown) return;
+    backendDown = down;
+    var banner = ensureBackendBanner();
+    if (banner) banner.style.display = down ? "block" : "none";
+    if (!down) status("后台服务已恢复连接");
+  }
+
+  function checkBackendHealth() {
+    if (healthInFlight || typeof fetch !== "function") return Promise.resolve();
+    if (global.location && global.location.protocol === "file:") {
+      return Promise.resolve();
+    }
+    healthInFlight = true;
+    var ctrl = typeof AbortController === "function" ? new AbortController() : null;
+    var timer = null;
+    if (ctrl) timer = setTimeout(function () { ctrl.abort(); }, HEALTH_TIMEOUT_MS);
+    return fetch(HEALTH_URL, {
+      cache: "no-store",
+      signal: ctrl ? ctrl.signal : undefined
+    }).then(function (res) {
+      // 服务端能应答即视为存活；业务字段不影响连接判定。
+      if (res && res.ok) {
+        healthFails = 0;
+        if (healthRecheckTimer) { clearTimeout(healthRecheckTimer); healthRecheckTimer = null; }
+        setBackendDown(false);
+      } else {
+        noteHealthFail();
+      }
+    }).catch(function () {
+      noteHealthFail();
+    }).finally(function () {
+      if (timer) clearTimeout(timer);
+      healthInFlight = false;
+    });
+  }
+
+  // 单次失败不亮横幅（可能是瞬时抖动）；连续失败才提示，且失败后
+  // 2s 立即复查一次，让真实断开在一个轮询周期内即可被确认。
+  function noteHealthFail() {
+    healthFails += 1;
+    if (healthFails >= 2) {
+      setBackendDown(true);
+      return;
+    }
+    if (!healthRecheckTimer) {
+      healthRecheckTimer = setTimeout(function () {
+        healthRecheckTimer = null;
+        checkBackendHealth();
+      }, 2000);
+    }
+  }
+
+  function startHealthWatch() {
+    if (healthTimer || typeof fetch !== "function") return;
+    if (global.location && global.location.protocol === "file:") return;
+    checkBackendHealth();
+    healthTimer = setInterval(checkBackendHealth, HEALTH_INTERVAL_MS);
+  }
+
+  // ------------------------------------------------------------------
   // 3. 挂接统一文档发布入口
   // ------------------------------------------------------------------
 
@@ -307,6 +407,24 @@
         if (global.document.visibilityState === "hidden") flushBeacon();
       });
     }
+
+    startHealthWatch();
+  }
+
+  // 多画布标签页：切换后服务端已把新文档写为 current，前端需要
+  // 1) 不触发保存地发布该文档；2) 采用返回的 save_token 作为下一次
+  //    条件保存基准。flush() 负责先把待发修改全部落盘。
+  function adoptServerDoc(doc, token) {
+    if (doc && typeof doc === "object") {
+      baseToken = typeof token === "string" && token ? token : null;
+      // 服务端文档即当前真相：清掉本地待发队列与脏标记，避免把
+      // 切换前的旧文档版本回写覆盖新标签。
+      pending = null;
+      active = null;
+      dirty = false;
+      beaconHeld = false;
+      if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    }
   }
 
   global.ViewerBoot = {
@@ -314,6 +432,10 @@
     attachAutoSave: attachAutoSave,
     flush: flush,
     saveNow: function () { return flush({ force: true }); },
-    flushBeacon: flushBeacon
+    flushBeacon: flushBeacon,
+    checkBackendHealth: checkBackendHealth,
+    baseToken: function () { return baseToken; },
+    hasConflict: function () { return !!saveConflict; },
+    adoptServerDoc: adoptServerDoc
   };
 })(typeof globalThis !== "undefined" ? globalThis : this);

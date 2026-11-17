@@ -734,7 +734,8 @@
         height_mm: t.h,
         dpi: ctx.dpi,
         fontFamily: style.fontFamily,
-        fontSizePt: style.fontSizePt
+        fontSizePt: style.fontSizePt,
+        compactMarks: ctx.compactMarks === true
       }));
       if (!frag.trim()) throw new Error('FigData 返回空 SVG，未生成真实图表');
     } catch (e) {
@@ -782,6 +783,8 @@
       x = t.x; y = t.y + t.h + fs; anchor = 'start';
     } else if (pos === 'top-left') {
       x = t.x; y = t.y - 0.6; anchor = 'start';
+    } else if (pos === 'inside-top-left') {
+      x = t.x + fs * 0.35; y = t.y + fs * 1.05; anchor = 'start';
     } else {
       fail('FigRender：元素 ' + el.id + ' 的 panelLayout.labelPosition 非法（' + pos + '）');
     }
@@ -825,6 +828,15 @@
         var labelGeometry = connectorGeometry(owner, ctx);
         t = { x: labelGeometry.middle.x - 10, y: labelGeometry.middle.y - 2.5,
           w: 20, h: 5, rotation: 0 };
+        // R9-F：关系标签带白底，压在线中部不被连线穿过；宽度贴合文字
+        var fs = (el.style && el.style.fontSizePt) || 6;
+        var lw = (global.FigDiagram && typeof global.FigDiagram.measureLabel === 'function')
+          ? global.FigDiagram.measureLabel(el.text, fs) + 2.6 : 20;
+        lw = Math.min(24, Math.max(3, lw));
+        var labelBg = '<rect x="' + fmt(labelGeometry.middle.x - lw / 2) +
+          '" y="' + fmt(t.y + 0.55) + '" width="' + fmt(lw) +
+          '" height="' + fmt(t.h - 1.1) + '" rx="0.8" fill="#FFFFFF"/>';
+        return labelBg + renderText(el, ctx, t, svgStyleAttrs(el, ctx));
       }
     }
     switch (el.type) {
@@ -997,6 +1009,7 @@
     var guides = opts.includeGuides === true;
 
     var ctx = makeCtx(doc, fnName);
+    ctx.compactMarks = opts.compactMarks === true;
     var scoped = opts.panel_id !== undefined && opts.panel_id !== null;
     var scope = scoped ? panelScope(ctx, opts.panel_id, fnName) : canvasScope(ctx);
     var body = scoped ? renderElement(scope.panel, ctx) : renderVisibleList(topLevelList(ctx), ctx);

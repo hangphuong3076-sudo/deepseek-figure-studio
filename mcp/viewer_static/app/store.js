@@ -23,6 +23,7 @@
   "use strict";
 
   var adapter = null;       // the registered FigStore adapter
+  var openPromise = null;   // adapter.open() 的在途 Promise；open 完成前 mode 仍为 null
   var listEl = null;        // recent-projects list container
 
   function errText(err) {
@@ -31,7 +32,7 @@
 
   function requireKernel() {
     if (!global.FigStore || typeof global.FigStore.use !== "function") {
-      throw new Error("Store: 缺少内核 FigStore，请先加载 lib/storage.js");
+      throw new Error("工程存储：缺少存储内核");
     }
   }
 
@@ -39,6 +40,14 @@
     if (!adapter) {
       throw new Error("Store: 本地存储尚未初始化，请先调用 Store.attach()");
     }
+  }
+
+  // adapter 在 attach() 里同步赋值、open() 异步完成；open 完成前
+  // adapter.mode 仍为 null，任何 FigStore 读写都会抛「尚未 open()」。
+  // 所有对外操作先 await ready()，等 open 落定再碰存储。
+  function ready() {
+    requireAttached();
+    return openPromise || Promise.resolve();
   }
 
   function requireDoc() {
@@ -85,7 +94,15 @@
       requireKernel();
       adapter = global.FigStore.adapters.localStorage();
       global.FigStore.use(adapter);
-      var mode = await adapter.open(); // "indexeddb" | "localstorage"
+      openPromise = adapter.open(); // "indexeddb" | "localstorage"
+      try {
+        var mode = await openPromise;
+      } catch (err) {
+        // open 失败：列表区显示不可用原因（refreshList 内部 await ready() 会拿到同一拒绝）
+        Store.refreshList();
+        throw err;
+      }
+      Store.refreshList(); // open 落定后刷新一次，修掉 mount 早于 open 的竞态
       return mode;
     },
 
@@ -94,7 +111,7 @@
     },
 
     save: async function (opts) {
-      requireAttached();
+      await ready();
       requireDoc();
       opts = opts || {};
       var project = await global.FigStore.snapshot(cloneForSnapshot(), {
@@ -109,10 +126,10 @@
 
     // Save the current document under a brand-new doc id and switch to it.
     saveAs: async function (opts) {
-      requireAttached();
+      await ready();
       requireDoc();
       if (!global.FigDoc) {
-        throw new Error("Store.saveAs: 缺少内核 FigDoc，请先加载 lib/figdoc.js");
+        throw new Error("另存为：缺少文档内核");
       }
       opts = opts || {};
       await global.App.publishDoc(function (current) {
@@ -128,16 +145,44 @@
     },
 
     open: async function (id) {
-      requireAttached();
+      await ready();
       if (id === undefined || id === null) {
         return Store.pickAndOpen();
       }
       if (typeof id !== "string" || !id) {
         throw new Error("Store.open: id 必须是非空字符串");
       }
+      var useTabs = global.Tabs && typeof Tabs.available === "function" &&
+        Tabs.available() && typeof Tabs.switchTab === "function";
+      if (useTabs) {
+        try { await Tabs.refresh(); } catch (e) { /* 列表过期不影响判断 */ }
+        var openTabs = (Tabs.state && Tabs.state.tabs) || [];
+        for (var ti = 0; ti < openTabs.length; ti++) {
+          if (openTabs[ti].id === id) {
+            var sw = await Tabs.switchTab(id);
+            if (sw) {
+              global.App.status("已切换到画布标签页");
+              Store.refreshList();
+              return global.App.doc;
+            }
+            break; // 切换失败（409/网络）：不再重复尝试，走新标签路径
+          }
+        }
+      }
       var project = await global.FigStore.loadProject(id);
       if (!project) {
         throw new Error("Store.open: 找不到工程 \"" + id + "\"");
+      }
+      var doc = global.FigStore.docFromProject(project);
+      // R3 #5：查看器在线时把工程作为一个新画布标签页打开；
+      // file:// 等无服务环境维持原「替换当前文档」行为。
+      if (useTabs && doc && typeof Tabs.newTab === "function") {
+        var j = await Tabs.newTab(doc);
+        if (j) {
+          global.App.status("已在新标签页打开：" + docTitle(doc));
+          Store.refreshList();
+          return global.App.doc;
+        }
       }
       return Store.loadIntoEditor(project);
     },
@@ -157,10 +202,10 @@
     // Dialog listing saved projects; resolves with the opened doc, or null if
     // the user cancels / there is nothing to open.
     pickAndOpen: async function () {
-      requireAttached();
+      await ready();
       var summaries = await Store.list();
       if (!summaries.length) {
-        toast("暂无已保存的工程", { type: "info" });
+        toast("还没有保存过工程。先点「保存」，之后可以在这里重新打开；也可以用「导入工程文件」打开 *.figureproj.json。", { type: "info" });
         return null;
       }
       return new Promise(function (resolve) {
@@ -194,7 +239,19 @@
 
     newProject: async function () {
       if (!global.App || !global.FigDoc) {
-        throw new Error("Store.newProject: 缺少 App 或内核 FigDoc");
+        throw new Error("新建工程：编辑器尚未就绪");
+      }
+      // R3 #5：有查看器服务时「新建」= 新建一个空画布标签页，
+      // 不再替换当前文档（无破坏性确认）。
+      if (global.Tabs && typeof Tabs.newEmptyTab === "function" &&
+          typeof Tabs.available === "function" && Tabs.available()) {
+        var j = await Tabs.newEmptyTab();
+        if (j) {
+          global.App.status("已新建画布标签页");
+          Store.refreshList();
+          return global.App.doc;
+        }
+        return null; // 冲突/失败：留在当前标签，不做破坏性替换
       }
       var doc = global.App.doc;
       var hasContent = doc && ((doc.elements && doc.elements.length) ||
@@ -212,7 +269,7 @@
     },
 
     autosave: async function () {
-      requireAttached();
+      await ready();
       if (!global.App || !global.App.doc) return null; // nothing to snapshot yet
       var project = await global.FigStore.snapshot(cloneForSnapshot(), {
         label: "自动快照",
@@ -226,7 +283,7 @@
     },
 
     list: async function () {
-      requireAttached();
+      await ready();
       var summaries = await global.FigStore.listProjects();
       summaries = (summaries || []).slice().sort(function (a, b) {
         var ta = a && a.updated ? a.updated : "";
@@ -237,7 +294,7 @@
     },
 
     deleteProject: async function (id) {
-      requireAttached();
+      await ready();
       var ok = await global.FigStore.deleteProject(id);
       Store.refreshList();
       return ok;
@@ -361,6 +418,13 @@
       if (!listEl) return;
       if (!adapter) {
         listEl.textContent = "存储未初始化";
+        return;
+      }
+      try {
+        await ready(); // 等 adapter.open() 落定；失败走「本机存储不可用」
+      } catch (err) {
+        listEl.textContent = "本机存储不可用：" + errText(err) +
+          "。仍可用「导出工程文件」保存到磁盘。";
         return;
       }
       var summaries;

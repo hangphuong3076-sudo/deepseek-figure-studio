@@ -127,7 +127,7 @@
     var detail = err && err.message ? err.message : String(err);
     var wrapped;
     if (origin && rev < origin.rev) {
-      wrapped = new Error("版本 " + rev + " 早于持久化检查点 rev " + origin.rev +
+      wrapped = new Error("版本 " + rev + " 早于持久化检查点（第 " + origin.rev + " 版）" +
         "；该旧工程只保留检查点及之后的完整重放能力，无法精确恢复更早内容");
       wrapped.historyCompatibility = "before-origin";
     } else {
@@ -142,7 +142,7 @@
     if (origin && rev >= origin.rev && (!err || err.historyCompatibility !== "replay-failed")) {
       return "可按历史重放";
     }
-    if (origin && rev < origin.rev) return "早于 rev " + origin.rev + " · 有限兼容";
+    if (origin && rev < origin.rev) return "早于第 " + origin.rev + " 版 · 只能有限兼容";
     return "无法生成预览";
   }
 
@@ -156,11 +156,11 @@
     var doc = sourceDoc || appDoc();
     if (!doc) throw new Error("当前没有打开的文档");
     if (typeof rev !== "number" || !isFinite(rev) || Math.floor(rev) !== rev || rev < 0) {
-      throw new Error("rev 必须是非负整数");
+      throw new Error("版本号必须是非负整数");
     }
     var origin = historyOrigin(doc);
     if (rev !== 0 && !findRecord(doc, rev) && (!origin || origin.rev !== rev)) {
-      throw new Error("版本不存在或已被清理: rev " + rev);
+      throw new Error("版本不存在或已被清理：第 " + rev + " 版");
     }
     if (!global.FigOps || typeof global.FigOps.ensureSnapshot !== "function") {
       throw new Error("缺少 FigOps.ensureSnapshot，无法按历史重放");
@@ -183,7 +183,7 @@
     var rec = findRecord(doc, rev);
     var origin = historyOrigin(doc);
     if (!rec && (!origin || origin.rev !== rev)) {
-      fail("版本不存在: rev " + rev);
+      fail("版本不存在：第 " + rev + " 版");
       return false;
     }
 
@@ -216,7 +216,7 @@
     }
     var cleanLabel = label.trim();
     return global.App.publishDoc(function (doc) {
-      if (!findRecord(doc, rev)) throw new Error("版本不存在: rev " + rev);
+      if (!findRecord(doc, rev)) throw new Error("版本不存在：第 " + rev + " 版");
       var next = global.FigDoc.touch(doc);
       // touch 深拷贝会丢弃运行期快照，图层/命名事务必须保留旧缓存才能撤销。
       var cache = doc.__snapshots || null;
@@ -236,7 +236,7 @@
       toast("版本 " + rev + " 已命名为“" + cleanLabel + "”", "success");
       // 等直接命名发布后再排入 companion note，避免在 publishDoc 临界区内
       // 重入 App.commit 所造成的数据倒退或队列自等待。
-      var note = "版本标记 rev " + rev + " = " + cleanLabel;
+      var note = "版本标记：第 " + rev + " 版 = " + cleanLabel;
       return global.App.commit([{ op: "note", note: note, reason: note }],
         { label: note, source: "user" })
         .catch(function (err) {
@@ -321,7 +321,7 @@
     var hist = (doc.history || []).slice().reverse();
     var cur = contentRev(doc);
     if (summaryEl) {
-      summaryEl.textContent = "共 " + hist.length + " 条记录 · 当前版本 rev " + cur;
+      summaryEl.textContent = "共 " + hist.length + " 条记录 · 当前是第 " + cur + " 版";
     }
     if (!hist.length) {
       listEl.appendChild(el("div", "history-empty", "暂无历史记录，编辑画布后将自动生成。"));
@@ -390,11 +390,15 @@
 
     info.appendChild(el("div", "history-label", rec.label ? rec.label : "未命名"));
     var opsLen = Array.isArray(rec.ops) ? rec.ops.length : 0;
-    info.appendChild(el(
+    var meta = el(
       "div",
       "history-meta",
-      opsLen ? opsLen + " 项操作" + (rec.doc_sha256 ? " · sha256 已记录" : "") : "无操作明细"
-    ));
+      opsLen ? opsLen + " 项操作" + (rec.doc_sha256 ? " · 已留校验记录" : "") : "无操作明细"
+    );
+    if (rec.doc_sha256) {
+      meta.title = "内容校验值（SHA-256）：" + rec.doc_sha256;
+    }
+    info.appendChild(meta);
     row.appendChild(info);
 
     // --- actions ---
@@ -547,7 +551,7 @@
       var cur = contentRev(doc);
       var optCur = document.createElement("option");
       optCur.value = "cur";
-      optCur.textContent = "当前版本（rev " + cur + "）";
+      optCur.textContent = "当前版本（第 " + cur + " 版）";
       sel.appendChild(optCur);
       for (var i = 0; i < hist.length; i++) {
         var r = hist[i];
@@ -583,7 +587,7 @@
         var a = resolveRev(selA.value);
         var b = resolveRev(selB.value);
         if (a === b) {
-          pre.textContent = "两个选择指向同一版本（rev " + a + "），没有差异。";
+          pre.textContent = "两个选择指向同一版本（第 " + a + " 版），没有差异。";
           return;
         }
         pre.textContent = diff(a, b);

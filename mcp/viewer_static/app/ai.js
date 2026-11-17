@@ -46,10 +46,11 @@
   // ------------------------------------------------------------------
   // state
   // ------------------------------------------------------------------
-  var els = { root: null, badge: null, input: null, chatBtn: null, askBtn: null,
-              chatLog: null, taskDetails: null,
-              pendingBox: null, pendingModeEl: null, pendingExpEl: null,
-              pendingSegmentsEl: null, emptyHint: null, pendingList: null, pendingBtnRow: null,
+  var els = { root: null, badge: null, input: null, sendBtn: null,
+              chatLog: null, taskDetails: null, copyAllBtn: null,
+              pendingBox: null, pendingTitleEl: null, pendingModeEl: null, pendingExpEl: null,
+              pendingSegmentsEl: null, pendingStaleEl: null, previewDetails: null,
+              pendingList: null, pendingBtnRow: null,
               applyBtn: null, discardBtn: null, reviewBtn: null, reviewList: null,
               refChips: null };
   var state = {
@@ -61,6 +62,7 @@
     pendingMode: null,       // 本批预览自己的模式，不受后续问答/审阅覆盖
     pendingSegments: [],     // 多编号分组的逐段 mode/error
     pendingPreview: null,    // R05 图形预览（buildVisualPreview 结果，仅内存）
+    pendingAnchorIds: null,  // 本次请求引用的锚点 [{id,label}]；应用成功后随方案一并移除
     applying: null,          // pending 与单条 review 共用的在途应用 Promise
     documentEpoch: 0,        // 每次 doc:changed 都递增；不以 rev 充当变更锁
     anchorLedgerDocId: null,
@@ -88,11 +90,13 @@
     groupIndex: 0,           // 多组拆分（多编号）时当前组序号（1 起），0 = 不分组
     groupTotal: 0,
     requestId: null,         // 最近一次登记的 request_id（仅用于展示追踪）
-    busyLabel: ""            // 非空 = busy 条可见（indeterminate，无百分比）
+    busyLabel: "",           // 非空 = busy 条可见（indeterminate，无百分比）
+    waitStart: 0             // busy 开始时刻；>0 时进度行附带已等待秒数
   };
   var els2 = {};             // 进度区 DOM（与 els 分开，mount 时填充）
   var pollTimer = null;
   var pollGen = 0;           // 轮询代次：stop 后在途 tick 的迟到响应一律丢弃
+  var waitTimer = null;      // 等待秒数的 1s 重渲染定时器
   var askSeq = 0;
   var reviewSeq = 0;
   var POLL_INTERVAL_MS = 1000;
@@ -109,11 +113,11 @@
     bridge_done:    { text: "模型桥返回完成", tone: "model" },
     bridge_error:   { text: "模型桥请求失败", tone: "error" },
     model_error:    { text: "模型请求失败", tone: "error" },
-    review_wait:    { text: "等待确认：以下操作仅为预览，尚未写入文档", tone: "fallback" },
+    review_wait:    { text: "等你确认：下面的修改还没有执行", tone: "fallback" },
     applying:       { text: "正在写入文档", tone: "model" },
     apply_error:    { text: "写入未生效，待应用操作已保留", tone: "error" },
     applied_done:   { text: "已写入文档", tone: "model" },
-    offline:        { text: "离线模式（未调用模型）", tone: "fallback" }
+    offline:        { text: "未连接 AI（未调用模型）", tone: "fallback" }
   };
 
   // tone 与模式徽章同色系（STYLE_* 在下方定义，此处延迟解析）。
@@ -152,6 +156,13 @@
 
   function setProgressBusy(label) {
     progress.busyLabel = label || "";
+    if (label) {
+      if (!progress.waitStart) progress.waitStart = Date.now();
+      if (!waitTimer) waitTimer = setInterval(renderProgress, 1000);
+    } else {
+      progress.waitStart = 0;
+      if (waitTimer) { clearInterval(waitTimer); waitTimer = null; }
+    }
     renderProgress();
   }
 
@@ -162,16 +173,24 @@
     progress.groupTotal = 0;
     progress.requestId = null;
     progress.busyLabel = "";
+    progress.waitStart = 0;
+    if (waitTimer) { clearInterval(waitTimer); waitTimer = null; }
     renderProgress();
   }
 
   function renderProgress() {
     if (!els2.wrap) return;
-    var show = !!(progress.busyLabel || progress.kind);
+    // 待定方案卡片本身已说明状态；存在方案时收起进度/阶段行给对话区让位
+    // （请求仍在进行时 pendingOps 为空，busy/phase 行照常显示）。
+    var hasPending = !!(state.pendingOps && state.pendingOps.length);
+    var show = !hasPending && !!(progress.busyLabel || progress.kind);
     els2.wrap.style.display = show ? "block" : "none";
     if (!show) return;
     els2.busyRow.style.display = progress.busyLabel ? "flex" : "none";
-    els2.busyLabel.textContent = progress.busyLabel || "";
+    var waited = progress.waitStart
+      ? "（已等待 " + Math.max(1, Math.floor((Date.now() - progress.waitStart) / 1000)) + " 秒）"
+      : "";
+    els2.busyLabel.textContent = (progress.busyLabel || "") + waited;
     els2.phaseRow.style.display = progress.kind ? "flex" : "none";
     if (progress.kind) {
       var def = PHASE_DEFS[progress.kind];
@@ -220,26 +239,7 @@
   // small DOM helpers（不依赖 app/ui.js，避免跨模块耦合）
   // ------------------------------------------------------------------
   function h(tag, attrs, children) {
-    var el = document.createElement(tag);
-    if (attrs) {
-      for (var k in attrs) {
-        if (!Object.prototype.hasOwnProperty.call(attrs, k)) continue;
-        var v = attrs[k];
-        if (k === "style") el.setAttribute("style", v);
-        else if (k === "className") el.className = v;
-        else if (k === "disabled") el.disabled = !!v;
-        else if (k === "text") el.textContent = v;
-        else if (k === "html") el.innerHTML = v;
-        else if (k.indexOf("on") === 0 && typeof v === "function") {
-          el.addEventListener(k.slice(2).toLowerCase(), v);
-        } else el.setAttribute(k, v == null ? "" : String(v));
-      }
-    }
-    (children || []).forEach(function (c) {
-      if (c == null) return;
-      el.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
-    });
-    return el;
+    return g.Ui.h(tag, attrs, children);
   }
 
   function toast(text, opts) {
@@ -278,10 +278,11 @@
     "model-bridge":   { text: "当前模式：DeepSeek 模型（DSH 桥）", style: STYLE_MODEL },
     "bridge-probing": { text: "正在检测 DSH 桥…", style: STYLE_IDLE },
     "bridge-down":    { text: "DSH 桥未连接", style: STYLE_ERROR },
+    "model-timeout":  { text: "模型响应超时（未断开）", style: STYLE_ERROR },
     "model-error":    { text: "模型请求失败，已回退", style: STYLE_ERROR },
     "parse-error":    { text: "模型响应无法解析，已回退", style: STYLE_FALLBACK },
-    "offline":        { text: "离线模式（未配置 API Key）", style: STYLE_FALLBACK },
-    "fallback":       { text: "离线模式（未调用模型）", style: STYLE_FALLBACK },
+    "offline":        { text: "未连接 AI（在「设置」里连接）", style: STYLE_FALLBACK },
+    "fallback":       { text: "未连接 AI（未调用模型）", style: STYLE_FALLBACK },
     "idle":           { text: "当前模式：未调用", style: STYLE_IDLE }
   };
 
@@ -322,15 +323,56 @@
       ? "direct" : "off";
   }
 
+  // 统一的 chat 失败分类（Settings.chatErrorKind 的三种结果）：
+  //   timeout   → model-timeout（附已等待秒数）
+  //   transport → 桥模式 bridge-down，其它模式 model-error
+  //   other     → 桥已应答但模型/HTTP 失败 → model-error（带真实信息）
+  function classifyChatFailure(errKind, message, timeoutMs) {
+    if (errKind === "timeout") {
+      var secs = timeoutMs ? Math.round(timeoutMs / 1000) : 0;
+      return {
+        kind: "model-timeout",
+        detail: "模型响应超时（未断开）" + (secs ? "，已等待约 " + secs + " 秒" : "") +
+          (message ? "：" + message : "")
+      };
+    }
+    if (errKind === "transport") {
+      return configKind() === "bridge"
+        ? { kind: "bridge-down", detail: message || "DSH 桥请求失败" }
+        : { kind: "model-error", detail: message || "模型请求失败" };
+    }
+    return { kind: "model-error", detail: message || "模型请求失败" };
+  }
+
+  // 从错误对象本身分类（chat .catch 路径没有 lastModelCall 记录可用时）。
+  function classifyChatError(err, fallbackMsg) {
+    var kind = "other";
+    if (g.Settings && typeof g.Settings.chatErrorKind === "function") {
+      try { kind = g.Settings.chatErrorKind(err) || "other"; } catch (e) { kind = "other"; }
+    }
+    var msg = fallbackMsg ||
+      ((g.FigAI && g.FigAI.explainError) ? g.FigAI.explainError(err)
+        : (err && err.message ? err.message : String(err)));
+    var tmo = 0;
+    var m = /请求超时（(\d+)ms）/.exec(msg) || /(\d+)\s*ms/.exec(msg);
+    if (m) tmo = parseInt(m[1], 10) || 0;
+    return classifyChatFailure(kind, msg, tmo);
+  }
+
+  // 最近一次失败 chat 记录 → {kind, detail}；超时与真实断开分开标注。
+  function causeFromRecord(rec) {
+    if (!rec) return null;
+    return classifyChatFailure(rec.errKind || "other",
+      rec.message || "", rec.timeoutMs || 0);
+  }
+
   // requestOps/requestReview 返回 mode="fallback" 时，结合包裹层记录的
   // 最近一次 FigAI.chat 结果推断真实原因（内核 lib/ai.js 会吞掉所有错误）。
   function fallbackCause(sinceT0) {
     var rec = (g.Settings && typeof g.Settings.lastModelCall === "function")
       ? g.Settings.lastModelCall() : null;
     if (rec && rec.at >= sinceT0 && !rec.ok) {
-      return (rec.source === "bridge")
-        ? { kind: "bridge-down", detail: rec.message || "DSH 桥请求失败" }
-        : { kind: "model-error", detail: rec.message || "模型请求失败" };
+      return causeFromRecord(rec);
     }
     if (rec && rec.at >= sinceT0 && rec.ok) {
       return { kind: "parse-error", detail: "模型已返回内容，但无法解析为可用的操作" };
@@ -354,6 +396,7 @@
 
   function maybeProbeBridge() {
     if (configKind() !== "bridge") return;
+    if (state.busy || state.applying) return; // 请求在途时不抢发探测
     if (probe.inFlight) return;
     if (probe.lastAt && Date.now() - probe.lastAt < PROBE_MIN_INTERVAL_MS) return;
     if (!g.FigAI || typeof g.FigAI.chat !== "function") return;
@@ -655,45 +698,98 @@
     }
   }
 
+  // 方案卡片作为 #ai-chat-log 的最后一个子节点进入滚动流；
+  // 没有待定方案时不进入 DOM 流。renderConversation 重建消息后会重新调用本函数。
+  function placePendingCard() {
+    if (!els.chatLog || !els.pendingBox) return;
+    var hasPending = !!(state.pendingOps && state.pendingOps.length);
+    var attached = els.pendingBox.parentNode === els.chatLog;
+    if (hasPending) {
+      var last = els.chatLog.children[els.chatLog.children.length - 1];
+      if (!attached || last !== els.pendingBox) {
+        els.chatLog.appendChild(els.pendingBox); // appendChild 会先脱离旧父节点再挂到末尾
+      }
+      els.pendingBox.style.display = "block";
+    } else {
+      if (attached) els.chatLog.removeChild(els.pendingBox);
+      els.pendingBox.style.display = "none";
+    }
+  }
+
+  // 卡片顶部「来源说明」：只写真实来源，不写 DeepSeek/AI 模式这类内部措辞。
+  function pendingSourceText() {
+    var mode = state.pendingMode;
+    if (mode === "model") return "由 AI 模型生成";
+    if (mode === "fallback") return "由内置规则生成（没有连接 AI 模型）";
+    if (mode === "mixed") return "由 AI 模型与内置规则共同生成";
+    var segs = state.pendingSegments || [];
+    if (segs.length) {
+      var mc = segs.filter(function (s) { return s.mode === "model"; }).length;
+      if (mc === segs.length) return "由 AI 模型生成";
+      if (!mc) return "由内置规则生成（没有连接 AI 模型）";
+      return "由 AI 模型与内置规则共同生成";
+    }
+    return "";
+  }
+
   function renderPending() {
+    renderProgress(); // 方案出现/消失时同步进度行显隐
     if (!els.pendingBox || !els.pendingList) return;
     var hasPending = !!(state.pendingOps && state.pendingOps.length);
     var stale = hasPending && (state.pendingStale || !documentVersionIsCurrent(state.pendingVersion));
-    els.pendingModeEl.style.display = hasPending ? "" : "none";
-    els.pendingModeEl.textContent = hasPending ? "AI 模式：" +
-      modeFractionText(state.pendingSegments, state.pendingMode) : "";
-    els.pendingExpEl.style.display = hasPending ? "" : "none";
-    els.pendingExpEl.textContent = hasPending
-      ? (stale ? "【预览已过期】文档在生成后发生变化，已禁止应用；请放弃并重新生成。\n" : "") +
-        (state.pendingExplanation || "")
-      : "";
+    if (!hasPending) { renderPendingVisual(); placePendingCard(); return; }
+    if (els.pendingTitleEl) {
+      els.pendingTitleEl.textContent = "修改方案（" + state.pendingOps.length + " 项）· 还没有执行";
+    }
+    if (els.pendingModeEl) {
+      els.pendingModeEl.style.display = "";
+      els.pendingModeEl.textContent = pendingSourceText();
+    }
+    if (els.pendingExpEl) {
+      els.pendingExpEl.style.display = state.pendingExplanation ? "" : "none";
+      els.pendingExpEl.textContent = state.pendingExplanation || "";
+    }
+    if (els.pendingStaleEl) {
+      els.pendingStaleEl.style.display = stale ? "" : "none";
+      els.pendingStaleEl.textContent = stale
+        ? "图在这之后又被改过，这份方案已失效，请重新发送。" : "";
+    }
+    if (els.previewDetails) {
+      var pv = state.pendingPreview;
+      els.previewDetails.style.display = (pv && (pv.ok || pv.error)) ? "" : "none";
+    }
     if (els.pendingSegmentsEl) {
-      els.pendingSegmentsEl.style.display = hasPending && state.pendingSegments.length > 1 ? "block" : "none";
+      els.pendingSegmentsEl.style.display = state.pendingSegments.length > 1 ? "block" : "none";
       els.pendingSegmentsEl.textContent = state.pendingSegments.map(function (seg) {
         return "第 " + seg.groupIndex + "/" + seg.groupTotal + " 组：" +
           (seg.mode === "model" ? "模型" : "离线规则") +
           (seg.error ? "；错误：" + seg.error : "");
       }).join("\n");
     }
-    els.emptyHint.style.display = hasPending ? "none" : "";
     els.pendingList.textContent = "";
-    if (hasPending) {
-      var doc = state.pendingVersion ? state.pendingVersion.doc : g.App.doc;
-      state.pendingOps.forEach(function (op, i) {
-        els.pendingList.appendChild(h("li", { style: "margin:2px 0;" }, [
-          h("span", { style: "color:#555;", text: (i + 1) + ". [" + (op && op.op ? op.op : "?") + "] " }),
-          h("span", { text: describeOp(op, doc) })
-        ]));
-      });
-    }
+    var doc = state.pendingVersion ? state.pendingVersion.doc : g.App.doc;
+    state.pendingOps.forEach(function (op) {
+      els.pendingList.appendChild(h("li", { style: "margin:3px 0;" }, [
+        h("span", { text: describeOp(op, doc) })
+      ]));
+    });
     renderPendingVisual();
-    els.pendingBtnRow.style.display = hasPending ? "" : "none";
+    els.pendingBtnRow.style.display = "";
     if (els.applyBtn) {
-      els.applyBtn.disabled = !hasPending || stale || !!state.applying;
-      els.applyBtn.title = stale ? "文档已变化，请放弃旧预览并重新生成" :
-        (state.applying ? "另一项 AI 操作正在写入" : "将预览操作写入当前文档");
+      els.applyBtn.textContent = "同意并修改";
+      els.applyBtn.disabled = stale || !!state.applying;
+      els.applyBtn.title = stale ? "图在这之后又被改过，这份方案已失效，请重新发送。" :
+        (state.applying ? "另一项 AI 操作正在写入" : "将这份方案写入当前文档");
     }
-    if (els.discardBtn) els.discardBtn.disabled = !hasPending || !!state.applying;
+    if (els.discardBtn) {
+      els.discardBtn.textContent = "不改";
+      els.discardBtn.disabled = !!state.applying;
+    }
+    placePendingCard();
+    // 新方案或重绘后把卡片滚进视野（fake DOM 无 scrollIntoView 时跳过）。
+    if (els.applyBtn && typeof els.applyBtn.scrollIntoView === "function") {
+      try { els.applyBtn.scrollIntoView({ block: "nearest" }); } catch (e) { /* ignore */ }
+    }
   }
 
   function clearPending() {
@@ -705,6 +801,7 @@
     state.pendingMode = null;
     state.pendingSegments = [];
     state.pendingPreview = null; // 放弃/应用即释放预览内存
+    state.pendingAnchorIds = null;
     renderPending();
   }
 
@@ -739,7 +836,17 @@
     return tracked;
   }
 
+  // 「整图检查结果」details：无任何检查结果时整体隐藏；有结果时显示并展开，
+  // 给方案卡片让出对话区空间。
+  function syncTaskDetails() {
+    if (!els.taskDetails) return;
+    var has = !!(state.reviewItems && state.reviewItems.length);
+    els.taskDetails.style.display = has ? "" : "none";
+    if (has) els.taskDetails.open = true;
+  }
+
   function renderReview() {
+    syncTaskDetails();
     if (!els.reviewList) return;
     els.reviewList.textContent = "";
     if (!state.reviewItems.length) {
@@ -798,7 +905,7 @@
       return Promise.reject(staleError);
     }
     return beginApply(function () {
-      setProgressBusy("正在写入审阅修复（App.commit）");
+      setProgressBusy("正在写入审阅修复");
       setProgressPhase("applying", "正在应用该审阅意见的操作");
       return doCommit([item.op], {
         label: "AI 审阅：" + String(item.issue || "").slice(0, 40),
@@ -1089,6 +1196,14 @@
     renderAnchorRefs();
   }
 
+  // 发送时快照本次引用的锚点 [{id,label}]；应用成功后随同一事务移除，
+  // 放弃/失败/过期则原样保留。
+  function anchorIdsForPending() {
+    return (state.anchorRefs || []).map(function (r) {
+      return { id: r.id, label: r.label };
+    }).filter(function (r) { return r.id; });
+  }
+
   // 固定下栏不切换上半栏的工具 tab，也不抢输入焦点。
   function revealAiTab() {
     try {
@@ -1236,7 +1351,7 @@
         return existing;
       }
       if (!g.Anchors || typeof g.Anchors.addFromSelection !== "function") {
-        throw new Error("锚点模块 Anchors 未加载，无法从选区创建引用");
+        throw new Error("锚点功能未加载，无法从选区创建引用");
       }
       return Promise.resolve(g.Anchors.addFromSelection()).then(function (created) {
         if (!created) throw new Error("未能创建锚点，请检查选区是否具有有效包围盒");
@@ -1360,15 +1475,16 @@
     if (!state.messages.length) {
       els.chatLog.appendChild(h("div", {
         className: "ai-chat-hint",
-        style: "color:#6b7280;font-size:12px;line-height:1.55;padding:8px;",
-        text: "可以直接讨论这张图的布局、字号、配色和图表表达。回答依据结构化文档与可计算检查，不等同于看像素、数据验证或论文审美验收。"
+        style: "color:#6b7280;font-size:12px;line-height:1.55;padding:8px;user-select:text;",
+        text: "直接说想改什么，例如“把坐标轴字号调大一点”“把散点换成蓝色”。AI 会先给出修改方案，你点“同意并修改”后才会改图。AI 依据的是这张图的结构和样式数值，不是屏幕截图。"
       }));
+      placePendingCard();
       return;
     }
-    state.messages.forEach(function (m) {
+    state.messages.forEach(function (m, mi) {
       var isUser = m.role === "user";
       var isError = m.role === "error";
-      var label = isUser ? "你" : (m.role === "assistant" ? "AI 模型" : "操作状态");
+      var label = isUser ? "你" : (m.role === "assistant" ? "AI" : "操作状态");
       if (isError) label = "未能获得模型回复";
       var row = h("div", {
         className: "ai-message ai-message-" + m.role,
@@ -1378,16 +1494,28 @@
         style: "margin:6px 0;display:flex;justify-content:" + (isUser ? "flex-end" : "flex-start") + ";"
       });
       var children = [
-        h("div", { style: "font-size:10px;color:#64748b;margin-bottom:3px;", text: label +
-          (m.kind === "edit" ? " · 编辑预览" : "") }),
-        h("div", { style: "white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.55;",
+        h("div", { style: "font-size:10px;color:#64748b;margin-bottom:3px;display:flex;align-items:center;gap:6px;", }, [
+          h("span", { text: label + (m.kind === "edit" ? " · 编辑预览" : "") }),
+          (!isUser && m.status === "done" && typeof m.text === "string" && m.text)
+            ? h("button", {
+                type: "button", text: "复制", "data-action": "copy-message",
+                "data-message-index": String(mi),
+                style: "padding:0 6px;font-size:10px;cursor:pointer;line-height:1.4;",
+                onClick: function () { AiPanel.copyMessage(mi); }
+              }) : null
+        ]),
+        h("div", { style: "white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.55;" +
+          "user-select:text;-webkit-user-select:text;cursor:text;",
           text: m.text || "" })
       ];
       if (isError && m.kind === "chat" && state.lastChatError === m && !state.busy) {
         children.push(h("button", {
           type: "button", text: "重试这次问答", "data-action": "retry-chat",
           style: "margin-top:6px;padding:2px 10px;cursor:pointer;font-size:11px;",
-          onClick: function () { AiPanel.retryChat().catch(function () {}); }
+          onClick: function () {
+            var p = (m.retryVia === "send") ? AiPanel.retrySend() : AiPanel.retryChat();
+            p.catch(function () {});
+          }
         }));
       }
       row.appendChild(h("div", {
@@ -1398,11 +1526,12 @@
       }, children));
       els.chatLog.appendChild(row);
     });
+    placePendingCard();
     els.chatLog.scrollTop = els.chatLog.scrollHeight;
   }
 
   function setActionsBusy(busy) {
-    [els.chatBtn, els.askBtn, els.reviewBtn].forEach(function (btn) {
+    [els.sendBtn, els.reviewBtn].forEach(function (btn) {
       if (btn) btn.disabled = !!busy;
     });
   }
@@ -1591,7 +1720,7 @@
       ].join("\n");
       var messages = [{ role: "system", content: system }].concat(history);
       setProgressPhase(configKind() === "off" ? "offline" : "model_pending",
-        configKind() === "off" ? "当前没有可用模型，不能生成 AI 评价" : "等待自然语言回复（json:false）",
+        configKind() === "off" ? "当前没有可用模型，不能生成 AI 评价" : "正在等待 AI 回复",
         { rid: rid });
       startProgressPolling(rid, 0, 0);
       return g.FigAI.chat(messages, { json: false });
@@ -1611,15 +1740,17 @@
       return answer;
     }).catch(function (err) {
       var msg = configKind() === "off"
-        ? "当前没有可用模型连接，未生成 AI 评价。请在设置中复用 DSH 桥或填写 API Key。"
+        ? "当前没有可用模型连接，未生成 AI 评价。请在「设置」里连接 DSH 或填写 API Key。"
         : ((g.FigAI && g.FigAI.explainError) ? g.FigAI.explainError(err)
           : (err && err.message ? err.message : String(err)));
       active.role = "error";
       active.status = "error";
       active.text = msg + "。本次没有获得 AI 回复；可检查连接后重试。";
       state.lastChatError = active;
-      setBadge(configKind() === "bridge" ? "bridge-down" : "model-error", msg, "chat");
-      setProgressPhase(configKind() === "bridge" ? "bridge_error" : "model_error", msg, { rid: rid });
+      var chatCause = classifyChatError(err, msg);
+      setBadge(chatCause.kind, chatCause.detail, "chat");
+      setProgressPhase(chatCause.kind === "bridge-down" ? "bridge_error" : "model_error",
+        chatCause.detail, { rid: rid });
       renderConversation();
       throw err;
     }).finally(function () {
@@ -1640,7 +1771,7 @@
     var text = String(instruction == null ? (els.input ? els.input.value : "") : instruction).trim();
     if (!text) return Promise.reject(new Error("请先输入想讨论的问题"));
     if (!g.FigAI || typeof g.FigAI.chat !== "function") {
-      var err = new Error("FigAI.chat 未加载，无法请求模型；未生成 AI 评价");
+      var err = new Error("AI 功能未加载，无法请求模型");
       toast(err.message, { type: "error" });
       return Promise.reject(err);
     }
@@ -1650,7 +1781,7 @@
   AiPanel.retryChat = function () {
     if (!state.lastChatText) return Promise.reject(new Error("没有可重试的问答"));
     if (!g.FigAI || typeof g.FigAI.chat !== "function") {
-      return Promise.reject(new Error("FigAI.chat 未加载，无法重试"));
+      return Promise.reject(new Error("AI 功能未加载，无法重试"));
     }
     return runChat(state.lastChatText, true);
   };
@@ -1658,6 +1789,63 @@
   AiPanel.chatMessages = function () {
     return state.messages.map(function (m) {
       return { role: m.role, kind: m.kind, status: m.status, text: m.text };
+    });
+  };
+
+  // ------------------------------------------------------------------
+  // H2：复制 —— navigator.clipboard 优先，失败退回 execCommand
+  // ------------------------------------------------------------------
+  function copyTextToClipboard(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).then(function () { return true; })
+        .catch(function () { return legacyCopy(text); });
+    }
+    return Promise.resolve(legacyCopy(text));
+  }
+  function legacyCopy(text) {
+    try {
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      return !!ok;
+    } catch (e) { return false; }
+  }
+
+  /** AiPanel.copyMessage(index) —— 复制某条已完成消息的文本 */
+  AiPanel.copyMessage = function (index) {
+    var m = state.messages[index];
+    if (!m || typeof m.text !== "string" || !m.text) {
+      toast("没有可复制的内容", { type: "info" });
+      return Promise.resolve(false);
+    }
+    return copyTextToClipboard(m.text).then(function (ok) {
+      if (ok) toast("已复制", { type: "success" });
+      else toast("复制失败，请手动选择文本复制", { type: "error" });
+      return ok;
+    });
+  };
+
+  /** AiPanel.copyAll() —— 复制整段对话（你：… / AI：…） */
+  AiPanel.copyAll = function () {
+    var lines = [];
+    state.messages.forEach(function (m) {
+      if (!m || typeof m.text !== "string" || !m.text.trim()) return;
+      var who = m.role === "user" ? "你" : (m.role === "assistant" ? "AI" : "操作状态");
+      lines.push(who + "：" + m.text);
+    });
+    if (!lines.length) {
+      toast("没有可复制的内容", { type: "info" });
+      return Promise.resolve(false);
+    }
+    return copyTextToClipboard(lines.join("\n\n")).then(function (ok) {
+      if (ok) toast("已复制", { type: "success" });
+      else toast("复制失败，请手动选择文本复制", { type: "error" });
+      return ok;
     });
   };
 
@@ -1719,6 +1907,7 @@
     }
     var groups = splitByRefs(workText, map);
     var requestVersion = captureDocumentVersion(g.App.doc);
+    var pendingAnchorIds = anchorIdsForPending();
     var reqs = groups.map(function (gp, gi) {
       return {
         groupIndex: gi + 1,
@@ -1761,7 +1950,7 @@
             mode: res && res.mode === "model" ? "model" : "fallback", error: "", errorKind: ""
           };
           if (res && res.repaired) {
-            res.explanation = (res.explanation || "") + "（模型首次输出未通过 EditOp 校验：" +
+            res.explanation = (res.explanation || "") + "（模型首次输出未通过操作格式检查：" +
               res.first_problem + "；已请模型自我修正一次，修正结果仍需你确认后才会应用）";
           }
           if (segment.mode === "fallback" && res && res.fallback_stage === "validate") {
@@ -1769,8 +1958,15 @@
             segment.errorKind = "parse-error";
           } else if (segment.mode === "fallback" && res && res.fallback_stage === "request") {
             var failed = lastRecordSince(groupT0);
-            segment.error = (failed && failed.message) || res.fallback_reason;
-            segment.errorKind = configKind() === "bridge" ? "bridge-down" : "model-error";
+            if (failed) {
+              var segCause = classifyChatFailure(failed.errKind || "other",
+                failed.message || "", failed.timeoutMs || 0);
+              segment.errorKind = segCause.kind;
+              segment.error = segCause.detail;
+            } else {
+              segment.error = res.fallback_reason || "";
+              segment.errorKind = "model-error";
+            }
           } else if (segment.mode === "fallback") {
             var segmentCause = fallbackCause(groupT0);
             if (segmentCause.kind !== "fallback" && segmentCause.kind !== "offline") {
@@ -1827,6 +2023,7 @@
       state.pendingStale = !documentVersionIsCurrent(requestVersion);
       state.pendingMode = res.mode;
       state.pendingSegments = segments.slice();
+      state.pendingAnchorIds = pendingAnchorIds;
       // R05：在基线副本上构建真实渲染的前后图形预览（不写正式文档）。
       // 基线以 requestVersion.doc 为准（生成时的版本），与过期检查同源。
       state.pendingPreview = state.pendingOps.length && !state.pendingStale
@@ -1893,7 +2090,215 @@
     });
   };
 
-  /** AiPanel.applyPending() —— 用户点「应用」才写入文档 */
+  // ------------------------------------------------------------------
+  // H2：统一「发送」入口 —— 对话 + 可执行修改方案
+  // ------------------------------------------------------------------
+
+  function chatChecksAndProfile() {
+    var ctx = buildChatContext();
+    return {
+      checks: (ctx && ctx.computable_layout_checks) || [],
+      journalProfile: (ctx && ctx.document && ctx.document.journal_profile) || null
+    };
+  }
+
+  function showAssistPlan(res, requestVersion, instructionText, mode, anchorIds) {
+    var ops = Array.isArray(res && res.ops) ? res.ops : [];
+    if (!ops.length) return false;
+    var pv = AiPanel.buildVisualPreview(requestVersion.doc, ops);
+    if (!pv || !pv.ok) {
+      var why = pv && pv.error ? pv.error : "未知错误";
+      var active = state.activeChatMessage;
+      if (active) {
+        active.text = (active.text || "") +
+          "\n\n（修改方案没能通过检查：" + why + "。图没有改动。）";
+        renderConversation();
+      }
+      return false;
+    }
+    state.pendingOps = ops;
+    state.pendingExplanation = "";
+    state.pendingInstruction = instructionText;
+    state.pendingVersion = requestVersion;
+    state.pendingStale = !documentVersionIsCurrent(requestVersion);
+    state.pendingMode = mode || "model";
+    state.pendingSegments = [];
+    state.pendingAnchorIds = anchorIds ? anchorIds.slice() : null;
+    state.pendingPreview = pv;
+    renderPending();
+    return true;
+  }
+
+  /** AiPanel.send(instruction[, isRetry]) -> Promise<{reply, ops, mode}> */
+  AiPanel.send = function (instruction, isRetry) {
+    requireApp();
+    var text = String(instruction == null ? (els.input ? els.input.value : "") : instruction).trim();
+    if (!text) return Promise.reject(new Error("请先输入内容"));
+    if (state.busy || state.applying) return Promise.reject(new Error("正在处理上一条请求，请稍候"));
+    var generation = ++askSeq;
+    state.busy = true;
+    setActionsBusy(true);
+    var routed = routedChatText(text);
+    state.lastChatText = text;
+    state.lastChatError = null;
+    var requestVersion = captureDocumentVersion(g.App.doc);
+    var anchorIdsAtSend = anchorIdsForPending();
+    var doc = requestVersion.doc;
+    var selection = (typeof g.App.selection === "function") ? g.App.selection() : [];
+    var history = chatHistory(); // 不含本条（本条尚未追加）
+    var cp = chatChecksAndProfile();
+
+    if (!isRetry) {
+      if (state.pendingOps && state.pendingOps.length) {
+        clearPending();
+        appendMessage({ role: "local", kind: "chat", status: "done",
+          text: "上一份没有执行的修改方案已作废。" });
+      }
+      appendMessage({ role: "user", kind: "chat", status: "done",
+        text: text, modelContent: routed });
+      if (els.input) els.input.value = "";
+    }
+    var active = {
+      role: "assistant", kind: "chat", status: "waiting",
+      text: "正在等待 AI 回复…（图还没有任何改动）"
+    };
+    state.activeChatMessage = active;
+    appendMessage(active);
+    setProgressBusy("AI 请求进行中（阶段实时更新，非百分比）");
+    setProgressPhase("local_answer", "收集选区与结构化文档上下文");
+
+    function finishBusy() {
+      if (generation !== askSeq) return;
+      state.busy = false;
+      state.activeChatMessage = null;
+      stopProgressPolling();
+      setActionsBusy(!!state.applying);
+      setProgressBusy("");
+      renderConversation();
+    }
+
+    // ---- 无模型：内置规则 fallback ----
+    if (configKind() === "off") {
+      var fb = { ops: [], explanation: "" };
+      try {
+        fb = g.FigAI.fallbackOps({ doc: doc, instruction: routed,
+          anchors: (doc && doc.anchors) || [], selection: selection }) || fb;
+      } catch (e) { fb = { ops: [], explanation: "" }; }
+      var fbOps = Array.isArray(fb.ops) ? fb.ops : [];
+      if (!fbOps.length) {
+        var emsg = "当前没有可用的 AI 模型，内置规则也没有识别出可以执行的修改。" +
+          "请在「设置」里连接 DSH 或填写 API Key。";
+        active.role = "error"; active.status = "error"; active.text = emsg;
+        active.retryVia = "send";
+        state.lastChatError = active;
+        setBadge("offline", emsg, "chat");
+        setProgressPhase("offline", emsg);
+        renderConversation();
+        finishBusy();
+        return Promise.reject(new Error(emsg));
+      }
+      var fbpv = AiPanel.buildVisualPreview(doc, fbOps);
+      if (!fbpv || !fbpv.ok) {
+        var fwhy = fbpv && fbpv.error ? fbpv.error : "未知错误";
+        active.role = "assistant"; active.status = "done";
+        active.text = "当前没有连接 AI 模型，下面是按内置规则识别出的修改：" +
+          (fb.explanation || "") +
+          "\n\n（修改方案没能通过检查：" + fwhy + "。图没有改动。）";
+        setBadge("offline", "", "chat");
+        setProgressPhase("offline", "已按内置规则给出方案说明；图没有改动");
+        renderConversation();
+        finishBusy();
+        return Promise.resolve({ reply: active.text, ops: [], mode: "fallback" });
+      }
+      state.pendingOps = fbOps;
+      state.pendingExplanation = "当前没有连接 AI 模型，下面是按内置规则识别出的修改：" +
+        (fb.explanation || "");
+      state.pendingInstruction = text;
+      state.pendingVersion = requestVersion;
+      state.pendingStale = !documentVersionIsCurrent(requestVersion);
+      state.pendingMode = "fallback";
+      state.pendingSegments = [];
+      state.pendingAnchorIds = anchorIdsAtSend.slice();
+      state.pendingPreview = fbpv;
+      active.role = "assistant"; active.status = "done";
+      active.text = "当前没有连接 AI 模型，已按内置规则生成修改方案（见下方），确认后才会改图。";
+      setBadge("offline", "", "chat");
+      setProgressPhase("review_wait", "已按内置规则给出修改方案，等你确认；图还没有改动");
+      renderPending();
+      renderConversation();
+      finishBusy();
+      return Promise.resolve({ reply: active.text, ops: fbOps, mode: "fallback" });
+    }
+
+    // ---- 有模型：requestAssist ----
+    var rid = null;
+    return Promise.resolve().then(function () {
+      if (configKind() === "bridge" && g.Settings &&
+          typeof g.Settings.reserveRequestId === "function") {
+        rid = g.Settings.reserveRequestId("chat");
+      }
+      setProgressPhase("model_pending", "等待 AI 回复（reply + ops）", { rid: rid });
+      startProgressPolling(rid, 0, 0);
+      return g.FigAI.requestAssist({
+        doc: doc, instruction: routed,
+        anchors: (doc && doc.anchors) || [],
+        selection: selection, history: history,
+        chartPart: (g.App.ui && g.App.ui.chartPart) || null,
+        checks: cp.checks, journalProfile: cp.journalProfile
+      });
+    }).then(function (res) {
+      if (generation !== askSeq) return res;
+      stopProgressPolling();
+      if (rid && g.Settings && typeof g.Settings.releaseRequestId === "function") {
+        g.Settings.releaseRequestId(rid);
+      }
+      var reply = (res && typeof res.reply === "string") ? res.reply : "";
+      if (res && res.ops_error) {
+        reply += "\n\n（这次的修改方案没有通过检查，已省略。可以换个说法再试一次。）";
+      }
+      active.role = "assistant"; active.status = "done"; active.text = reply;
+      state.lastMode = "model"; state.lastChatError = null;
+      setBadge("model", "", "chat");
+      var ops = Array.isArray(res && res.ops) ? res.ops : [];
+      if (ops.length) {
+        var shown = showAssistPlan(res, requestVersion, text, "model", anchorIdsAtSend);
+        if (shown) {
+          setProgressPhase("review_wait", "已给出修改方案，等你确认；图还没有改动");
+        } else {
+          setProgressPhase("model_complete", "已回复；图没有改动");
+        }
+      } else {
+        setProgressPhase("model_complete", "已回复；图没有改动");
+      }
+      renderConversation();
+      return res;
+    }).catch(function (err) {
+      if (generation === askSeq) {
+        var msg = (g.FigAI && g.FigAI.explainError) ? g.FigAI.explainError(err)
+          : (err && err.message ? err.message : String(err));
+        active.role = "error"; active.status = "error";
+        active.text = msg + "。本次没有获得 AI 回复；可检查连接后重试。";
+        active.retryVia = "send";
+        state.lastChatError = active;
+        var sendCause = classifyChatError(err, msg);
+        setBadge(sendCause.kind, sendCause.detail, "chat");
+        setProgressPhase(sendCause.kind === "bridge-down" ? "bridge_error" : "model_error",
+          sendCause.detail, { rid: rid });
+        renderConversation();
+      }
+      throw err;
+    }).finally(function () {
+      finishBusy();
+    });
+  };
+
+  /** AiPanel.retrySend() —— 仅重试最近一次失败的发送，不重复追加用户消息 */
+  AiPanel.retrySend = function () {
+    if (!state.lastChatText) return Promise.reject(new Error("没有可重试的请求"));
+    return AiPanel.send(state.lastChatText, true);
+  };
+
+  /** AiPanel.applyPending() —— 用户点「同意并修改」才写入文档 */
   AiPanel.applyPending = function () {
     if (state.applying) return state.applying;
     if (!state.pendingOps || !state.pendingOps.length) {
@@ -1916,16 +2321,47 @@
     var pv = state.pendingPreview;
     var commitOps = pv && pv.ok && Array.isArray(pv.materializedOps) && pv.materializedOps.length
       ? pv.materializedOps : ops;
+    // 本次请求引用的锚点随同一事务移除：一次 Ctrl+Z 同时恢复修改与锚点；
+    // 方案自身已删除的锚点不重复加 op，已不存在的锚点跳过。
+    var removedAnchorLabels = [];
+    var pendingAnchors = Array.isArray(state.pendingAnchorIds) ? state.pendingAnchorIds : [];
+    if (pendingAnchors.length) {
+      var liveAnchorIds = {};
+      ((g.App.doc && g.App.doc.anchors) || []).forEach(function (a) {
+        if (a && a.id) liveAnchorIds[a.id] = true;
+      });
+      var planRemoves = {};
+      commitOps.forEach(function (op) {
+        if (op && op.op === "remove_anchor") {
+          var aid = op.anchor && op.anchor.id ? op.anchor.id :
+            (typeof op.id === "string" && op.id ? op.id : null);
+          if (aid) planRemoves[aid] = true;
+        }
+      });
+      var anchorOps = [];
+      pendingAnchors.forEach(function (ref) {
+        if (ref && ref.id && liveAnchorIds[ref.id] && !planRemoves[ref.id]) {
+          anchorOps.push({ op: "remove_anchor", anchor: { id: ref.id },
+            reason: "AI 修改应用后清除本次引用的锚点" });
+          removedAnchorLabels.push("[" + (ref.label != null ? ref.label : ref.id) + "]");
+        }
+      });
+      if (anchorOps.length) commitOps = commitOps.concat(anchorOps);
+    }
     var label = "AI：" + (state.pendingInstruction || "编辑指令").slice(0, 40);
     return beginApply(function () {
-      setProgressBusy("正在写入文档（App.commit）");
-      setProgressPhase("applying", "正在通过 App.commit 应用 " + commitOps.length + " 条操作");
+      setProgressBusy("正在修改图…");
+      setProgressPhase("applying", "正在执行 " + commitOps.length + " 项修改");
       return doCommit(commitOps, { label: label, source: "ai" }).then(function (r) {
         if (r && r.applied > 0) {
           var n = r.applied;
           if (state.pendingOps === ops) clearPending();
           setProgressPhase("applied_done", "已写入文档（" + n + " 条操作）");
-          toast("已应用 " + n + " 条 AI 操作", { type: "success" });
+          var anchorNote = removedAnchorLabels.length
+            ? "，本次使用的锚点 " + removedAnchorLabels.join("、") + " 已清除" : "";
+          appendMessage({ role: "local", kind: "edit", status: "done",
+            text: "已按方案修改 " + n + " 项" + anchorNote + "。不满意可以按 Ctrl+Z 撤销。" });
+          if (removedAnchorLabels.length) clearAnchorRefs();
           return r;
         }
         setProgressPhase("apply_error", "操作校验未通过或目标不存在；待应用操作已保留，可修改后重试");
@@ -1938,11 +2374,25 @@
     });
   };
 
-  /** AiPanel.discardPending() */
-  AiPanel.discardPending = function () {
+  /** AiPanel.discardPending(text?) — text 可选自定义本地说明 */
+  AiPanel.discardPending = function (text) {
     clearPending();
     clearProgress();
-    toast("已放弃待应用的 AI 操作", { type: "info" });
+    appendMessage({ role: "local", kind: "edit", status: "done",
+      text: typeof text === "string" && text ? text :
+        "已放弃这份修改方案，图没有变化。" });
+  };
+
+  /** 测试钩子：注入一份待执行方案（等价于 requestOps 成功后的 pending 态），
+   *  供标签页切换「作废未执行方案」等 UI 测试使用；不走网络。 */
+  AiPanel.__setPendingForTest = function (ops) {
+    state.pendingOps = Array.isArray(ops) ? ops.slice() : [];
+    state.pendingVersion = captureDocumentVersion(g.App.doc);
+    state.pendingStale = false;
+    state.pendingMode = "model";
+    state.pendingSegments = [];
+    state.pendingPreview = null;
+    renderPending();
   };
 
   function blobToDataURL(blob) {
@@ -1962,7 +2412,7 @@
     var kind = configKind();
     var withImage = kind === "direct";
     if (withImage && (!g.FigExport || typeof g.FigExport.toRasterBlob !== "function")) {
-      return Promise.reject(new Error("FigExport 未加载，无法栅格化画布"));
+      return Promise.reject(new Error("图像导出功能未加载，无法生成画布图像"));
     }
     var requestVersion = captureDocumentVersion(g.App.doc);
     state.busy = true;
@@ -2029,7 +2479,27 @@
         if (res.mode === "model") {
           setBadge("model", "", "ask");
         } else {
-          var cause = fallbackCause(t0);
+          // 与 ask 分段同一契约：validate=输出不可解析；request=调用失败，
+          // 由最近一次 chat 记录区分超时（未断开）与真实断开。
+          var cause;
+          if (res.fallback_stage === "validate") {
+            cause = { kind: "parse-error",
+              detail: res.fallback_reason || "模型响应无法解析，已回退" };
+          } else {
+            cause = fallbackCause(t0);
+            if (res.fallback_stage === "request") {
+              // 与分段/聊天同一分类：以最近一次 chat 记录为准（超时≠断开，
+              // 桥已应答的 HTTP/模型错误是 model-error 而非 bridge-down）。
+              var rec = lastRecordSince(t0);
+              if (rec) {
+                cause = classifyChatFailure(rec.errKind || "other",
+                  rec.message || res.fallback_reason || "", rec.timeoutMs || 0);
+              } else if ((cause.kind === "fallback" || cause.kind === "offline") &&
+                  res.fallback_reason) {
+                cause = { kind: "model-error", detail: res.fallback_reason };
+              }
+            }
+          }
           setBadge(cause.kind, cause.detail, "ask");
           if (cause.kind !== "fallback" && cause.kind !== "offline") {
             errorCause = cause;
@@ -2111,14 +2581,20 @@
       h("strong", { text: "AI 对话" }),
       els.badge = h("span", { text: "当前模式：未调用" }),
       h("span", { style: "flex:1;" }),
+      els.copyAllBtn = h("button", {
+        id: "ai-copy-all", text: "复制全部", title: "复制整段对话记录",
+        style: "padding:1px 8px;font-size:11px;cursor:pointer;white-space:nowrap;",
+        onClick: function () { AiPanel.copyAll(); }
+      }),
       titleBtn
     ]);
     AiPanel.refreshStatus();
 
     els.chatLog = h("div", {
       id: "ai-chat-log", role: "log", "aria-live": "polite",
-      style: "flex:1 1 auto;min-height:86px;overflow-y:auto;overflow-x:hidden;padding:2px 3px;" +
-        "border:1px solid #e3e7ed;border-radius:6px;background:#fff;"
+      style: "flex:1 1 auto;min-height:48px;overflow-y:auto;overflow-x:hidden;padding:2px 3px;" +
+        "border:1px solid #e3e7ed;border-radius:6px;background:#fff;" +
+        "user-select:text;-webkit-user-select:text;cursor:text;"
     });
 
     els2.busyBar = h("div", { className: "ai-busy-track" }, [
@@ -2144,8 +2620,15 @@
 
     els.input = h("textarea", {
       id: "ai-chat-input", maxLength: "4000",
-      placeholder: "讨论这张图，或右键画布元素/选框发送给 AI 后说明局部修改；[1] 会精确对应锚点",
+      placeholder: "说说想怎么改这张图，或者直接提问。右键画布元素可以「发送给 AI」指定对象。Enter 发送，Shift+Enter 换行",
       style: "width:100%;height:58px;box-sizing:border-box;font-size:13px;margin-top:6px;resize:none;flex:0 0 auto;"
+    });
+    els.input.addEventListener("keydown", function (evt) {
+      if (evt.key !== "Enter") return;
+      if (evt.shiftKey) return;                 // Shift+Enter 换行
+      if (evt.isComposing || evt.keyCode === 229) return; // 输入法组字中不发送
+      evt.preventDefault();
+      onAction(AiPanel.send());
     });
     els.refChips = h("div", {
       className: "ai-anchor-refs",
@@ -2158,60 +2641,78 @@
         if (err) toast(err.message || String(err), { type: "error" });
       });
     }
-    els.chatBtn = h("button", {
-      id: "ai-discuss-btn", text: "讨论", title: "讨论：自然语言问答；不会生成或应用编辑操作",
-      style: "padding:4px 10px;cursor:pointer;white-space:nowrap;",
-      onClick: function () { onAction(AiPanel.chat()); }
-    });
-    els.askBtn = h("button", {
-      id: "ai-edit-btn", text: "修改", title: "修改：由指令生成编辑操作，先预览（含前后图形对比），确认应用后才写入文档",
-      style: "padding:4px 10px;cursor:pointer;white-space:nowrap;",
-      onClick: function () { onAction(AiPanel.ask()); }
+    els.sendBtn = h("button", {
+      id: "ai-send-btn", text: "发送", title: "发送：由指令生成回复与可执行修改方案，确认后才改图",
+      style: "padding:4px 12px;cursor:pointer;white-space:nowrap;font-weight:bold;",
+      onClick: function () { onAction(AiPanel.send()); }
     });
     els.reviewBtn = h("button", {
-      id: "ai-review-btn", text: "检查", title: "检查：独立审阅当前画布、布局、可读性与统计声明",
+      id: "ai-review-btn", text: "检查整图", title: "检查整图：独立审阅当前画布、布局、可读性与统计声明",
       style: "padding:4px 10px;cursor:pointer;white-space:nowrap;",
       onClick: function () { onAction(AiPanel.review()); }
     });
     var actions = h("div", {
       style: "display:flex;gap:5px;flex-wrap:wrap;margin:6px 0;flex:0 0 auto;"
-    }, [els.chatBtn, els.askBtn, els.reviewBtn]);
+    }, [els.sendBtn, els.reviewBtn]);
 
-    els.pendingBox = h("div", { style: "margin:4px 0 8px;padding:7px;background:#f8f9fa;border-radius:6px;" });
-    els.pendingModeEl = h("div", { style: "margin:3px 0;font-weight:bold;" });
-    els.pendingExpEl = h("div", { style: "margin:3px 0;white-space:pre-wrap;font-size:12px;" });
+    // 方案卡片：作为 #ai-chat-log 的最后一个子节点进入滚动流（见 placePendingCard），
+    // 不再是对话记录与输入框之间的独立固定区域。
+    els.pendingBox = h("div", {
+      "data-plan-card": "true",
+      style: "display:none;margin:8px 0;padding:8px 10px;background:#fefce8;" +
+        "border:1px solid #fde68a;border-radius:8px;font-size:12px;"
+    });
+    els.pendingTitleEl = h("div", {
+      style: "font-weight:bold;font-size:12px;margin-bottom:4px;color:#1f2937;"
+    });
+    els.pendingList = h("ol", {
+      style: "margin:2px 0 6px 20px;padding:0;font-size:12px;line-height:1.5;"
+    });
+    els.pendingModeEl = h("div", { style: "margin:2px 0;font-size:11px;color:#92400e;" });
+    els.pendingExpEl = h("div", {
+      style: "display:none;margin:3px 0;white-space:pre-wrap;font-size:12px;color:#374151;"
+    });
     els.pendingSegmentsEl = h("div", {
       "data-pending-segments": "true",
       style: "display:none;margin:3px 0;white-space:pre-wrap;font-size:11px;color:#7c2d12;"
     });
-    els.pendingList = h("ol", { style: "margin:4px 0 4px 18px;padding:0;font-size:12px;" });
+    els.pendingStaleEl = h("div", {
+      "data-plan-stale": "true",
+      style: "display:none;margin:4px 0;padding:4px 6px;border-radius:4px;" +
+        "background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;font-size:11px;"
+    });
     els.pendingVisualWrap = h("div", {
       "data-pending-visual": "true",
       style: "display:none;margin:4px 0;"
     });
     els.pendingVisual = h("div", {});
     els.pendingVisualWrap.appendChild(els.pendingVisual);
-    els.emptyHint = h("div", { style: "color:#888;font-size:12px;", text: "尚无待应用的 AI 操作。" });
-    els.applyBtn = h("button", { text: "应用", style: "padding:3px 16px;cursor:pointer;font-weight:bold;",
+    els.previewDetails = h("details", {
+      "data-plan-preview": "true",
+      style: "display:none;margin:4px 0;"
+    }, [
+      h("summary", { text: "查看修改前后对比", style: "cursor:pointer;color:#475569;font-size:11px;" }),
+      els.pendingVisualWrap
+    ]);
+    els.applyBtn = h("button", { text: "同意并修改", style: "padding:3px 16px;cursor:pointer;font-weight:bold;",
       onClick: function () { onAction(AiPanel.applyPending()); } });
-    els.discardBtn = h("button", { text: "放弃", style: "padding:3px 16px;cursor:pointer;margin-left:8px;",
+    els.discardBtn = h("button", { text: "不改", style: "padding:3px 16px;cursor:pointer;margin-left:8px;",
       onClick: function () { AiPanel.discardPending(); } });
     els.pendingBtnRow = h("div", { style: "margin-top:6px;" }, [els.applyBtn, els.discardBtn]);
-    els.pendingBox.appendChild(els.pendingModeEl);
-    els.pendingBox.appendChild(els.pendingExpEl);
-    els.pendingBox.appendChild(els.pendingSegmentsEl);
-    els.pendingBox.appendChild(els.pendingVisualWrap);
-    els.pendingBox.appendChild(els.emptyHint);
+    els.pendingBox.appendChild(els.pendingTitleEl);
     els.pendingBox.appendChild(els.pendingList);
+    els.pendingBox.appendChild(els.pendingModeEl);
+    els.pendingBox.appendChild(els.pendingSegmentsEl);
+    els.pendingBox.appendChild(els.pendingExpEl);
+    els.pendingBox.appendChild(els.previewDetails);
+    els.pendingBox.appendChild(els.pendingStaleEl);
     els.pendingBox.appendChild(els.pendingBtnRow);
 
     els.reviewList = h("div", { style: "margin-top:4px;font-size:12px;" });
     els.taskDetails = h("details", {
       style: "flex:0 1 auto;min-height:24px;max-height:180px;overflow-y:auto;margin-top:2px;font-size:12px;"
     }, [
-      h("summary", { text: "编辑预览与审阅结果（与自然问答、科学论证分开）",
-        style: "cursor:pointer;color:#475569;padding:3px 0;" }),
-      els.pendingBox,
+      h("summary", { text: "整图检查结果", style: "cursor:pointer;color:#475569;padding:3px 0;" }),
       h("div", { style: "font-weight:bold;margin-top:4px;", text: "AI 审阅当前图" }),
       els.reviewList
     ]);

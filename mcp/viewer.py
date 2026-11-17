@@ -11,11 +11,15 @@
   GET  /                 返回 viewer_static/index.html
   GET  /app/* /styles/*  viewer_static 下的静态文件
   GET  /lib/*            v3-agent-plugin/lib（shared/lib 逐字节副本，前端内核）
-  GET  /shared/presets/* shared/presets 下的三个 JSON（供前端直接 fetch）
+  GET  /shared/presets/* shared/presets 下的 JSON（供前端直接 fetch）
   GET  /api/health       {ok, viewer, version, has_doc}   （mcp_server 探测用）
   GET  /api/status       {ok, version, port, python, pillow, doc, presets, ...}
-  GET  /api/presets      {ok, journals, templates, palettes}（shared/presets 原样）
-  GET  /api/current      当前文档（含 history）：{ok, doc, save_token}；尚无文档时 404
+  GET  /api/presets      {ok, journals, templates, palettes, styles}（shared/presets 原样）
+  GET  /api/prefs        {ok, prefs:{default_style_id, custom_styles}}（用户风格偏好）
+  POST /api/prefs        {patch:{...}} 部分更新偏好（未知键拒绝；原子写 prefs.json）
+  GET  /api/current      当前文档（含 history）：{ok, exists, doc, save_token}；
+                         尚无文档时 200 + {ok:true, exists:false, doc:null,
+                         save_token:null}（空态是正常响应，不是错误）
   POST /api/current      {doc, base_token} 条件保存（docio.save_project / atomic_write）；
                          冲突返回 409 + save_conflict + 当前 save_token
   POST /api/export       {doc?, format: png|jpeg|tiff|pdf|svg, dpi?,
@@ -34,8 +38,21 @@
                          data/stats/recommended/sheets/notices/source_info；不写当前工程、
                          不调用模型，工作簿最大 20 MiB
 
-  GET/POST /api/doc      GET 同样返回 save_token；POST 兼容显式整文档推送，
+  GET/POST /api/doc      GET 同 /api/current（含 exists 空态字段）；
+                         POST 兼容显式整文档推送，
                          携带 base_token 时也执行条件保存
+  GET  /api/tabs         {ok, active_id, tabs:[{id,title,elements,updated}]}
+  POST /api/tabs/new     {doc, base_token} 新建标签页并切为活动
+                         （空服务器 base_token:null；409 同 /api/current）
+  POST /api/tabs/switch  {to_id, base_token} 切换活动标签页
+  POST /api/tabs/close   {id, base_token} 关闭标签页（归档到 tabs/closed/，
+                         不删除；活动标签先切邻居；最后一个不可关）
+  GET  /api/tabs/closed  {ok, closed:[{file,id,title,elements,closed_at}]}，
+  GET  /api/tabs/doc?id=<tabId>  {ok, doc} 只读返回指定标签页文档
+                                  （活动标签=当前文档；id 须在标签表内）
+                         最新在前，最多 50 条；file 仅为归档 basename
+  POST /api/tabs/restore {file, base_token} 把归档移回 tabs/<id>.figureproj.json
+                         并激活；该 id 已是打开标签时等价于切换（归档保留）
   GET  /api/ai/health    {ok, bridge, chatUrl}：FIGURE_LLM_BRIDGE 是否已注入
   POST /api/ai/chat      原样转发到本机 llm 桥；非 2xx 保持原状态码并规范化
                          错误体为 {"ok": false, "error": ...}（不伪装成 200）
@@ -88,7 +105,8 @@ SHARED_PRESETS_DIR = next(
     (p for p in _SHARED_PRESETS_CANDIDATES if (p / "journals.json").is_file()),
     _SHARED_PRESETS_CANDIDATES[-1],
 )
-PRESET_FILES = ("journals.json", "templates.json", "palettes.json")
+PRESET_FILES = ("journals.json", "templates.json", "palettes.json", "styles.json",
+                "diagram_themes.json")
 
 sys.path.insert(0, str(PY_DIR))
 
@@ -119,6 +137,12 @@ else:  # pragma: no cover — figpaths 缺失时回退旧行为并提示
     PROJECT_DIR = PLUGIN_DIR / "projects"
 CURRENT_PROJECT_PATH = PROJECT_DIR / "current.figureproj.json"
 
+# R5：用户偏好（默认风格/我的风格）存数据目录根的 prefs.json，与工程同级。
+if FIGPATHS is not None:
+    PREFS_PATH = FIGPATHS.data_dir() / "prefs.json"
+else:  # pragma: no cover
+    PREFS_PATH = PROJECT_DIR.parent / "prefs.json"
+
 # R03 教学示例目录（examples/teaching；只经 /teaching/*.json 白名单提供）
 TEACHING_DIR = PLUGIN_DIR.parent / "examples" / "teaching"
 
@@ -141,8 +165,8 @@ EXPORT_CONTENT_TYPES = {
     "svg": "image/svg+xml; charset=utf-8",
 }
 
-# /api/ai/chat 转发本机 llm 桥的超时；内核前端默认 60s 自行中止，取 90s 留余量。
-AI_CHAT_TIMEOUT_SECONDS = 90
+# /api/ai/chat 转发本机 llm 桥的超时；前端审阅请求可到 180s，取 200s 留余量。
+AI_CHAT_TIMEOUT_SECONDS = 200
 # /api/ai/progress 反查模型桥进度的超时（轻量状态查询，必须快速返回）。
 AI_PROGRESS_TIMEOUT_SECONDS = 2
 # 进度任务表上限：只保留最近有限条（FIFO 淘汰），避免长会话无界增长。
@@ -166,8 +190,8 @@ MIME_TYPES = {
     ".map": "application/json; charset=utf-8",
 }
 
-_STATE_LOCK = threading.Lock()
-_STATE = {"doc": None, "project_path": None}
+_STATE_LOCK = threading.RLock()
+_STATE = {"doc": None, "project_path": None, "save_token": None}
 
 SERVER_PORT = {"value": DEFAULT_PORT}
 
@@ -291,6 +315,22 @@ def _get_current_doc():
         return _STATE["doc"]
 
 
+def _current_save_token():
+    """当前文档的缓存 save_token。
+
+    _STATE["doc"] 只允许整体替换赋值（不存在原地修改），每次赋值处同步更新
+    _STATE["save_token"]，因此这里始终与当前文档一致，避免每个请求对整份
+    文档重新序列化 + SHA256。兼容测试/外部直接重置为旧式两键
+    {"doc","project_path"} 字典的情况：缺缓存时现算并回填。"""
+    with _STATE_LOCK:
+        token = _STATE.get("save_token")
+        doc = _STATE.get("doc")
+        if token is None and doc is not None:
+            token = _save_token(doc)
+            _STATE["save_token"] = token
+        return token
+
+
 def _validate_or_raise(doc):
     """docio.validate_doc 校验，失败抛 ValueError（中文错误列表拼接）。"""
     if DOCIO is None:
@@ -329,8 +369,12 @@ def _validate_base_token(base_token):
         raise ValueError("base_token 必须是 null 或 GET 文档时返回的 save_token")
 
 
-def _save_current(doc, base_token=_EXPLICIT_REPLACE):
-    """校验、按条件比较并原子落盘，在锁内最后发布本次文档。"""
+def _save_current(doc, base_token=_EXPLICIT_REPLACE, preserve_tabs=False):
+    """校验、按条件比较并原子落盘，在锁内最后发布本次文档。
+
+    preserve_tabs=True 仅用于 /api/doc 显式整体替换：推送 id 与当前 id 不同时
+    先保留旧活动标签（见 _tabs_preserve_on_replace_locked）。标签页内部切换
+    与前端条件保存不传该标志，维持原有原位替换语义。"""
     _validate_or_raise(doc)
     if base_token is not _EXPLICIT_REPLACE:
         _validate_base_token(base_token)
@@ -338,13 +382,239 @@ def _save_current(doc, base_token=_EXPLICIT_REPLACE):
     PROJECT_DIR.mkdir(parents=True, exist_ok=True)
     with _STATE_LOCK:
         if base_token is not _EXPLICIT_REPLACE:
-            current_token = _save_token(_STATE["doc"])
+            current_token = _current_save_token()
             if base_token != current_token:
                 raise SaveConflict(current_token)
+        elif preserve_tabs:
+            _tabs_preserve_on_replace_locked(doc)
         path = DOCIO.save_project(doc, str(CURRENT_PROJECT_PATH))
         _STATE["doc"] = doc
+        _STATE["save_token"] = save_token
         _STATE["project_path"] = path
     return path, save_token
+
+
+# ---- 多画布标签页（tabs）----
+# PROJECT_DIR/tabs/index.json  {order:[doc_id], active:doc_id}
+# PROJECT_DIR/tabs/<doc_id>.figureproj.json  各标签页最近一次保存副本
+# PROJECT_DIR/tabs/closed/<id>-<ts>.figureproj.json  关闭归档（不删除）
+TABS_DIR = PROJECT_DIR / "tabs"
+TABS_INDEX_PATH = TABS_DIR / "index.json"
+TABS_CLOSED_DIR = TABS_DIR / "closed"
+
+
+def _tabs_normalize(idx):
+    """当前文档 id 是活动标签的唯一权威：
+    - 当前 id 已在 order 中 → active 强制为它；
+    - 当前 id 不在 order 中（MCP /api/doc 推送或前端换 id 保存覆盖了活动标签）
+      → 原位替换 active 项的 id，active 设为当前 id。"""
+    doc = _STATE.get("doc")
+    did = doc.get("id") if isinstance(doc, dict) else None
+    if not (isinstance(did, str) and did):
+        return idx
+    order = [d for d in (idx.get("order") or [])
+             if isinstance(d, str) and d]
+    if did not in order:
+        active = idx.get("active")
+        if active in order:
+            order[order.index(active)] = did
+        else:
+            order.append(did)
+    idx["order"] = order
+    idx["active"] = did
+    return idx
+
+
+def _tabs_index_load():
+    """读取标签顺序（已归一化）；index 缺失时由当前文档推导单标签。"""
+    try:
+        if TABS_INDEX_PATH.is_file():
+            data = json.loads(TABS_INDEX_PATH.read_text(encoding="utf-8"))
+            order = data.get("order") if isinstance(data, dict) else None
+            active = data.get("active") if isinstance(data, dict) else None
+            if isinstance(order, list):
+                idx = {"order": [str(x) for x in order
+                                 if isinstance(x, str) and x],
+                       "active": active if isinstance(active, str) else None}
+                return _tabs_normalize(idx)
+    except Exception:
+        pass
+    doc = _STATE.get("doc")
+    did = doc.get("id") if isinstance(doc, dict) else None
+    if isinstance(did, str) and did:
+        return {"order": [did], "active": did}
+    return {"order": [], "active": None}
+
+
+def _tabs_index_ensure():
+    """返回归一化 index；与磁盘内容不一致（缺失/被替换）时落盘。"""
+    idx = _tabs_index_load()
+    try:
+        raw = json.loads(TABS_INDEX_PATH.read_text(encoding="utf-8")) \
+            if TABS_INDEX_PATH.is_file() else None
+    except Exception:
+        raw = None
+    if (not isinstance(raw, dict)
+            or raw.get("order") != idx["order"]
+            or raw.get("active") != idx["active"]):
+        _tabs_index_save(idx)
+    return idx
+
+
+def _tabs_index_save(idx):
+    TABS_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {"order": list(idx.get("order") or []),
+               "active": idx.get("active")}
+    tmp = TABS_INDEX_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                   encoding="utf-8")
+    os.replace(str(tmp), str(TABS_INDEX_PATH))
+
+
+def _tab_file(doc_id):
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(doc_id))
+    return TABS_DIR / (safe + ".figureproj.json")
+
+
+def _tabs_save_current_locked():
+    """把 _STATE 当前文档落到它自己的标签文件（须在 _STATE_LOCK 内调用）。
+    写失败抛错——调用方必须中止整个标签操作，不得带病继续。"""
+    doc = _STATE.get("doc")
+    if not isinstance(doc, dict):
+        return
+    did = doc.get("id")
+    if not isinstance(did, str) or not did or DOCIO is None:
+        return
+    DOCIO.save_project(doc, str(_tab_file(did)))
+
+
+def _tabs_write_doc_file(doc, doc_id):
+    """把给定文档写到指定标签文件（新建标签用）。"""
+    DOCIO.save_project(doc, str(_tab_file(doc_id)))
+
+
+def _tabs_preserve_on_replace_locked(new_doc):
+    """MCP /api/doc 推送不同 id 文档时保留旧活动标签（须在 _STATE_LOCK 内、
+    且在 _STATE["doc"] 被替换前调用）：
+
+    1) 旧活动文档先落到自己的标签文件——其最新内容此前只在
+       current.figureproj.json，tabs/ 下副本只在切换时更新；
+    2) index 中已有同 id → 设为 active；否则追加到 order 末尾并设为 active；
+    3) 把推送文档写到它自己的标签文件。
+
+    同 id 推送、空服务器、旧文档无有效 id 时不做任何事（维持原行为）。"""
+    old = _STATE.get("doc")
+    new_id = new_doc.get("id") if isinstance(new_doc, dict) else None
+    if not (isinstance(new_id, str) and new_id):
+        return
+    old_id = old.get("id") if isinstance(old, dict) else None
+    if not (isinstance(old_id, str) and old_id) or old_id == new_id:
+        return
+    # 全新服务器可能从未初始化过 tabs/（此前只有 /api/doc 推送）：
+    # _tabs_save_current_locked/_tabs_write_doc_file 都要求父目录已存在。
+    TABS_DIR.mkdir(parents=True, exist_ok=True)
+    _tabs_save_current_locked()
+    idx = _tabs_index_ensure()
+    order = list(idx.get("order") or [])
+    if new_id not in order:
+        order.append(new_id)
+        idx["order"] = order
+    idx["active"] = new_id
+    _tabs_index_save(idx)
+    _tabs_write_doc_file(new_doc, new_id)
+
+
+def _tabs_entry(doc_id, doc=None):
+    """{id,title,elements,updated}；doc 缺省时尝试读标签文件。"""
+    if doc is None:
+        try:
+            if _tab_file(doc_id).is_file():
+                doc = DOCIO.load_project(str(_tab_file(doc_id))).get("doc")
+        except Exception:
+            doc = None
+    if not isinstance(doc, dict):
+        return {"id": doc_id, "title": "", "elements": 0, "updated": None}
+    els = doc.get("elements")
+    updated = None
+    try:
+        updated = datetime.fromtimestamp(
+            _tab_file(doc_id).stat().st_mtime, tz=timezone.utc).isoformat()
+    except Exception:
+        pass
+    return {"id": doc_id,
+            "title": str(doc.get("title") or ""),
+            "elements": len(els) if isinstance(els, list) else 0,
+            "updated": updated}
+
+
+def _tabs_list():
+    idx = _tabs_index_load()
+    cur = _get_current_doc()
+    cur_id = cur.get("id") if isinstance(cur, dict) else None
+    return idx, [_tabs_entry(d, cur if d == cur_id else None)
+                for d in idx["order"]]
+
+
+def _tabs_check_token(base_token):
+    """base_token 必须等于当前文档 save_token（同 /api/current 语义）。
+    空服务器（无当前文档）时 base_token 必须为 null。"""
+    _validate_base_token(base_token)
+    current = _current_save_token()
+    if base_token != current:
+        raise SaveConflict(current)
+
+
+_CLOSED_TS_RE = re.compile(r"-(\d{8}T\d{6}Z)\.figureproj\.json$")
+
+
+def _tabs_closed_list():
+    """已关闭标签归档列表：最新在前，最多 50 条。
+    file 只回 basename；closed_at 优先取文件名中的归档时间戳，
+    解析失败退回文件 mtime。读不出的文件仍列出（id 尽力从文件名推断），
+    还原时会再次加载校验。"""
+    out = []
+    try:
+        files = sorted(TABS_CLOSED_DIR.glob("*.figureproj.json"),
+                       key=lambda p: p.stat().st_mtime, reverse=True)
+    except Exception:
+        return out
+    for p in files[:50]:
+        entry = {"file": p.name, "id": None, "title": "",
+                 "elements": 0, "closed_at": None}
+        mm = _CLOSED_TS_RE.search(p.name)
+        if mm:
+            try:
+                entry["closed_at"] = datetime.strptime(
+                    mm.group(1), "%Y%m%dT%H%M%SZ").replace(
+                    tzinfo=timezone.utc).isoformat()
+            except Exception:
+                pass
+        if entry["closed_at"] is None:
+            try:
+                entry["closed_at"] = datetime.fromtimestamp(
+                    p.stat().st_mtime, tz=timezone.utc).isoformat()
+            except Exception:
+                pass
+        stem = p.name[:-len(".figureproj.json")]
+        if mm:
+            stem = p.name[:mm.start()]
+        if DOCIO is None:
+            entry["id"] = stem or None
+            out.append(entry)
+            continue
+        try:
+            doc = DOCIO.load_project(str(p)).get("doc")
+        except Exception:
+            doc = None
+        if isinstance(doc, dict):
+            entry["id"] = doc.get("id")
+            entry["title"] = str(doc.get("title") or "")
+            els = doc.get("elements")
+            entry["elements"] = len(els) if isinstance(els, list) else 0
+        else:
+            entry["id"] = stem or None
+        out.append(entry)
+    return out
 
 
 def _doc_summary(doc):
@@ -466,6 +736,55 @@ class ViewerHandler(BaseHTTPRequestHandler):
         except json.JSONDecodeError as exc:
             raise ValueError("请求体不是有效 JSON：%s" % exc) from exc
 
+    # ---- 统一请求守卫 -------------------------------------------------------
+    # loopback 绑定只挡外部机器；本机任意网页仍可向 127.0.0.1 发请求
+    # （浏览器把它当成同源无关的跨域 POST，text/plain 也能到达）。这里在
+    # 请求入口统一收口：
+    #   - 所有请求：Host 必须是 127.0.0.1:<port> / localhost:<port> / [::1]:<port>
+    #     （防 DNS 重绑定把域名解析到 loopback 后携带自有 Host/Origin 通过检查）；
+    #   - 所有 POST：带 Origin 头时必须是 http://<上述三个 loopback>:<port>，
+    #     "null" 与其他值一律 403；不带 Origin 的 Python/MCP 推送与测试客户端放行；
+    #   - 所有 POST：Content-Type 主类型必须是 application/json，否则 415；
+    #     /api/import-spreadsheet 除外（保留路由内检查 -> 400）。
+    # 各路由原有的 loopback client_address 检查保留不动。
+
+    def _guard_request(self):
+        # 端口取实际绑定地址而非 SERVER_PORT 全局：测试/内嵌方可能直接用
+        # ThreadingHTTPServer(("127.0.0.1", 0), ViewerHandler) 起临时实例，
+        # 不经过 serve()，SERVER_PORT["value"] 会停留在默认值。
+        try:
+            port = int(self.server.server_address[1])
+        except Exception:
+            port = SERVER_PORT["value"]
+        host = (self.headers.get("Host") or "").strip()
+        allowed_hosts = {"127.0.0.1:%d" % port, "localhost:%d" % port,
+                         "[::1]:%d" % port}
+        if host not in allowed_hosts:
+            self._send_json({"ok": False, "error": "非法 Host：%s" % host}, 403)
+            return False
+        if self.command == "POST":
+            origin = self.headers.get("Origin")
+            if origin is not None:
+                allowed_origins = {"http://127.0.0.1:%d" % port,
+                                   "http://localhost:%d" % port,
+                                   "http://[::1]:%d" % port}
+                if origin not in allowed_origins:
+                    self._send_json(
+                        {"ok": False, "error": "非法 Origin：%s" % origin}, 403)
+                    return False
+            # /api/import-spreadsheet 保留路由内自带的 Content-Type 检查
+            # （ValueError -> 400），不在此统一拦截为 415。
+            path = urllib.parse.urlparse(self.path).path
+            if path != "/api/import-spreadsheet":
+                content_type = (self.headers.get("Content-Type") or "") \
+                    .split(";", 1)[0].strip().lower()
+                if content_type != "application/json":
+                    self._send_json(
+                        {"ok": False,
+                         "error": "Content-Type 必须是 application/json"}, 415)
+                    return False
+        return True
+
     # ---- 静态文件 ----------------------------------------------------------
 
     @staticmethod
@@ -519,6 +838,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         try:
+            if not self._guard_request():
+                return
             path = urllib.parse.urlparse(self.path).path
             if path.startswith("/api/"):
                 self._route_api_get(path)
@@ -561,16 +882,33 @@ class ViewerHandler(BaseHTTPRequestHandler):
         elif path in ("/api/current", "/api/doc"):
             doc = _get_current_doc()
             if doc is None:
+                # 空工程是正常状态：200 + exists:false，前端据此新建空文档，
+                # 不再把「暂无文档」当作 404 错误上报到控制台。
                 self._send_json({
-                    "ok": False,
-                    "error": "暂无文档：服务端尚未收到任何文档，"
-                             "请通过 figure_open_viewer 传入 doc，"
-                             "或在前端编辑后自动回写。",
-                }, 404)
+                    "ok": True,
+                    "exists": False,
+                    "doc": None,
+                    "save_token": None,
+                })
             else:
                 self._send_json({
-                    "ok": True, "doc": doc, "save_token": _save_token(doc),
+                    "ok": True, "exists": True, "doc": doc,
+                    "save_token": _current_save_token(),
                 })
+        elif path == "/api/tabs":
+            idx, entries = _tabs_list()
+            self._send_json({
+                "ok": True,
+                "active_id": idx.get("active"),
+                "tabs": entries,
+            })
+        elif path == "/api/tabs/closed":
+            self._send_json({
+                "ok": True,
+                "closed": _tabs_closed_list(),
+            })
+        elif path == "/api/tabs/doc":
+            self._handle_tab_doc()
         elif path == "/api/ai/health":
             bridge = os.environ.get("FIGURE_LLM_BRIDGE", "").strip()
             self._send_json({
@@ -582,6 +920,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self._handle_ai_progress()
         elif path == "/api/presets":
             self._handle_presets()
+        elif path == "/api/prefs":
+            self._handle_prefs_get()
         elif path == "/api/data-dirs":
             self._handle_data_dirs()
         else:
@@ -605,6 +945,200 @@ class ViewerHandler(BaseHTTPRequestHandler):
             }, 500)
             return
         self._send_json({"ok": True, **out})
+
+    # ---- R5：用户风格偏好（prefs.json，原子写） -----------------------------
+
+    _PREFS_KEYS = ("default_style_id", "custom_styles")
+    _CS_TOKEN_KEYS = {"id", "name", "tags", "description", "refs",
+                      "font", "palette", "plot", "markers", "dashes",
+                      "legend", "grid", "background"}
+    _CS_MARKERS = {"none", "circle", "square", "triangle", "diamond"}
+    _CS_DASHES = {"solid", "dash", "dot", "dashdot"}
+    _CS_LEGEND_POS = {"none", "right", "top", "bottom",
+                      "inside-tr", "inside-tl", "inside-br", "inside-bl",
+                      "inside-best"}
+    _CS_PLOT_KEYS = {"frame", "tickDirection", "axisWidthPt", "tickLengthPt",
+                     "markerSizePt", "lineWidthPt", "markerFill", "markerCycle",
+                     "dashCycle", "background", "gridColor"}
+
+    @staticmethod
+    def _prefs_hex(v):
+        return isinstance(v, str) and re.fullmatch(r"#[0-9a-fA-F]{3,8}", v) is not None
+
+    def _validate_style_tokens(self, st, where):
+        """与 lib/ops.js validateChartStyleTokens 同构的服务端校验。"""
+        if not isinstance(st, dict):
+            raise ValueError(where + " 必须是风格 token 对象")
+        for k in st:
+            if k not in self._CS_TOKEN_KEYS:
+                raise ValueError(where + " 不允许的键: " + str(k))
+        sid = st.get("id")
+        if sid is not None and (not isinstance(sid, str)
+                                or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,60}", sid)):
+            raise ValueError(where + ".id 必须是小写字母/数字/连字符字符串")
+        name = st.get("name")
+        if name is not None and (not isinstance(name, str) or len(name) > 40):
+            raise ValueError(where + ".name 必须是不超过 40 字的字符串")
+        tags = st.get("tags")
+        if tags is not None and (not isinstance(tags, list) or len(tags) > 12
+                                 or any(not isinstance(t, str) or len(t) > 20 for t in tags)):
+            raise ValueError(where + ".tags 必须是不超过 12 个短字符串的数组")
+        font = st.get("font")
+        if font is not None:
+            if not isinstance(font, dict):
+                raise ValueError(where + ".font 必须是对象或 null")
+            for k in font:
+                if k not in ("family", "basePt", "tickPt", "titleWeight", "tickWeight"):
+                    raise ValueError(where + ".font 不允许的键: " + str(k))
+            if font.get("family") is not None and (not isinstance(font["family"], str)
+                                                   or len(font["family"]) > 80):
+                raise ValueError(where + ".font.family 必须是不超过 80 字的字符串")
+            for k in ("basePt", "tickPt"):
+                v = font.get(k)
+                if v is not None and (not isinstance(v, (int, float))
+                                      or isinstance(v, bool) or not 1 <= v <= 200):
+                    raise ValueError(where + ".font." + k + " 必须是 1–200 的数字")
+            for k in ("titleWeight", "tickWeight"):
+                v = font.get(k)
+                if v is not None and v not in ("normal", "bold"):
+                    raise ValueError(where + ".font." + k + " 必须是 normal/bold")
+        if st.get("palette") is not None and (not isinstance(st["palette"], str)
+                                              or not st["palette"]):
+            raise ValueError(where + ".palette 必须是非空字符串或 null")
+        plot = st.get("plot")
+        if plot is not None:
+            if not isinstance(plot, dict):
+                raise ValueError(where + ".plot 必须是对象或 null")
+            for k in plot:
+                if k not in self._CS_PLOT_KEYS:
+                    raise ValueError(where + ".plot 不允许的键: " + str(k))
+            if plot.get("frame") is not None and plot["frame"] not in ("open", "box"):
+                raise ValueError(where + ".plot.frame 必须是 open/box")
+            if plot.get("tickDirection") is not None and plot["tickDirection"] not in ("in", "out"):
+                raise ValueError(where + ".plot.tickDirection 必须是 in/out")
+            for k, lo, hi in (("axisWidthPt", 0, 5), ("tickLengthPt", 0, 20),
+                              ("markerSizePt", 0.5, 40), ("lineWidthPt", 0.1, 20)):
+                v = plot.get(k)
+                if v is not None and (not isinstance(v, (int, float))
+                                      or isinstance(v, bool) or not lo <= v <= hi):
+                    raise ValueError(where + ".plot." + k + " 必须是 %s–%s 的数字" % (lo, hi))
+            if plot.get("markerFill") is not None and plot["markerFill"] not in ("solid", "hollow"):
+                raise ValueError(where + ".plot.markerFill 必须是 solid/hollow")
+            for k in ("markerCycle", "dashCycle"):
+                v = plot.get(k)
+                if v is not None:
+                    allowed = self._CS_MARKERS if k == "markerCycle" else self._CS_DASHES
+                    if (not isinstance(v, list) or not 1 <= len(v) <= 12
+                            or any(x not in allowed for x in v)):
+                        raise ValueError(where + ".plot." + k + " 元素非法")
+            for k in ("background", "gridColor"):
+                v = plot.get(k)
+                if v is not None and not self._prefs_hex(v):
+                    raise ValueError(where + ".plot." + k + " 必须是 #hex 颜色或 null")
+        markers = st.get("markers")
+        if markers is not None:
+            if not isinstance(markers, dict):
+                raise ValueError(where + ".markers 必须是对象或 null")
+            for k in markers:
+                if k not in ("cycle", "fill"):
+                    raise ValueError(where + ".markers 不允许的键: " + str(k))
+            cyc = markers.get("cycle")
+            if cyc is not None and (not isinstance(cyc, list) or not 1 <= len(cyc) <= 12
+                                    or any(x not in self._CS_MARKERS for x in cyc)):
+                raise ValueError(where + ".markers.cycle 元素非法")
+            if markers.get("fill") is not None and markers["fill"] not in ("solid", "hollow"):
+                raise ValueError(where + ".markers.fill 必须是 solid/hollow")
+        dashes = st.get("dashes")
+        if dashes is not None and (not isinstance(dashes, list) or not 1 <= len(dashes) <= 12
+                                   or any(x not in self._CS_DASHES for x in dashes)):
+            raise ValueError(where + ".dashes 元素非法")
+        legend = st.get("legend")
+        if legend is not None:
+            if not isinstance(legend, dict):
+                raise ValueError(where + ".legend 必须是对象或 null")
+            for k in legend:
+                if k not in ("position", "frame"):
+                    raise ValueError(where + ".legend 不允许的键: " + str(k))
+            if legend.get("position") is not None and legend["position"] not in self._CS_LEGEND_POS:
+                raise ValueError(where + ".legend.position 非法")
+            if legend.get("frame") is not None and not isinstance(legend["frame"], bool):
+                raise ValueError(where + ".legend.frame 必须是 true/false")
+        grid = st.get("grid")
+        if grid is not None:
+            if not isinstance(grid, dict):
+                raise ValueError(where + ".grid 必须是对象或 null")
+            for k in grid:
+                if k not in ("show", "color"):
+                    raise ValueError(where + ".grid 不允许的键: " + str(k))
+            if grid.get("show") is not None and not isinstance(grid["show"], bool):
+                raise ValueError(where + ".grid.show 必须是 true/false")
+            if grid.get("color") is not None and not self._prefs_hex(grid["color"]):
+                raise ValueError(where + ".grid.color 必须是 #hex 颜色")
+        if st.get("background") is not None and not self._prefs_hex(st["background"]):
+            raise ValueError(where + ".background 必须是 #hex 颜色或 null")
+
+    def _read_prefs(self):
+        out = {"default_style_id": None, "custom_styles": []}
+        try:
+            data = json.loads(PREFS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return out
+        if not isinstance(data, dict):
+            return out
+        if isinstance(data.get("default_style_id"), str):
+            out["default_style_id"] = data["default_style_id"]
+        if isinstance(data.get("custom_styles"), list):
+            out["custom_styles"] = [s for s in data["custom_styles"]
+                                    if isinstance(s, dict)][:50]
+        return out
+
+    def _write_prefs(self, prefs):
+        PREFS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = PREFS_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(prefs, ensure_ascii=False, indent=1),
+                       encoding="utf-8")
+        os.replace(tmp, PREFS_PATH)
+
+    def _validate_prefs_patch(self, patch):
+        if not isinstance(patch, dict):
+            raise ValueError("prefs 补丁必须是对象")
+        for k in patch:
+            if k not in self._PREFS_KEYS:
+                raise ValueError("prefs 不允许的键: " + str(k))
+        out = {}
+        if "default_style_id" in patch:
+            v = patch["default_style_id"]
+            if v is not None and (not isinstance(v, str) or not 1 <= len(v) <= 80):
+                raise ValueError("default_style_id 必须是非空字符串或 null")
+            out["default_style_id"] = v
+        if "custom_styles" in patch:
+            v = patch["custom_styles"]
+            if not isinstance(v, list) or len(v) > 50:
+                raise ValueError("custom_styles 必须是不超过 50 项的数组")
+            seen = set()
+            cleaned = []
+            for i, st in enumerate(v):
+                self._validate_style_tokens(st, "custom_styles[%d]" % i)
+                sid = st.get("id")
+                if not isinstance(sid, str) or not re.fullmatch(r"my-[a-z0-9][a-z0-9-]{0,58}", sid):
+                    raise ValueError("custom_styles[%d].id 必须是 my- 前缀的 slug" % i)
+                if sid in seen:
+                    raise ValueError("custom_styles[%d].id 重复: %s" % (i, sid))
+                seen.add(sid)
+                cleaned.append(json.loads(json.dumps(st, ensure_ascii=False)))
+            out["custom_styles"] = cleaned
+        return out
+
+    def _handle_prefs_get(self):
+        self._send_json({"ok": True, "prefs": self._read_prefs()})
+
+    def _handle_prefs_post(self, body):
+        patch = body.get("patch") if isinstance(body, dict) else None
+        upd = self._validate_prefs_patch(patch)
+        prefs = self._read_prefs()
+        prefs.update(upd)
+        self._write_prefs(prefs)
+        self._send_json({"ok": True, "prefs": prefs})
 
     def _handle_data_dirs(self):
         """R08：数据目录与旧工程迁移状态（只读探测，不迁移）。"""
@@ -646,6 +1180,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 with _STATE_LOCK:
                     if _STATE["doc"] is None:
                         _STATE["doc"] = restored
+                        _STATE["save_token"] = _save_token(restored)
         self._send_json({
             "ok": True,
             "overwrite": overwrite,
@@ -660,6 +1195,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
+            if not self._guard_request():
+                return
             path = urllib.parse.urlparse(self.path).path
             # /api/ai/chat 原样透传 body 到本机 llm 桥（无需按文档 JSON 解析）
             if path == "/api/ai/chat":
@@ -671,12 +1208,22 @@ class ViewerHandler(BaseHTTPRequestHandler):
             body = self._read_json_body()
             if path in ("/api/current", "/api/doc"):
                 self._handle_save(body, path)
+            elif path == "/api/tabs/new":
+                self._handle_tab_new(body)
+            elif path == "/api/tabs/switch":
+                self._handle_tab_switch(body)
+            elif path == "/api/tabs/close":
+                self._handle_tab_close(body)
+            elif path == "/api/tabs/restore":
+                self._handle_tab_restore(body)
             elif path == "/api/export":
                 self._handle_export(body)
             elif path == "/api/export-to-dir":
                 self._handle_export_to_dir(body)
             elif path == "/api/projects/migrate":
                 self._handle_projects_migrate(body)
+            elif path == "/api/prefs":
+                self._handle_prefs_post(body)
             else:
                 self._send_json(
                     {"ok": False, "error": "不支持的 POST 路径：%s" % path}, 404)
@@ -710,7 +1257,10 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self.close_connection = True
             self._send_json({"ok": False, "error": "Excel 导入仅允许本机 loopback 请求"}, 403)
             return
-        content_type = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        # 该路由不走 do_POST 入口的统一 Content-Type 守卫（守卫对它放行），
+        # 这里保留路由自带的检查，错误语义与历史一致（ValueError -> 400）。
+        content_type = (self.headers.get("Content-Type") or "") \
+            .split(";", 1)[0].strip().lower()
         if content_type != "application/json":
             raise ValueError("Excel 导入 Content-Type 必须是 application/json")
         body = self._read_json_body(max_bytes=MAX_SPREADSHEET_JSON_BYTES)
@@ -748,7 +1298,10 @@ class ViewerHandler(BaseHTTPRequestHandler):
             }, 400)
             return
         base_token = body.get("base_token") if conditional else _EXPLICIT_REPLACE
-        saved_path, save_token = _save_current(doc, base_token)
+        saved_path, save_token = _save_current(
+            doc, base_token,
+            preserve_tabs=(path == "/api/doc"
+                           and base_token is _EXPLICIT_REPLACE))
         self._send_json({
             "ok": True,
             "doc": doc,
@@ -757,6 +1310,287 @@ class ViewerHandler(BaseHTTPRequestHandler):
             "saved_at": _now_iso(),
             "summary": _doc_summary(doc),
         })
+
+    # ---- 多画布标签页 ----------------------------------------------------
+
+    def _tabs_payload(self):
+        idx, entries = _tabs_list()
+        doc = _get_current_doc()
+        save_token = _current_save_token()
+        return {
+            "ok": True,
+            "doc": doc,
+            "save_token": save_token,
+            "tabs": entries,
+            "active_id": idx.get("active"),
+        }
+
+    def _handle_tab_doc(self):
+        """GET /api/tabs/doc?id=<tabId>：只读返回指定标签页文档 {ok, doc}。
+        活动标签返回当前内存文档；其余标签读 tabs/<id>.figureproj.json。
+        id 必须在标签顺序表中（防路径穿越），不允许读 closed/ 归档。"""
+        if DOCIO is None:
+            self._send_json({"ok": False, "error": "docio 不可用"}, 503)
+            return
+        q = urllib.parse.urlparse(self.path).query
+        params = urllib.parse.parse_qs(q)
+        ids = params.get("id") or []
+        tab_id = ids[0] if ids else None
+        if not isinstance(tab_id, str) or not tab_id:
+            self._send_json({"ok": False, "error": "缺少 id"}, 400)
+            return
+        cur = _get_current_doc()
+        cur_id = cur.get("id") if isinstance(cur, dict) else None
+        if tab_id == cur_id:
+            self._send_json({"ok": True, "doc": cur})
+            return
+        idx = _tabs_index_load()
+        if tab_id not in (idx.get("order") or []):
+            self._send_json({
+                "ok": False, "error": "未知画布标签页：%s" % tab_id}, 404)
+            return
+        tab_path = _tab_file(tab_id)
+        if not tab_path.is_file():
+            self._send_json({
+                "ok": False, "error": "标签页文件不存在：%s" % tab_id}, 404)
+            return
+        try:
+            loaded = DOCIO.load_project(str(tab_path))
+        except Exception as exc:
+            self._send_json({
+                "ok": False, "error": "标签页文件损坏：%s" % exc}, 400)
+            return
+        doc = loaded.get("doc") if isinstance(loaded, dict) else None
+        if not isinstance(doc, dict):
+            self._send_json({
+                "ok": False, "error": "标签页文件损坏：%s" % tab_id}, 400)
+            return
+        self._send_json({"ok": True, "doc": doc})
+
+    def _handle_tab_new(self, body):
+        if DOCIO is None:
+            raise RuntimeError("docio 不可用，无法管理画布标签页")
+        doc = body.get("doc") if isinstance(body, dict) else None
+        if not isinstance(doc, dict):
+            self._send_json({"ok": False, "error": "请求体必须包含 doc 对象"}, 400)
+            return
+        new_id = doc.get("id")
+        if not isinstance(new_id, str) or not new_id:
+            self._send_json({"ok": False, "error": "新画布缺少文档 id"}, 400)
+            return
+        _validate_or_raise(doc)
+        # 单临界区：token 校验 + 备份当前标签 + 建新标签 + 切换 current +
+        # 更新 index，任何一步失败都不留下半成品状态。
+        with _STATE_LOCK:
+            _tabs_check_token(body.get("base_token"))
+            idx = _tabs_index_ensure()
+            if new_id in idx["order"]:
+                self._send_json({
+                    "ok": False,
+                    "error": "画布 id 已存在：%s" % new_id}, 400)
+                return
+            _tabs_save_current_locked()
+            # 先把新 id 写进 order 再切 current：否则归一化会把它当成
+            # 「活动标签被替换」而原位覆盖旧 active 项。
+            idx["order"].append(new_id)
+            idx["active"] = new_id
+            _tabs_index_save(idx)
+            _save_current(doc, _EXPLICIT_REPLACE)
+            _tabs_write_doc_file(doc, new_id)
+        self._send_json(self._tabs_payload())
+
+    def _handle_tab_switch(self, body):
+        if DOCIO is None:
+            raise RuntimeError("docio 不可用，无法管理画布标签页")
+        to_id = body.get("to_id") if isinstance(body, dict) else None
+        if not isinstance(to_id, str) or not to_id:
+            self._send_json({"ok": False, "error": "缺少 to_id"}, 400)
+            return
+        with _STATE_LOCK:
+            _tabs_check_token(body.get("base_token"))
+            idx = _tabs_index_ensure()
+            if to_id not in idx["order"]:
+                self._send_json({
+                    "ok": False, "error": "未知画布标签页：%s" % to_id}, 400)
+                return
+            cur = _STATE.get("doc")
+            if isinstance(cur, dict) and cur.get("id") == to_id:
+                # 切到自己：无操作，直接回当前状态
+                self._send_json(self._tabs_payload())
+                return
+            # 先把目标标签文件读入并校验，失败时不做任何变更
+            tab_path = _tab_file(to_id)
+            if not tab_path.is_file():
+                self._send_json({
+                    "ok": False, "error": "标签页文件不存在：%s" % to_id}, 400)
+                return
+            loaded = DOCIO.load_project(str(tab_path))
+            target = loaded.get("doc")
+            if not isinstance(target, dict):
+                self._send_json({
+                    "ok": False, "error": "标签页文件损坏：%s" % to_id}, 400)
+                return
+            _tabs_save_current_locked()
+            _save_current(target, _EXPLICIT_REPLACE)
+            idx = _tabs_index_load()
+            idx["active"] = to_id
+            _tabs_index_save(idx)
+        self._send_json(self._tabs_payload())
+
+    def _handle_tab_close(self, body):
+        if DOCIO is None:
+            raise RuntimeError("docio 不可用，无法管理画布标签页")
+        tab_id = body.get("id") if isinstance(body, dict) else None
+        if not isinstance(tab_id, str) or not tab_id:
+            self._send_json({"ok": False, "error": "缺少 id"}, 400)
+            return
+        with _STATE_LOCK:
+            _tabs_check_token(body.get("base_token"))
+            idx = _tabs_index_ensure()
+            order = list(idx["order"])
+            if len(order) <= 1:
+                self._send_json({
+                    "ok": False,
+                    "error": "至少需要保留一个画布标签页"}, 400)
+                return
+            if tab_id not in order:
+                self._send_json({
+                    "ok": False, "error": "未知画布标签页：%s" % tab_id}, 400)
+                return
+            was_active = idx.get("active") == tab_id
+            neighbour = None
+            neighbour_doc = None
+            if was_active:
+                pos = order.index(tab_id)
+                if pos + 1 < len(order):
+                    neighbour = order[pos + 1]
+                elif pos > 0:
+                    neighbour = order[pos - 1]
+                # 关活动标签前先把邻居读入并校验：失败则什么都不改
+                if neighbour is not None:
+                    npath = _tab_file(neighbour)
+                    if not npath.is_file():
+                        self._send_json({
+                            "ok": False,
+                            "error": "相邻画布文件缺失，无法切换：%s" % neighbour},
+                            400)
+                        return
+                    try:
+                        nloaded = DOCIO.load_project(str(npath))
+                    except Exception as exc:
+                        self._send_json({
+                            "ok": False,
+                            "error": "相邻画布文件损坏，无法切换：%s" % exc},
+                            400)
+                        return
+                    neighbour_doc = nloaded.get("doc")
+                    if not isinstance(neighbour_doc, dict):
+                        self._send_json({
+                            "ok": False,
+                            "error": "相邻画布文件损坏，无法切换：%s" % neighbour},
+                            400)
+                        return
+            # ---- 以下为变更 ----
+            if was_active and neighbour_doc is not None:
+                _tabs_save_current_locked()   # 被关标签的最后状态先归档素材
+                _save_current(neighbour_doc, _EXPLICIT_REPLACE)
+            # 归档被关标签文件（不删除）
+            src = _tab_file(tab_id)
+            if src.is_file():
+                TABS_CLOSED_DIR.mkdir(parents=True, exist_ok=True)
+                stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+                os.replace(str(src), str(TABS_CLOSED_DIR /
+                                         ("%s-%s.figureproj.json" % (tab_id, stamp))))
+            idx = _tabs_index_load()
+            idx["order"] = [d for d in idx["order"] if d != tab_id]
+            if idx.get("active") == tab_id or was_active:
+                idx["active"] = neighbour if neighbour in idx["order"] else (
+                    idx["order"][0] if idx["order"] else None)
+            _tabs_index_save(idx)
+        self._send_json(self._tabs_payload())
+
+    def _handle_tab_restore(self, body):
+        """还原 tabs/closed/ 里的归档：移回 tabs/<id>.figureproj.json 并激活。
+        归档里的 doc id 已是打开标签时等价于切换（归档保留原位）。
+        单临界区内完成 token 校验与全部变更；任何校验失败都不改状态。"""
+        if DOCIO is None:
+            raise RuntimeError("docio 不可用，无法管理画布标签页")
+        file_name = body.get("file") if isinstance(body, dict) else None
+        if not isinstance(file_name, str) or not file_name:
+            self._send_json({"ok": False, "error": "缺少 file"}, 400)
+            return
+        # 只允许 closed/ 下的真实文件名，拒绝路径穿越与目录套娃
+        if (os.path.basename(file_name) != file_name
+                or file_name in (".", "..")
+                or not file_name.endswith(".figureproj.json")):
+            self._send_json({"ok": False, "error": "非法的归档文件名"}, 400)
+            return
+        archive = TABS_CLOSED_DIR / file_name
+        if not archive.is_file():
+            self._send_json({
+                "ok": False, "error": "归档文件不存在：%s" % file_name}, 400)
+            return
+        with _STATE_LOCK:
+            _tabs_check_token(body.get("base_token"))
+            idx = _tabs_index_ensure()
+            # 先读入归档并校验，失败时什么都不改
+            try:
+                loaded = DOCIO.load_project(str(archive))
+            except Exception as exc:
+                self._send_json({
+                    "ok": False, "error": "归档文件损坏：%s" % exc}, 400)
+                return
+            doc = loaded.get("doc")
+            if not isinstance(doc, dict):
+                self._send_json({
+                    "ok": False, "error": "归档文件损坏：%s" % file_name}, 400)
+                return
+            doc_id = doc.get("id")
+            if not isinstance(doc_id, str) or not doc_id:
+                self._send_json({
+                    "ok": False, "error": "归档文档缺少 id"}, 400)
+                return
+            if doc_id in idx["order"]:
+                # 该 id 已是打开的标签：等价于切换到它，归档保留原位
+                tab_path = _tab_file(doc_id)
+                if not tab_path.is_file():
+                    self._send_json({
+                        "ok": False,
+                        "error": "标签页文件不存在：%s" % doc_id}, 400)
+                    return
+                try:
+                    target = DOCIO.load_project(str(tab_path)).get("doc")
+                except Exception as exc:
+                    self._send_json({
+                        "ok": False, "error": "标签页文件损坏：%s" % exc},
+                        400)
+                    return
+                if not isinstance(target, dict):
+                    self._send_json({
+                        "ok": False,
+                        "error": "标签页文件损坏：%s" % doc_id}, 400)
+                    return
+                cur = _STATE.get("doc")
+                if isinstance(cur, dict) and cur.get("id") == doc_id:
+                    self._send_json(self._tabs_payload())
+                    return
+                _tabs_save_current_locked()
+                _save_current(target, _EXPLICIT_REPLACE)
+                idx = _tabs_index_load()
+                idx["active"] = doc_id
+                _tabs_index_save(idx)
+            else:
+                # 归档移回 tabs/<id>.figureproj.json，成为活动标签。
+                # 先把 id 登记进 order 再切 current（同 tabs/new）：否则
+                # _tabs_normalize 会把新 current id 当成「活动标签被替换」
+                # 原位覆盖掉现有 active 项。
+                _tabs_save_current_locked()
+                os.replace(str(archive), str(_tab_file(doc_id)))
+                idx["order"].append(doc_id)
+                idx["active"] = doc_id
+                _tabs_index_save(idx)
+                _save_current(doc, _EXPLICIT_REPLACE)
+        self._send_json(self._tabs_payload())
 
     def _handle_export(self, body):
         self._export_common(body, to_dir=False)
@@ -1051,6 +1885,7 @@ def _load_initial_state():
         doc = None
     with _STATE_LOCK:
         _STATE["doc"] = doc
+        _STATE["save_token"] = _save_token(doc)
         _STATE["project_path"] = str(CURRENT_PROJECT_PATH)
 
 

@@ -12,13 +12,13 @@
  * 工具 schema 的单一事实来源是 `mcp/tools.json`（由 `mcp/tools_spec.py` 生成）。
  */
 import { spawn } from 'node:child_process'
-import http from 'node:http'
 import { readFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import Schema from '@deepseek-ai/schemastery'
+import { startLlmBridge, getLlmBridgeUrl, closeLlmBridge } from './llm-bridge.js'
 
 export const name = 'dsh-figure-studio'
 export const inject = ['tools', 'llm', 'agentDefaultModel']
@@ -65,8 +65,6 @@ const pending = new Map()
 let ready = false
 let initPromise = null
 let pythonBin = null
-let llmBridgeServer = null
-let llmBridgeUrl = ''
 
 function resolvePython(config) {
   if (pythonBin) return pythonBin
@@ -82,7 +80,8 @@ function spawnServer(config) {
   if (config.startViewer !== false) args.push('--viewer')
   const env = { ...process.env }
   // 把本机 llm 桥地址传给工作台后端，让窗口右栏 AI 面板零 key 复用 DSH 的 DeepSeek。
-  if (llmBridgeUrl) env.FIGURE_LLM_BRIDGE = llmBridgeUrl
+  const bridgeUrl = getLlmBridgeUrl()
+  if (bridgeUrl) env.FIGURE_LLM_BRIDGE = bridgeUrl
   const proc = spawn(bin, args, { stdio: ['pipe', 'pipe', 'inherit'], env, windowsHide: true })
   proc.on('exit', () => {
     // 后端退出后清空状态，下一次 execute 会自动重启。
@@ -279,32 +278,6 @@ function harnessError(reason) {
 // 供 viewer.py /api/ai/progress 轻量轮询。任务表只保留最近有限条，
 // 不保存 messages / key 等请求内容。
 // ---------------------------------------------------------------------------
-const LLM_PROGRESS_MAX = 64
-const llmProgress = new Map()
-
-function llmProgressSet(requestId, patch) {
-  if (!requestId) return
-  const prev = llmProgress.get(requestId) || {
-    request_id: requestId,
-    phase: 'model_pending',
-    detail: '',
-    deltas: 0,
-    chars: 0,
-    error: null,
-    started_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  }
-  const next = { ...prev, ...patch, request_id: requestId }
-  next.updated_at = new Date().toISOString()
-  // Map 按插入序淘汰最旧任务；刷新时先删后插，保证「最近使用」的保留。
-  llmProgress.delete(requestId)
-  llmProgress.set(requestId, next)
-  while (llmProgress.size > LLM_PROGRESS_MAX) {
-    const oldest = llmProgress.keys().next().value
-    llmProgress.delete(oldest)
-  }
-}
-
 async function consumeHarnessStream(stream, progress) {
   const parts = []
   const textIndexes = new Set()
@@ -369,138 +342,6 @@ async function callHarnessLlm(ctx, messages, config, progress) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 本机 llm 桥：把窗口右栏 AI 面板的 /chat 请求转发到 ctx.llm，实现「窗口零 key」。
-//   - POST /chat   body {messages:[...], model?, request_id?} → callHarnessLlm → OpenAI 形状
-//                  （request_id 只用于进度追踪，不转发给模型）
-//   - GET  /progress?request_id=… 真实阶段进度（model_pending/prepare/stream/complete/error）
-//   - GET  /health {ok:true}
-// 只在 ctx.llm 存在且 startViewer 未关闭时启动；端口由 config.llmBridgePort 指定。
-// ---------------------------------------------------------------------------
-function startLlmBridge(ctx, config) {
-  const llm = ctx && ctx.llm
-  if (!llm) return
-  const port = config.llmBridgePort || 8771
-  const server = http.createServer((req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*')
-    res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204); res.end(); return
-    }
-    if (req.method === 'GET' && (req.url === '/health' || req.url === '/health/')) {
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
-      res.end(JSON.stringify({ ok: true }))
-      return
-    }
-    // 轻量进度查询：只回 phase / 计数 / 简短 error，不含任何 prompt 或 key。
-    if (req.method === 'GET' && (req.url === '/progress' || req.url.startsWith('/progress?'))) {
-      const q = new URL(req.url, 'http://127.0.0.1')
-      const requestId = String(q.searchParams.get('request_id') || '')
-      if (!requestId) {
-        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' })
-        res.end(JSON.stringify({ ok: false, error: '缺少 request_id' }))
-        return
-      }
-      const task = llmProgress.get(requestId)
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
-      res.end(JSON.stringify(task
-        ? { ok: true, task }
-        : { ok: false, error: '未找到该 request_id 的进度记录（可能已过期或请求未携带 request_id）' }))
-      return
-    }
-    if (req.method === 'POST' && (req.url === '/chat' || req.url === '/chat/')) {
-      let raw = ''
-      req.on('data', (c) => { raw += c })
-      req.on('end', async () => {
-        let messages = []
-        let requestId = ''
-        try {
-          const body = raw ? JSON.parse(raw) : {}
-          messages = Array.isArray(body.messages) ? body.messages : []
-          // request_id 是前端经过本机桥时附加的追踪字段，不是模型参数；
-          // 官方 DeepSeek 请求体不会带它，也不会被转发给 ctx.llm。
-          if (typeof body.request_id === 'string' && body.request_id.trim()) {
-            requestId = body.request_id.trim().slice(0, 128)
-          }
-        } catch {
-          messages = []
-        }
-        const send = (status, obj) => {
-          try {
-            res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' })
-            res.end(JSON.stringify(obj))
-          } catch { /* 连接已关闭 */ }
-        }
-        if (!messages.length) {
-          send(400, { error: 'messages 不能为空' })
-          return
-        }
-        if (hasImageContent(messages)) {
-          send(415, { error: IMAGE_UNSUPPORTED_ERROR })
-          return
-        }
-        let progress = null
-        if (requestId) {
-          llmProgressSet(requestId, {
-            phase: 'model_pending',
-            detail: '已收到模型请求，等待准备',
-            deltas: 0,
-            chars: 0,
-            error: null,
-          })
-          progress = {
-            phase(nextPhase, detail) {
-              llmProgressSet(requestId, { phase: nextPhase, detail: detail || '', error: null })
-            },
-            delta(text) {
-              const t = llmProgress.get(requestId)
-              llmProgressSet(requestId, {
-                phase: 'model_stream',
-                detail: '模型返回中：已接收 ' + ((t ? t.deltas : 0) + 1) + ' 段 / ' +
-                  ((t ? t.chars : 0) + (text ? text.length : 0)) + ' 字符',
-                deltas: (t ? t.deltas : 0) + 1,
-                chars: (t ? t.chars : 0) + (text ? text.length : 0),
-              })
-            },
-            fail(err) {
-              llmProgressSet(requestId, {
-                phase: 'model_error',
-                detail: '',
-                error: err && err.message ? String(err.message).slice(0, 300) : String(err),
-              })
-            },
-          }
-        }
-        try {
-          const text = await callHarnessLlm(ctx, messages, config, progress)
-          if (text == null) {
-            if (progress) progress.fail(new Error('ctx.llm 未命中或返回为空'))
-            send(502, { error: 'DSH 模型连接不可用（ctx.llm 未命中或返回为空）' })
-            return
-          }
-          send(200, { choices: [{ message: { content: text } }] })
-        } catch (err) {
-          send(502, { error: err && err.message ? err.message : String(err) })
-        }
-      })
-      return
-    }
-    res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' })
-    res.end(JSON.stringify({ error: 'not found' }))
-  })
-  // 立即把 URL 暴露给 spawnServer（在 listen 完成前也可，真实 /chat 请求发生在桥就绪之后）。
-  llmBridgeUrl = 'http://127.0.0.1:' + port
-  server.on('error', (err) => {
-    console.error('[dsh-figure-studio] llm 桥启动失败：', err && err.message)
-    if (llmBridgeServer === server) llmBridgeServer = null
-    llmBridgeUrl = ''
-  })
-  server.listen(port, '127.0.0.1', () => {
-    llmBridgeServer = server
-    ctx.logger?.info?.('[dsh-figure-studio] llm 桥已启动：%s（窗口 AI 面板零 key 复用 DSH DeepSeek）', llmBridgeUrl)
-  })
-}
 
 function reviewDocumentContext(doc) {
   const elements = Array.isArray(doc && doc.elements) ? doc.elements : []
@@ -597,11 +438,7 @@ export function apply(ctx, config) {
       ready = false
       initPromise = null
       pending.clear()
-      if (llmBridgeServer) {
-        try { llmBridgeServer.close() } catch { /* 忽略 */ }
-        llmBridgeServer = null
-      }
-      llmBridgeUrl = ''
+      closeLlmBridge()
     }
   })
 
@@ -609,8 +446,12 @@ export function apply(ctx, config) {
 
   // 插件加载时立即拉起后端；startViewer=true 时可视化双栏工作台以「原生窗口」打开。
   if (config.startViewer !== false) {
-    // 先起本机 llm 桥（同步设置 llmBridgeUrl），再 spawn 后端，把地址通过环境变量传给 viewer.py。
-    startLlmBridge(ctx, config)
+    // 先起本机 llm 桥（同步设置桥地址），再 spawn 后端，把地址通过环境变量传给 viewer.py。
+    startLlmBridge(ctx, config, {
+      callLlm: callHarnessLlm,
+      hasImage: hasImageContent,
+      imageErr: IMAGE_UNSUPPORTED_ERROR,
+    })
     const url = 'http://127.0.0.1:' + (config.viewerPort || 8770) + '/'
     ensureReady(config)
       .then(() => {

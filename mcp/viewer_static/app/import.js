@@ -50,24 +50,7 @@
   // Minimal element builder (mirrors Ui.h; kept local so dialogs work even
   // before ui.js registers itself).
   function h(tag, attrs, children) {
-    var el = document.createElement(tag);
-    if (attrs) {
-      Object.keys(attrs).forEach(function (k) {
-        var v = attrs[k];
-        if (v === null || v === undefined) return;
-        if (k === 'class') el.className = v;
-        else if (k === 'text') el.textContent = v;
-        else if (k === 'html') el.innerHTML = v;
-        else if (k.slice(0, 2) === 'on' && typeof v === 'function') {
-          el.addEventListener(k.slice(2), v);
-        } else el.setAttribute(k, v);
-      });
-    }
-    (children || []).forEach(function (c) {
-      if (c === null || c === undefined) return;
-      el.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
-    });
-    return el;
+    return global.Ui.h(tag, attrs, children);
   }
 
   function toast(text, opts) {
@@ -94,9 +77,19 @@
     } catch (e) { /* ignore */ }
   }
 
+  function templateNameOf(templateId) {
+    try {
+      if (global.FigPresets && typeof global.FigPresets.template === 'function') {
+        var tpl = global.FigPresets.template(templateId);
+        if (tpl && tpl.name) return tpl.name;
+      }
+    } catch (e) { /* 名称查不到时回退通用说法 */ }
+    return null;
+  }
+
   function requireApp() {
     if (!global.App || !isObj(global.App.doc) || typeof global.App.commit !== 'function') {
-      fail('App 尚未初始化（缺少 App.doc / App.commit），无法导入');
+      fail('编辑器尚未初始化，无法导入');
     }
     return global.App;
   }
@@ -125,7 +118,10 @@
     }, [
       h('div', { style: 'font-weight:bold;margin-bottom:10px', text: opts.title || '' }),
       h('div', { style: 'margin-bottom:12px' },
-        [typeof opts.body === 'string' ? h('div', { html: opts.body }) : opts.body]),
+        // 字符串 body 按纯文本插入（可能含工程标题等用户数据），不解析 HTML。
+        [typeof opts.body === 'string'
+          ? h('div', { text: opts.body, style: 'white-space:pre-wrap' })
+          : opts.body]),
       actionRow
     ]);
     overlay.appendChild(box);
@@ -383,15 +379,52 @@
   function parseTable(text, filename) {
     var ext = extOf(filename);
     if (!global.FigData || typeof global.FigData.parseCSV !== 'function') {
-      fail('内核 FigData 未加载');
+      fail('数据解析功能未加载');
     }
     if (ext === 'json') return global.FigData.parseJSON(text);
     return global.FigData.parseCSV(text, { delimiter: 'auto', header: true });
   }
 
+  // ---- G19/G20：分隔文本的「读取方式」接缝 ------------------------------
+  // 仅 csv/tsv/txt（及粘贴的非 JSON 文本）提供 parse 配置；JSON/Excel/G21
+  // 复用模式不显示「读取方式」行。
+  function isDelimitedTextFile(filename) {
+    var ext = extOf(filename);
+    return ext !== 'json' && ext !== 'xlsx' && ext !== 'xls' &&
+      ext !== 'ods' && ext !== 'numbers';
+  }
+
+  function sniffForText(text) {
+    try {
+      if (global.FigData && typeof global.FigData.sniffNumberFormat === 'function') {
+        return global.FigData.sniffNumberFormat(text, { delimiter: 'auto' });
+      }
+    } catch (e) { /* sniff 失败不阻断导入 */ }
+    return null;
+  }
+
+  function reparseDelimitedText(rawText, options) {
+    var opts = { delimiter: 'auto', header: true };
+    if (options && options.delimiter && options.delimiter !== 'auto') {
+      opts.delimiter = options.delimiter;
+    }
+    if (options && options.numberFormat && options.numberFormat !== 'plain') {
+      opts.numberFormat = options.numberFormat;
+    }
+    var data = global.FigData.parseCSV(rawText, opts);
+    var detected = null;
+    try {
+      if (global.FigData && typeof global.FigData.detectDelimiter === 'function') {
+        detected = global.FigData.detectDelimiter(rawText);
+      }
+    } catch (e) { /* keep null */ }
+    var hint = sniffForText(rawText);
+    return { data: data, detectedDelimiter: detected, hint: hint };
+  }
+
   function templateApplicability(templateId) {
     if (!global.FigPresets || typeof global.FigPresets.validateTemplateCapability !== 'function') {
-      return { ok: false, errors: ['模板能力注册未加载，禁止应用'], capability: null };
+      return { ok: false, errors: ['模板能力信息未加载，暂时不能应用'], capability: null };
     }
     try {
       return global.FigPresets.validateTemplateCapability(templateId);
@@ -406,16 +439,50 @@
     });
   }
 
-  function recommendList(stats) {
+  // 表格数据导入的推荐排序：category 为 "chart" 的模板排在前面（稳定排序，
+  // 不删除任何模板），避免全是文本列时把示意图/复合模板排到最前。
+  function chartCategoryFirst(recs) {
+    function isChart(r) {
+      try {
+        var tpl = (global.FigPresets && typeof global.FigPresets.template === 'function')
+          ? global.FigPresets.template(r.template_id) : null;
+        return !!(tpl && tpl.category === 'chart');
+      } catch (e) { return false; }
+    }
+    return recs.map(function (r, i) { return { r: r, i: i, c: isChart(r) ? 0 : 1 }; })
+      .sort(function (a, b) { return a.c - b.c || a.i - b.i; })
+      .map(function (x) { return x.r; });
+  }
+
+  // R7：模板 chart_overrides 的后置 ops——在默认风格 op 之后追加，
+  // 保证「默认风格先套、模板 overrides 后套」。buildResult/built 形如
+  // templateFromStats 返回值（{elements:[…]}）；取其中 chart 元素 id。
+  function templateOverrideOpsFor(templateId, built) {
+    try {
+      if (!global.FigPresets || typeof FigPresets.templateOverrideOps !== 'function') return [];
+      var els = built && Array.isArray(built.elements) ? built.elements : [];
+      var ids = els.filter(function (el) { return el && el.type === 'chart' && el.id; })
+        .map(function (el) { return el.id; });
+      return FigPresets.templateOverrideOps(templateId, ids);
+    } catch (e) { return []; }
+  }
+
+  function recommendList(stats, opts) {
     // Templates.recommend is the APP-API reuse point; fall back to the kernel.
+    // R7：向导第 2 步需要全量可用模板（推荐/可用/不适合徽标按分数区分），
+    // 因此向导路径传 n:WIZARD_RECOMMEND_N；旧推荐对话框仍用默认 n=5。
+    var n = (opts && opts.n) || 5;
     try {
       if (global.Templates && typeof global.Templates.recommend === 'function') {
-        var list = global.Templates.recommend(stats);
-        if (Array.isArray(list) && list.length) return onlyApplicable(list);
+        var list = global.Templates.recommend(stats, { n: n });
+        if (Array.isArray(list) && list.length) return chartCategoryFirst(onlyApplicable(list));
       }
     } catch (e) { /* fall through to kernel */ }
-    return onlyApplicable(global.FigPresets.recommend(stats, { n: 5 }));
+    return chartCategoryFirst(onlyApplicable(global.FigPresets.recommend(stats, { n: n })));
   }
+  // 向导模板列表上限：覆盖当前全部模板并留增长余量（recommend 返回
+  // 全部模板按分数排序后截断，n 只是截断长度）。
+  var WIZARD_RECOMMEND_N = 200;
 
   function recommendDialog(filename, recs, onSubmit) {
     var appName = baseName(filename);
@@ -549,7 +616,7 @@
     });
   }
 
-  function buildTableOps(built, filename, templateId, provenance) {
+  function buildTableOps(built, filename, templateId, provenance, notePrefix) {
     var ops = [];
     if (!Array.isArray(built.elements) || !built.elements.length) {
       fail('模板未生成任何元素');
@@ -564,10 +631,25 @@
         source += '，工作表 ' + provenance.sheet_name + '，表头第 ' + provenance.header_row + ' 行';
       }
       if (provenance.sha256) source += '，输入字节 SHA-256 ' + provenance.sha256 + '（来源身份未核验）';
+      // G19/G20：手工修改与读取方式在历史 note 中如实记录
+      if (provenance.manual_edits && provenance.manual_edits.count > 0) {
+        source += '；导入时手工修改了 ' + provenance.manual_edits.count +
+          ' 个单元格（原值已记录）';
+      }
+      if (provenance.parse_options && provenance.parse_options.number_format &&
+          provenance.parse_options.number_format !== 'plain') {
+        source += '；数字写法：' +
+          (provenance.parse_options.number_format === 'comma_decimal' ? '逗号是小数点' : '逗号是千分位');
+      }
+      if (provenance.parse_options && provenance.parse_options.delimiter &&
+          provenance.parse_options.delimiter !== 'auto') {
+        var dl = provenance.parse_options.delimiter;
+        source += '；分隔符：' + (dl === '\t' ? '制表符' : dl === ';' ? '分号' : '逗号');
+      }
     }
     ops.push({
       op: 'note',
-      note: '导入数据文件 ' + filename + '，应用模板 ' + templateId + source +
+      note: (notePrefix || ('导入数据文件 ' + filename)) + '，应用模板 ' + templateId + source +
         (built.warnings && built.warnings.length ? '；告警：' + built.warnings.join('；') : '')
     });
     return ops;
@@ -576,7 +658,7 @@
   // ---- R02 数据映射向导 ------------------------------------------------
   //
   // 统一「数据预览 → 字段映射 → 图表和画布预览 → 创建」流程。DataWizard
-  // 动态加载（与 svg-import 同模式）；不可用时回退旧 recommendDialog，
+  // 动态加载；不可用时回退旧 recommendDialog，
   // 保证旧入口与环境仍可用。构建（buildDraft）与提交（onCreate）共用
   // templateFromStats + fitBuiltIntoCanvas：预览与最终创建来自同一构建结果。
 
@@ -629,59 +711,150 @@
     return { ops: ops, canvas: effective };
   }
 
-  function openDataWizard(app, data, filename, recs, provenance, cb) {
+  // G19/G20/G21：由向导 ctx 生成提交用来源记录（在原 provenance 深拷贝上）。
+  // sha256/bytes 等原始字节信息不变；value_fingerprint 与写入的 inline 一致；
+  // 有修改时加 manual_edits；读取方式非默认时加 parse_options；
+  // 没有修改、读取方式默认时与原 provenance 逐键一致。
+  function provenanceForCommit(base, ctx) {
+    // R4：base 为空（如 G21 复用无 source_info 的图表）→ 不得凭空生成来源记录
+    if (!base) return null;
+    var prov = JSON.parse(JSON.stringify(base));
+    if (ctx && ctx.data) {
+      prov.value_fingerprint = tableValueInfo(ctx.data);
+    }
+    if (ctx && Array.isArray(ctx.edits) && ctx.edits.length) {
+      prov.manual_edits = {
+        count: ctx.edits.length,
+        cells: ctx.edits.map(function (e) {
+          return { row: e.row, column: e.column, from: e.from, to: e.to };
+        }),
+        parsed_value_fingerprint: ctx.parsedData
+          ? tableValueInfo(ctx.parsedData) : prov.value_fingerprint
+      };
+    }
+    if (ctx && ctx.parseOptions) {
+      prov.parse_options = {
+        delimiter: ctx.parseOptions.delimiter,
+        number_format: ctx.parseOptions.numberFormat
+      };
+    }
+    return prov;
+  }
+
+  function openDataWizard(app, data, filename, recs, provenance, cb, parseInfo, wizardOpts) {
+    wizardOpts = wizardOpts || {};
     var appName = baseName(filename);
     // 预览与最终创建共用同一构建函数：同一 draft 状态 → 同一几何/映射/
     // 有效画布（元素 id 因构建而不同，但提交后即固定进历史）。
-    function buildDraftShared(templateId, mapping, canvasChoice, title) {
+    // G19/G20：ctx.data 为生效数据（含单元格修改），缺省回退闭包 data。
+    function buildDraftShared(templateId, mapping, canvasChoice, title, ctx) {
+      var buildData = (ctx && ctx.data) || data;
       var applicability = templateApplicability(templateId);
       if (!applicability.ok) fail('模板不可应用：' + applicability.errors.join('；'));
       var canvasRes = canvasChoiceResult(app, canvasChoice);
       var opts = {
         journal_id: null, // 画布选择独立处理；模板默认仅在用户确认后生效
         palette_id: null,
-        title: title || undefined
+        title: title || undefined,
+        // H1：按目标画布直接排版（fitBuiltIntoCanvas 保留作兜底，不再缩放）
+        canvas: { width_mm: canvasRes.canvas.width_mm, height_mm: canvasRes.canvas.height_mm }
       };
       if (mapping && Object.keys(mapping).length) opts.mapping = mapping;
-      var built = global.FigPresets.templateFromStats(templateId, data, opts);
+      // R4-HB：向导右轴选择 → opts.axes.y2（预览与提交共用同一 ctx）
+      if (ctx && ctx.axesExtra && typeof ctx.axesExtra === 'object') {
+        opts.axes = ctx.axesExtra;
+      }
+      var built = global.FigPresets.templateFromStats(templateId, buildData, opts);
       fitBuiltIntoCanvas(built, canvasRes.canvas);
       built.effectiveCanvas = canvasRes.canvas;
       built._canvasOps = canvasRes.ops;
       return built;
     }
     function openWith(DW) {
+      var parseCfg = null;
+      if (parseInfo && parseInfo.rawText) {
+        parseCfg = {
+          options: { delimiter: 'auto', numberFormat: 'plain' },
+          reparse: function (options) {
+            return reparseDelimitedText(parseInfo.rawText, options);
+          },
+          detectedDelimiter: parseInfo.detectedDelimiter || null,
+          hint: parseInfo.sniff || null
+        };
+      }
       var handle = DW.open({
         filename: filename,
         data: data,
-        recommendations: recs,
+        // R7：第 2 步模板列表给全量可用模板（按分数排序，徽标区分
+        // 推荐/可用/不适合）；recs 仍保留给回退推荐对话框。
+        recommendations: (function () {
+          try {
+            var st = global.FigData.columnStats(data);
+            var big = recommendList(st, { n: WIZARD_RECOMMEND_N });
+            if (big.length) return big;
+          } catch (e) { /* 回退 recs */ }
+          return recs;
+        })(),
         appName: appName,
         sourceInfo: provenance || null,
         currentCanvas: (app.doc && app.doc.canvas) || { width_mm: 120, height_mm: 90, dpi: 300 },
         buildDraft: buildDraftShared,
-        onCreate: function (templateId, mapping, canvasChoice, title) {
+        parse: parseCfg,
+        recommend: function (d) {
+          try {
+            var st = global.FigData.columnStats(d);
+            return recommendList(st, { n: WIZARD_RECOMMEND_N });
+          } catch (e) { return recs; }
+        },
+        allowCellEdit: wizardOpts.allowCellEdit !== false,
+        canPlaceNewTab: !!(global.Tabs && typeof Tabs.available === "function" &&
+          Tabs.available() && app.doc && Array.isArray(app.doc.elements) &&
+          app.doc.elements.length > 0),
+        reuseNote: wizardOpts.reuseNote || null,
+        skipMemory: wizardOpts.skipMemory === true,
+        modalTitle: wizardOpts.modalTitle || null,
+        onCreate: function (templateId, mapping, canvasChoice, title, ctx) {
           return Promise.resolve().then(function () {
             // 与预览共用同一 buildDraft：提交的就是预览看到的构建结果
             // （元素、几何、映射、有效画布一致；同一 draft 状态确定性重建）。
-            var buildResult = buildDraftShared(templateId, mapping, canvasChoice, title);
+            var buildResult = buildDraftShared(templateId, mapping, canvasChoice, title, ctx);
+            var commitProv = provenanceForCommit(provenance, ctx);
             var ops = (buildResult._canvasOps || []).concat(
-              buildTableOps(buildResult, filename, templateId, provenance));
-            return app.commit(ops, { label: '导入数据：' + filename, source: 'import' })
-              .then(function (res) {
-                if (!res || !res.applied) {
-                  if (cb) cb(new Error('操作未应用'));
-                  return false;
-                }
-                var ids = buildResult.elements.map(function (el) { return el.id; });
-                (buildResult.warnings || []).forEach(function (w) { toast(w, { type: 'info' }); });
-                toast('已导入 ' + filename + '（模板 ' + templateId + '，' +
-                  buildResult.elements.length + ' 个元素）', { type: 'success' });
-                try {
-                  if (typeof app.select === 'function') app.select(ids);
-                } catch (e) { /* selection is cosmetic */ }
-                if (cb) cb(null, { template_id: templateId, element_ids: ids,
-                  source_info: provenance || null, warnings: buildResult.warnings || [] });
-                return true;
+              buildTableOps(buildResult, filename, templateId, commitProv, wizardOpts.notePrefix));
+            var label = wizardOpts.historyLabel || ('导入数据：' + filename);
+            // R3 #5：向导选择「新建画布标签页」→ 先开新标签（空文档、
+            // 按向导所选画布尺寸），再把图表作为一笔历史提交进去。
+            if (ctx && ctx.placeIn === 'new-tab' &&
+                global.Tabs && typeof Tabs.newTab === 'function' &&
+                typeof global.FigDoc !== 'undefined' && global.FigDoc.create) {
+              var ec = buildResult.effectiveCanvas || {};
+              var curDoc = app.doc || {};
+              var curCanvas = curDoc.canvas || {};
+              // 标签标题取导入文件名（去扩展名）；没有重命名 op，
+              // 只能在创建时写入 doc.title。
+              var fileStem = String(filename || '').split(/[\\/]/).pop()
+                .replace(/\.[^.]+$/, '').trim();
+              var fresh = global.FigDoc.create({
+                app: 'figure-app', app_version: '1.0',
+                width_mm: ec.width_mm != null ? ec.width_mm : (curCanvas.width_mm || 120),
+                height_mm: ec.height_mm != null ? ec.height_mm : (curCanvas.height_mm || 90),
+                dpi: ec.dpi != null ? ec.dpi : (curCanvas.dpi || 300),
+                background: curCanvas.background || 'white',
+                title: fileStem || '数据画布'
               });
+              return Tabs.newTab(fresh).then(function (j) {
+                if (!j) return false; // 冲突/失败：向导保持打开
+                ops = ops.concat(global.StyleGallery ? global.StyleGallery.defaultStyleOpsForOps(ops) : []);
+                // R7：模板 overrides 在默认风格之后再套（见 templates.js）
+                ops = ops.concat(templateOverrideOpsFor(templateId, buildResult));
+                return app.commit(ops, { label: label, source: 'import' })
+                  .then(function (res) { return finishCreate(res, buildResult, commitProv, templateId); });
+              });
+            }
+            ops = ops.concat(global.StyleGallery ? global.StyleGallery.defaultStyleOpsForOps(ops) : []);
+            ops = ops.concat(templateOverrideOpsFor(templateId, buildResult));
+            return app.commit(ops, { label: label, source: 'import' })
+              .then(function (res) { return finishCreate(res, buildResult, commitProv, templateId); });
           }).catch(function (err) {
             toastError('导入失败：' + err.message);
             if (cb) cb(err);
@@ -689,6 +862,23 @@
           });
         }
       });
+      function finishCreate(res, buildResult, commitProv, templateId) {
+        if (!res || !res.applied) {
+          if (cb) cb(new Error('操作未应用'));
+          return false;
+        }
+        var ids = buildResult.elements.map(function (el) { return el.id; });
+        (buildResult.warnings || []).forEach(function (w) { toast(w, { type: 'info' }); });
+        toast(wizardOpts.successToast ||
+          ('已导入 ' + filename + '，生成了「' + (templateNameOf(templateId) || '所选模板') + '」'),
+          { type: 'success' });
+        try {
+          if (typeof app.select === 'function') app.select(ids);
+        } catch (e) { /* selection is cosmetic */ }
+        if (cb) cb(null, { template_id: templateId, element_ids: ids,
+          source_info: commitProv, warnings: buildResult.warnings || [] });
+        return true;
+      }
       return handle;
     }
     // DataWizard 已加载时同步打开（浏览器 index.html 预载 / 测试 require）。
@@ -756,6 +946,9 @@
     }
     fitBuiltIntoCanvas(built, canvas);
     ops = ops.concat(buildTableOps(built, filename, templateId, provenance));
+    ops = ops.concat(global.StyleGallery ? global.StyleGallery.defaultStyleOpsForOps(ops) : []);
+    // R7：模板 overrides 在默认风格之后再套（见 templates.js）
+    ops = ops.concat(templateOverrideOpsFor(templateId, built));
     return Promise.resolve().then(function () {
       return app.commit(ops, { label: '导入数据：' + filename, source: 'import' });
     }).then(function (res) {
@@ -765,8 +958,7 @@
       }
       var ids = built.elements.map(function (el) { return el.id; });
       (built.warnings || []).forEach(function (w) { toast(w, { type: 'info' }); });
-      toast('已导入 ' + filename + '（模板 ' + templateId + '，' +
-        built.elements.length + ' 个元素）', { type: 'success' });
+      toast('已导入 ' + filename + '，生成了「' + (templateNameOf(templateId) || '所选模板') + '」', { type: 'success' });
       try {
         if (typeof app.select === 'function') app.select(ids);
       } catch (e) { /* selection is cosmetic */ }
@@ -780,7 +972,7 @@
     });
   }
 
-  function applyParsedDataTable(data, filename, cb, provenance) {
+  function applyParsedDataTable(data, filename, cb, provenance, parseInfo, wizardOpts) {
     var app = requireApp();
     var stats, recs;
     try {
@@ -796,21 +988,67 @@
       if (cb) cb(new Error('没有可推荐的模板'));
       return;
     }
-    openDataWizard(app, data, filename, recs, provenance, cb);
+    openDataWizard(app, data, filename, recs, provenance, cb, parseInfo, wizardOpts);
   }
 
   function applyDataTable(text, filename, cb, rawBytes) {
-    var data, provenance;
+    var data, provenance, parseInfo = null;
     try {
       data = parseTable(text, filename);
       provenance = sourceInfoForTable(data, filename, rawBytes || null, null, text);
+      // G19：分隔文本来源附带「读取方式」接缝（原始文本 + 嗅探结果）。
+      if (isDelimitedTextFile(filename)) {
+        var sniff = sniffForText(text);
+        var det = null;
+        try {
+          if (global.FigData && typeof global.FigData.detectDelimiter === 'function') {
+            det = global.FigData.detectDelimiter(text);
+          }
+        } catch (e) { /* keep null */ }
+        parseInfo = {
+          rawText: text,
+          sniff: sniff,
+          detectedDelimiter: det || (sniff && sniff.delimiter) || null
+        };
+      }
     } catch (err) {
       toastError('解析数据失败：' + err.message);
       if (cb) cb(err);
       return;
     }
-    return applyParsedDataTable(data, filename, cb, provenance);
+    return applyParsedDataTable(data, filename, cb, provenance, parseInfo);
   }
+
+  // 大文件解析是同步长任务：先在状态栏显示「正在读取…」并让出一帧，
+  // 让 UI 先画出反馈再进入 parseCSV/columnStats。
+  function yieldFrame() {
+    return new Promise(function (resolve) {
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(function () { resolve(); });
+      } else {
+        setTimeout(resolve, 0);
+      }
+    });
+  }
+
+  function setReadingStatus(fileName, on) {
+    var st = (typeof document !== 'undefined') && document.getElementById
+      ? document.getElementById('status-text') : null;
+    if (!st) return null;
+    if (on) {
+      if (!st.getAttribute('data-prev-text')) {
+        st.setAttribute('data-prev-text', st.textContent || '');
+      }
+      st.textContent = '正在读取 ' + fileName + '…';
+    } else {
+      var prev = st.getAttribute('data-prev-text');
+      st.textContent = (prev === null || prev === '') ? '就绪' : prev;
+      st.removeAttribute('data-prev-text');
+    }
+    return st;
+  }
+
+  var LARGE_TABLE_TEXT = 1000000; // ~1MB 文本视为大文件
 
   function applyDataFile(file, cb) {
     requireApp();
@@ -818,8 +1056,20 @@
       var bytes = new Uint8Array(buffer);
       if (typeof global.TextDecoder !== 'function') throw new Error('当前环境缺少 UTF-8 TextDecoder');
       var text = new global.TextDecoder('utf-8').decode(bytes);
+      if (text.length > LARGE_TABLE_TEXT) {
+        setReadingStatus(file.name, true);
+        return yieldFrame().then(function () {
+          try {
+            return applyDataTable(text, file.name, cb, bytes);
+          } finally {
+            // 向导打开是同步 DOM；延迟一拍恢复状态栏，避免闪回。
+            setTimeout(function () { setReadingStatus(file.name, false); }, 300);
+          }
+        });
+      }
       return applyDataTable(text, file.name, cb, bytes);
     }).catch(function (err) {
+      setReadingStatus(file && file.name, false);
       toastError(err.message);
       if (cb) cb(err);
       return null;
@@ -843,6 +1093,7 @@
     var result = initial;
     var sequence = 0;
     var busy = false;
+    var dirty = false; // 用户改过工作表/表头选择后，关闭前先确认
     var sheetSelect = h('select', {
       'data-role': 'spreadsheet-sheet',
       style: 'max-width:240px;padding:4px;margin-left:6px'
@@ -898,12 +1149,13 @@
       clearChildren(notices);
       clearChildren(stats);
       clearChildren(preview);
-      info.appendChild(h('div', {
-        text: '工作表：' + result.sheet_name + '；表头行：' + result.header_row +
-          '；列：' + data.columns.length + '；数据行：' + data.rows.length +
-          ((result.source_info && result.source_info.sha256)
-            ? '；SHA-256：' + result.source_info.sha256 : '')
-      }));
+      var infoText = '工作表：' + result.sheet_name + '；表头行：' + result.header_row +
+        '；列：' + data.columns.length + '；数据行：' + data.rows.length +
+        ((result.source_info && result.source_info.sha256)
+          ? '；校验码 ' + String(result.source_info.sha256).slice(0, 12) : '');
+      var infoTitle = (result.source_info && result.source_info.sha256)
+        ? '内容校验值（SHA-256）：' + result.source_info.sha256 : '';
+      info.appendChild(h('div', { text: infoText, title: infoTitle || undefined }));
       (result.notices || []).forEach(function (notice) {
         notices.appendChild(h('div', {
           text: '· ' + (notice.message || notice.code || '工作簿提示'),
@@ -983,9 +1235,11 @@
     }
 
     sheetSelect.addEventListener('change', function () {
+      dirty = true;
       headerInput.value = '';
       refresh();
     });
+    headerInput.addEventListener('input', function () { dirty = true; });
     refreshButton.addEventListener('click', refresh);
     renderResult();
     var actions = [
@@ -1009,7 +1263,12 @@
         }
       }
     ];
-    var modal = openModal({ title: 'Excel 导入预览：' + filename, body: body, actions: actions });
+    var modal = openModal({
+      title: 'Excel 导入预览：' + filename, body: body, actions: actions,
+      // busy：异步重解析进行中也视为脏，避免解析结果写进已关闭的对话框。
+      isDirty: function () { return dirty || busy; },
+      discardText: '放弃本次 Excel 导入？'
+    });
     return {
       modal: modal, body: body, actions: actions, refresh: refresh,
       getResult: function () { return result; },
@@ -1205,32 +1464,13 @@
   // svg import (editable per-element or static image)
   // ------------------------------------------------------------------
 
-  var svgImportPromise = null;
-
-  // import.js 按 APP-API.md 的脚本顺序在 index.html 之外动态加载转换器，
-  // 不新增 index.html 的 script 标签。
+  // svg-import.js 由 index.html 静态加载；这里只解析已就绪的全局，
+  // 不在使用时再注入 script 标签。
   function ensureSvgImport() {
     if (global.SvgImport && typeof global.SvgImport.convert === 'function') {
       return Promise.resolve(global.SvgImport);
     }
-    if (!svgImportPromise) {
-      svgImportPromise = new Promise(function (resolve, reject) {
-        var s = document.createElement('script');
-        s.src = 'app/svg-import.js';
-        s.onload = function () {
-          if (global.SvgImport && typeof global.SvgImport.convert === 'function') {
-            resolve(global.SvgImport);
-          } else {
-            reject(new Error('svg-import.js 加载后缺少 SvgImport'));
-          }
-        };
-        s.onerror = function () {
-          reject(new Error('无法加载 app/svg-import.js'));
-        };
-        (document.head || document.body).appendChild(s);
-      });
-    }
-    return svgImportPromise;
+    return Promise.reject(new Error('页面缺少 SVG 转换组件，请刷新窗口'));
   }
 
   function isSvgFile(file) {
@@ -1509,6 +1749,7 @@
       '置入为位图图层；不做 OCR/图表识别，不自动仿绘或恢复原始数据';
     btn('导入 SVG', function () { openSvg(); });
     pasteImageFromClipboard();
+    bindDropImport();
   }
 
   // Import.openData(cb?) — text data stays local; Excel uses the local workbench API.
@@ -1519,17 +1760,20 @@
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,' +
       'application/vnd.ms-excel.sheet.macroenabled.12,application/vnd.ms-excel',
       function (file) {
+        picked = true;
         if (isSpreadsheetFile(file)) {
           applySpreadsheetFile(file, cb);
           return;
         }
         applyDataFile(file, cb);
       });
+    var picked = false;
     input.click();
     // 受限环境（如内嵌浏览器）可能不弹文件选择框：给出可操作的替代路径，
     // 而不是静默失败。用户可能仍在选文件，所以 6 秒后仅提示一次、非错误语气。
+    // change 处理会清空 input.value，因此以 picked 判断是否已选过文件。
     setTimeout(function () {
-      if (!input.files || !input.files.length) {
+      if (!picked && (!input.files || !input.files.length)) {
         toast('如果刚才没有弹出文件选择框：当前窗口可能不支持选择本地文件，' +
           '可改点「粘贴数据」直接贴入 CSV/JSON，或用 start-native-viewer.bat 打开独立窗口',
           { type: 'info', ms: 9000 });
@@ -1559,6 +1803,8 @@
           style: 'font-size:11px;color:#666;margin-top:6px;'
         })
       ]),
+      isDirty: function () { return String(area.value || '').trim().length > 0; },
+      discardText: '放弃本次粘贴？',
       actions: [
         { label: '取消' },
         {
@@ -1613,12 +1859,173 @@
     input.click();
   }
 
+  // Import.importFile(file) — dispatch a dropped/picked File to the matching
+  // importer by extension/MIME. Returns true when an import path was taken.
+  function importFile(file) {
+    if (!file) return false;
+    var name = String(file.name || '');
+    var lower = name.toLowerCase();
+    var ext = extOf(name);
+    var type = String(file.type || '').toLowerCase();
+    try { requireApp(); } catch (e) { toastError(e.message); return false; }
+    // 工程文件须先于通用 .json 判定（*.figureproj.json 也以 .json 结尾）
+    if (lower.slice(-('.figureproj.json'.length)) === '.figureproj.json') {
+      if (global.History && typeof global.History.importProject === 'function') {
+        global.History.importProject(file);
+        return true;
+      }
+      toast('工程文件请用「工程 → 导入工程文件」打开', { type: 'info' });
+      return false;
+    }
+    if (isSpreadsheetFile(file)) { applySpreadsheetFile(file); return true; }
+    if (isSvgFile(file)) { applySvgFile(file); return true; }
+    if (['csv', 'tsv', 'json', 'txt'].indexOf(ext) >= 0 ||
+        type === 'text/csv' || type === 'application/json' ||
+        type === 'text/tab-separated-values' || type === 'text/plain') {
+      applyDataFile(file);
+      return true;
+    }
+    if (type.indexOf('image/') === 0) {
+      readFile(file, 'dataURL').then(function (dataUrl) {
+        applyImageData(dataUrl, name);
+      }).catch(function (err) { toastError(err.message); });
+      return true;
+    }
+    toast('不支持的文件类型：' + (ext || '未知') +
+      '。可以拖入 CSV / TSV / JSON / Excel、SVG 或图片。', { type: 'info' });
+    return false;
+  }
+
+  function anyModalOpen() {
+    try {
+      return !!(typeof document !== 'undefined' && document.querySelector &&
+        document.querySelector('.ui-modal-overlay'));
+    } catch (e) { return false; }
+  }
+
+  // Window-level drag/drop import. Bound once; only reacts to drags that carry
+  // files (dataTransfer.types contains "Files"), so in-page column drags in the
+  // data wizard (text/* types) are unaffected.
+  var dropBound = false;
+  function bindDropImport() {
+    if (dropBound || typeof window === 'undefined' || !window.addEventListener) return;
+    dropBound = true;
+    var hint = null;
+    function ensureHint() {
+      if (hint && hint.parentNode) return hint;
+      hint = h('div', { class: 'drop-hint', text: '松开鼠标，导入这个文件' });
+      if (document.body) document.body.appendChild(hint);
+      return hint;
+    }
+    function hideHint() {
+      if (hint && hint.parentNode) hint.parentNode.removeChild(hint);
+      hint = null;
+    }
+    function hasFiles(dt) {
+      if (!dt) return false;
+      var types = dt.types;
+      if (!types) return !!(dt.files && dt.files.length);
+      if (typeof types.contains === 'function') return types.contains('Files');
+      if (typeof types.indexOf === 'function') return types.indexOf('Files') >= 0;
+      return String(types).indexOf('Files') >= 0;
+    }
+    window.addEventListener('dragenter', function (evt) {
+      if (!hasFiles(evt.dataTransfer)) return;
+      evt.preventDefault();
+      ensureHint();
+    });
+    window.addEventListener('dragover', function (evt) {
+      if (!hasFiles(evt.dataTransfer)) return;
+      evt.preventDefault(); // required to permit drop
+      try { if (evt.dataTransfer) evt.dataTransfer.dropEffect = 'copy'; } catch (e) { /* noop */ }
+      ensureHint();
+    });
+    window.addEventListener('dragleave', function (evt) {
+      if (evt.relatedTarget) return; // still inside the window
+      hideHint();
+    });
+    window.addEventListener('drop', function (evt) {
+      if (!hasFiles(evt.dataTransfer)) return;
+      evt.preventDefault();
+      hideHint();
+      var files = evt.dataTransfer && evt.dataTransfer.files;
+      if (!files || !files.length) return;
+      if (files.length > 1) {
+        toast('一次只导入一个文件，已取第一个：' + files[0].name, { type: 'info' });
+      }
+      if (anyModalOpen()) {
+        toast('请先关闭当前对话框再拖入文件', { type: 'info' });
+        return;
+      }
+      importFile(files[0]);
+    });
+  }
+
+  // ---- G21：用同一份数据再建一张图 -------------------------------------
+  // 深拷贝 chart.data.inline 与 source_info（原样保留 manual_edits /
+  // parse_options），走与导入完全相同的向导；不重新计算来源 sha256。
+  function newChartFromChart(elementId, cb) {
+    var app = requireApp();
+    var el = null;
+    try {
+      if (app.doc && Array.isArray(app.doc.elements)) {
+        el = app.doc.elements.filter(function (e) {
+          return e && e.id === elementId;
+        })[0] || null;
+      }
+    } catch (e) { el = null; }
+    if (!el || el.type !== 'chart' || !el.chart || !el.chart.data ||
+        !isObj(el.chart.data.inline) || !Array.isArray(el.chart.data.inline.columns)) {
+      toastError('该元素没有可复用的图表数据');
+      if (cb) cb(new Error('元素没有内联数据'));
+      return;
+    }
+    var inline = el.chart.data.inline;
+    var data = {
+      columns: (inline.columns || []).slice(),
+      rows: (inline.rows || []).map(function (r) {
+        return Array.isArray(r) ? r.slice() : r;
+      })
+    };
+    var srcInfo = el.chart.data.source_info;
+    var provenance = srcInfo ? JSON.parse(JSON.stringify(srcInfo)) : null;
+    var chartName = el.name || el.chart && el.chart.title || '';
+    var filename = (provenance && (provenance.file_name || provenance.locator)) ||
+      (chartName ? chartName + ' 的数据' : '已导入的数据');
+    var stats, recs;
+    try {
+      stats = global.FigData.columnStats(data);
+      recs = recommendList(stats);
+    } catch (err) {
+      toastError('解析数据失败：' + err.message);
+      if (cb) cb(err);
+      return;
+    }
+    if (!recs.length) {
+      toastError('没有可推荐的模板');
+      if (cb) cb(new Error('没有可推荐的模板'));
+      return;
+    }
+    openDataWizard(app, data, filename, recs, provenance, cb, null, {
+      modalTitle: '用已有数据新建图表：' + filename,
+      allowCellEdit: false,
+      skipMemory: true,
+      reuseNote: '数据取自画布上的图表「' + (chartName || elementId) +
+        '」，新图表与它共用同一份数据来源。要改数据请重新导入文件。',
+      historyLabel: '用已有数据新建图表：' + filename,
+      notePrefix: '用图表 ' + elementId + ' 的数据新建图表',
+      successToast: '已用同一份数据新建图表；它和原图重叠在一起，拖动它来排版'
+    });
+  }
+
   global.Import = {
     mount: mount,
+    newChartFromChart: newChartFromChart,
     openData: openData,
     openDataPaste: openDataPaste,
     openImage: openImage,
     openSvg: openSvg,
+    importFile: importFile,
     pasteImageFromClipboard: pasteImageFromClipboard,
     // exposed for tests / other modules; not part of the frozen contract
     _applyImageData: applyImageData,
@@ -1633,6 +2040,7 @@
     _readArrayBuffer: readArrayBuffer,
     _applySvgFile: applySvgFile,
     _applySvgText: applySvgText,
+    _importFile: importFile,
     _decompressSvgz: decompressSvgz,
     _svgToDataUrl: svgToDataUrl
   };

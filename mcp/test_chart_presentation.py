@@ -142,7 +142,7 @@ const rows = [[1,10,'A'],[2,12,'A'],[1,20,'B'],[2,22,'B']];
 let doc = mkDoc('line_multi', {x:'x',y:'y',group:'sample'}, rows);
 const cid = doc.elements.find(e => e.type === 'chart').id;
 const bad = FigOps.validateAll([{ op: 'set_chart_properties', targets: [cid],
-  properties: { presentation: { series: { 'k|with|bad key!': { stroke: '#123456' } } } } }], doc);
+  properties: { presentation: { series: { 'k|with\nbad key': { stroke: '#123456' } } } } }], doc);
 const bad2 = FigOps.validateAll([{ op: 'set_chart_properties', targets: [cid],
   properties: { presentation: { series: { 'group|sample|s:A': { fillOpacity: 0.5 } } } } }], doc);
 const bad3 = FigOps.validateAll([{ op: 'set_chart_properties', targets: [cid],

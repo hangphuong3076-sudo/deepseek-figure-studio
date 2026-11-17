@@ -21,6 +21,8 @@
   FigAI.DEFAULT_BASE_URL = "https://api.deepseek.com";
   FigAI.DEFAULT_MODEL = "deepseek-flash";
   FigAI.VISION_MODEL = "deepseek-flash";
+  // 整图审阅回答通常远长于普通问答；调用时读取，测试可临时调低。
+  FigAI.REVIEW_TIMEOUT_MS = 180000;
 
   var STATE = {
     apiKey: "",
@@ -173,12 +175,17 @@
     "- z_order: {targets, to: front|back|forward|backward}",
     "- add_anchor: {anchor:{id?, label, bbox_mm 或 bbox_norm}}；update_anchor: {anchor:{id,...}}；remove_anchor: {anchor:{id}}",
     "- apply_template: {template_id}；apply_journal: {journal_preset_id}",
-    "- apply_schematic: {contract:{id,nodes,relations,sources,canvas?,layout?},auto_layout?:false}（来源链接的严格声明式示意图；禁止猜实验体/方向）",
-    "- layout_schematic: {diagram_id, auto_layout:true}（按已保存合同显式重排）",
+    "- apply_schematic: {contract:{id,nodes,relations,sources,canvas?,layout?,theme?,groups?},auto_layout?:false}（来源链接的严格声明式示意图；禁止猜实验体/方向）",
+    "    示意图 contract 键：theme（图形风格，取 presets 的 diagram_themes，如 soft-card/outline-academic/numbered-card/side-bar/solid-block/mono-grey，null=通用样式）；layout.mode：layered 分层/grid 网格/manual 手动（默认）/flow DAG 分层（回边绕外）/snake 蛇形/stages 阶段容器/lanes 泳道/tree 树形/cycle 环形/timeline 时间轴（direction LR|TB、rows）；groups:[{id,label,color?}] 阶段分组；节点可选 group/step(徽标)/subtitle(第二行)/kind: decision(菱形)/shape: terminal(胶囊起止)|chevron(人字条)；关系 label 为出边文字（判断的 是/否 贴在线上）；中文换行遵守闭合标点不作行首、开括号不留行尾",
+    "- layout_schematic: {diagram_id, auto_layout:true, layout?:{mode,...}, theme?:<themeId>}（按已保存合同显式重排；可同时改布局模式或主题）",
+    "- apply_diagram_text: {text:'A -> B -> C\nA -> B : 是\n## 阶段名\n##2 结题?\n(结束)', layout?:{mode}, theme?:<themeId>}（文字语法一行一图：-> 连线、:标签为出边文字、## [id ]阶段名开 group、?/？结尾为判断、()包裹为起止；未知节点报行号；先 preview 再 commit）",
     "- set_scientific_contract: {contract:{schema_version?,results_question?,figure_claim?,falsifier?,archetype?,hero_panel?,panels?,statistics?}}（科学论证合同；statistics 存于各 chart，逐图申报）",
-    "- set_chart_properties: {targets:[chartId], properties:{axes?, characterization?}}（图表属性唯一入口；不改 chartType 与原始数据行）",
-    "    axes 键：xLabel/yLabel（字符串）、xScale/yScale（linear|log）、gridlines（布尔）",
+    "- set_chart_properties: {targets:[chartId], properties:{axes?, characterization?, presentation?, references?, bands?, significance?, letters?}}（图表属性唯一入口；不改 chartType 与原始数据行）",
+    "    axes 键：xLabel/yLabel（字符串）、xScale/yScale（linear|log）、gridlines（布尔）、y2（右纵轴 {series:[系列名…], label?, min?, max?}，仅 line_multi/scatter，series=宽表列名或分组值，至少留 1 条在左轴；null 移除）、xMin/xMax/yMin/yMax（number|null 坐标范围；范围外数据计数进 warnings，不修改原始行；log 轴下界须 >0）",
     "    characterization 键：technique、x_reverse（布尔）、x_scale（linear|log10，注意与 axes 的 log 不同写法）、x_label/y_label、curves[{role:fit|component|baseline, column, label?}]（column 必须是内联数据真实列名）、fit_model、fit_source（固定 provided_by_user_fit）、peak_annotations[{x, label}]、normalize（none|max_to_unity）、offset_each_series（数字，仅视觉偏移）、equal_aspect（布尔）；null 清除表征",
+    "    presentation 键（展示覆盖，不改数据/统计）：axes.{x,y}.{title,tick}.{fontSizePt,color,fontWeight}（tick 另支持 hidden:true 隐藏刻度线与数字）、legend.{position: none|right|top|bottom|inside-tr|inside-tl|inside-br|inside-bl|inside-best|inline（仅曲线图型，系列名写在曲线右端）,fontSizePt,color,frame}、plot.{frame: open|box, tickDirection: out|in, axisWidthPt(0=不画轴线), tickLengthPt(0=不画刻度线), markerSizePt, lineWidthPt, markerFill: solid|hollow, markerCycle, dashCycle, background, gridColor, seriesColors:{mode:gradient,palette:<顺序配色id>,reverse?,colorbar?}, componentFill:true（表征 component 曲线向基线填充）, errorStyle: bars|band（band 仅 line/line_multi 误差带）}、series[稳定键].{stroke,strokeWidthPt,dash,marker: none|circle|square|triangle|diamond,markerSizePt,opacity,hatch: /|\\|x|.|-||}、points[标记键].{fill,sizePt,opacity,marker,stroke,strokeWidthPt}（≤2000 键）、peaks[峰id].{color,fontSizePt}；null 语义＝删除该级覆盖；稳定键用 FigData.seriesIdentity 查询，标记键 pt|行号|散列（FigData.pointKey）或 bar|类别[|组]",
+    "    R6 表征标注（chart 级整组替换，数值一律用户/模板填写，渲染器不推断）：references≤8 组 {label,source?,color?,style:sticks|lines,positions[≤200 个 x],heights?[0..1]}（sticks=底部标准卡参考带如 JCPDS 卡号，lines=贯穿虚线）；bands≤20 {x0,x1,color?,opacity?,label?} 区间底色；significance≤30 {a:<类别>,b:<类别>,label:<显著性符号>,group?}（bar/bar_grouped/box/violin/dotplot，类别必须真实存在）；letters {<类别或 类别|分组>: <字母>}（柱/箱顶标注）；null 或 [] 清除",
+    "- apply_chart_style: {targets:[chartId], style_id} 或 {targets:[chartId], style:{...token}}（二者必给其一；style_id 取 FigPresets.style，如 nature-minimal/acs-bold；用于「套用某风格」「改成 ACS 粗体风格」等整图风格请求；会重置系列级描边/线型/标记覆盖，保留单点颜色与峰标注）",
     "- set_chart_data: {targets:[chartId],approved:true,data:{columns,rows,source_ref?,version?,raw_source_sha256?,source_info?},source_ref,version}（approved 只能来自用户明确批准的替换流程，模型输出不构成授权；替换后统计声明强制重审）",
     "- recolor: {palette_id, recolor_strategy?: byHue|byOrder|byRole}",
     "- panel_layout: {targets, panel:{cols, rows, gap_mm, padding_mm, ...}}",
@@ -246,10 +253,16 @@
     if (c.mapping && Object.keys(c.mapping).length) {
       lines.push("- mapping: " + JSON.stringify(c.mapping));
     }
-    if (c.axes && Object.keys(c.axes).length) {
-      lines.push("- axes: " + JSON.stringify(c.axes));
-    } else {
-      lines.push("- axes: {}（未设置；xScale/yScale 可用 linear|log）");
+    lines.push("- axes: " + JSON.stringify(
+      (c.axes && typeof c.axes === "object") ? c.axes : {}));
+    if (global.FigData && typeof global.FigData.describeChartStyle === "function") {
+      try {
+        var st = el.style || {};
+        var dcs = global.FigData.describeChartStyle(c, {
+          fontSizePt: st.fontSizePt, fontFamily: st.fontFamily
+        });
+        lines.push("- 当前实际渲染样式（未单独设置的项为默认值）: " + JSON.stringify(dcs));
+      } catch (e) { /* 样式摘要失败不阻塞上下文 */ }
     }
     if (c.characterization && Object.keys(c.characterization).length) {
       lines.push("- characterization: " + JSON.stringify(c.characterization));
@@ -424,6 +437,192 @@
       { role: "system", content: parts.join("\n") },
       { role: "user", content: "用户指令：" + oneLine(opts.instruction) }
     ];
+  };
+
+  /**
+   * FigAI.buildAssistMessages({doc, instruction, anchors, selection, history,
+   *   chartPart, checks, journalProfile}) -> messages
+   * 对话+修改方案统一入口：system 给固定工作方式提示词 + 文档/锚点/图表上下文，
+   * 末尾追加 history（原样）与 user 指令。模型输出 {"reply","ops"}。
+   */
+  FigAI.buildAssistMessages = function (opts) {
+    opts = opts || {};
+    requireDoc(opts.doc, "buildAssistMessages");
+    requireInstruction(opts.instruction, "buildAssistMessages");
+    var doc = opts.doc;
+    var anchors = Array.isArray(opts.anchors) ? opts.anchors : (doc.anchors || []);
+    var selection = Array.isArray(opts.selection) ? opts.selection : [];
+    var parts = [
+      "你是科研绘图编辑器里的助手，和用户一起改进当前这张图。你有两种能力：用中文回答问题；提出可以直接执行的修改方案（EditOp）。",
+      "工作方式：",
+      "1. 用户只是提问或讨论时，正常回答，ops 留空数组。",
+      "2. 用户要求修改，或者问“怎么改更好”“给点建议”“帮我优化”这类问题时，必须给出具体修改方案：reply 里用编号列表逐条说明改什么、改成多少、为什么；ops 里放能实现这些修改的 EditOp，与 reply 的条目一一对应。数值要具体（例如“坐标轴标题字号 7pt 改为 8pt”），不要只说“适当调大”。",
+      "3. 现有操作做不到的建议，在 reply 里单独列为“需要你手动处理”并说明原因，不要为它编造 op。",
+      "4. 你不能直接改图。所有修改都要等用户点“同意并修改”后才执行，所以不要说“已修改”“已完成”，要说“我建议”。",
+      "5. 下面“当前实际渲染样式”一行给出的就是图上现在生效的字号、线宽、刻度方向、边框、颜色等（未单独设置的项已按默认值列出）。请据此分析，不要说看不到这些设置。",
+      "6. 你看到的是结构化文档和样式数值，不是渲染后的像素，也没有原始数据行。不要编造数据、显著性、样本量；不要评价科学结论是否成立；不要宣称符合某期刊的投稿要求。确实涉及这些时用一句话说明边界即可，不要每次回答都重复。",
+      "7. 只修改用户提到的或与问题直接相关的对象；用户选中了对象或用 @锚点 指定了对象时，优先只改这些对象。不改图表类型，不改原始数据。",
+      opHelpLines(doc, selection),
+      "当前文档元素清单：",
+      renderElementTable(doc),
+      "锚点清单：",
+      renderAnchorTable(anchors)
+    ];
+    var chartCtx = renderChartContext(doc, selection);
+    if (chartCtx) {
+      parts.push(selection.length
+        ? "选中图表的结构摘要（当前值；不含原始数据行）："
+        : "文档图表结构摘要（默认全部列出；不含原始数据行）：");
+      parts.push(chartCtx);
+    }
+    if (selection.length) {
+      parts.push("当前选中元素：" + selection.join(", "));
+    }
+    var cp = opts.chartPart;
+    if (cp && cp.pointKey) {
+      var what = cp.part === "bar" ? "柱子" : "数据点";
+      parts.push("用户当前点选的图内对象：图表 " + (cp.chartId || "") +
+        " 的" + what + "，标记键 " + cp.pointKey +
+        (cp.seriesKey ? "，系列键 " + cp.seriesKey : ""));
+    }
+    var jp = opts.journalProfile;
+    if (jp) {
+      parts.push("期刊预设：" + (jp.name || jp.id || "") +
+        "；栏宽 " + (jp.width_mm != null ? jp.width_mm + "mm" : "未限定") +
+        "；正文字号 " + (jp.base_font_pt != null ? jp.base_font_pt + "pt" : "-") +
+        "；最小字号 " + (jp.min_font_pt != null ? jp.min_font_pt + "pt" : "-"));
+    }
+    var checks = Array.isArray(opts.checks) ? opts.checks : [];
+    if (checks.length) {
+      parts.push("规则检查发现的问题：");
+      checks.slice(0, 24).forEach(function (w) {
+        parts.push("- [" + (w && w.code ? w.code : "?") + "] " +
+          (w && w.message ? w.message : "") +
+          (w && w.element_id ? "（" + w.element_id + "）" : ""));
+      });
+    }
+    parts.push(
+      "输出要求：只输出一个 JSON 对象 {\"reply\":\"...\",\"ops\":[...]}。reply 是给用户看的中文回答，可以分段和编号，用 \\n 换行，不要用 markdown 标题或代码块；ops 是 EditOp 数组，没有修改时为 []。不要输出 JSON 之外的任何文字。"
+    );
+    var messages = [{ role: "system", content: parts.join("\n") }];
+    var hist = Array.isArray(opts.history) ? opts.history : [];
+    for (var i = 0; i < hist.length; i++) {
+      var m = hist[i];
+      if (m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string") {
+        messages.push({ role: m.role, content: m.content });
+      }
+    }
+    messages.push({ role: "user", content: opts.instruction });
+    return messages;
+  };
+
+  /**
+   * FigAI.requestAssist({doc, instruction, anchors, selection, history,
+   *   chartPart, checks, journalProfile})
+   *   -> Promise<{reply, ops, mode:"model", repaired?, ops_error?}>
+   * 对话+修改方案：要求模型输出 {"reply","ops"}。ops 非空时用 FigOps.validateAll
+   * 校验；形状或校验不通过则带原始输出重试一次，仍不通过则丢弃 ops 并回 ops_error。
+   * 未配置 key / 网络 / HTTP 错误原样抛出（不做离线回退）。
+   */
+  FigAI.requestAssist = async function (opts) {
+    opts = opts || {};
+    requireDoc(opts.doc, "requestAssist");
+    requireInstruction(opts.instruction, "requestAssist");
+    if (!FigAI.enabled()) {
+      throw new AIError("未配置 API Key，无法调用 AI 服务", 0, "no api key");
+    }
+    var doc = opts.doc;
+    var messages = FigAI.buildAssistMessages(opts);
+
+    function opsErrors(ops) {
+      var errs = [];
+      var prob = opsProblem(ops);
+      if (prob) { errs.push(prob); return errs; }
+      if (ops.length && global.FigOps && typeof global.FigOps.validateAll === "function") {
+        try {
+          var v = global.FigOps.validateAll(ops, doc);
+          if (v && v.ok === false && Array.isArray(v.errors)) {
+            errs = errs.concat(v.errors);
+          }
+        } catch (e) {
+          errs.push("校验异常: " + (e && e.message ? e.message : String(e)));
+        }
+      }
+      return errs;
+    }
+
+    function parseAssist(text) {
+      var parsed;
+      try { parsed = extractJSON(text); } catch (e) {
+        if (typeof text === "string" && text.trim()) {
+          return { reply: text.trim(), ops: [], parsedOk: false };
+        }
+        throw e;
+      }
+      if (Array.isArray(parsed)) {
+        // 模型直接给了 ops 数组（无 reply 包装）→ 视为无回复文本
+        var arr = parsed;
+        var probArr = opsProblem(arr);
+        return { reply: "", ops: probArr ? null : arr, rawOps: arr, parsedOk: true, noReply: true };
+      }
+      if (!isObj(parsed)) {
+        throw new Error("模型返回结构异常：缺少 reply");
+      }
+      var reply = parsed.reply;
+      if (typeof reply !== "string" || !reply.trim()) reply = parsed.explanation;
+      if (typeof reply !== "string" || !reply.trim()) reply = parsed.text;
+      if (typeof reply !== "string" || !reply.trim()) {
+        throw new Error("模型返回结构异常：缺少 reply");
+      }
+      var ops = Array.isArray(parsed.ops) ? parsed.ops : [];
+      return { reply: reply, ops: ops, rawOps: parsed.ops, parsedOk: true };
+    }
+
+    var res = await FigAI.chat(messages, { json: true });
+    var first = parseAssist(res.text);
+    var ops = first.ops;
+    if (ops === null || ops === undefined) ops = [];
+
+    // 纯文本 / 无 ops：直接返回
+    if (!first.parsedOk || !ops.length) {
+      return { reply: first.reply, ops: [], mode: "model" };
+    }
+
+    var errs = opsErrors(ops);
+    if (!errs.length) {
+      return { reply: first.reply, ops: ops, mode: "model" };
+    }
+
+    // 校验失败 → 追加两条消息重试一次
+    var repairMsgs = messages.concat([
+      { role: "assistant", content: String(res.text).slice(0, 8000) },
+      { role: "user", content: "上一条输出里的 ops 没有通过校验：" +
+        errs.slice(0, 5).join("；") +
+        "。请保持 reply 的意思不变，只输出修正后的 JSON 对象 {\"reply\":\"...\",\"ops\":[...]}；" +
+        "确实无法用现有操作实现的条目从 ops 里去掉，并在 reply 里改列为需要手动处理。" }
+    ]);
+    var res2 = await FigAI.chat(repairMsgs, { json: true });
+    var second;
+    try {
+      second = parseAssist(res2.text);
+    } catch (e2) {
+      second = { reply: first.reply, ops: null, parsedOk: false };
+    }
+    var ops2 = (second && second.ops) || [];
+    if (second && second.parsedOk && ops2.length) {
+      var errs2 = opsErrors(ops2);
+      if (!errs2.length) {
+        return { reply: second.reply || first.reply, ops: ops2, mode: "model", repaired: true };
+      }
+    }
+    // 两次都不通过 → 丢弃 ops，保留第一次 reply
+    return {
+      reply: first.reply,
+      ops: [],
+      ops_error: errs.concat(second && second.ops ? opsErrors(second.ops) : []).join("；") ||
+        "修改方案没有通过检查",
+      mode: "model"
+    };
   };
 
   /**
@@ -662,6 +861,16 @@
     return arr;
   }
 
+  function parseReviewOutput(text) {
+    var parsed;
+    try { parsed = extractJSON(text); } catch (e) { return { problem: e.message }; }
+    var items = null;
+    if (Array.isArray(parsed)) items = parsed;
+    else if (isObj(parsed)) items = firstArrayValue(parsed);
+    items = validReviewArray(items);
+    return items ? { items: items } : { problem: "AI 返回的审阅意见不是合法的 JSON 数组" };
+  }
+
   // ------------------------------------------------------------------
   // requestOps / requestReview / explainError
   // ------------------------------------------------------------------
@@ -710,25 +919,31 @@
         return { ops: second.ops, explanation: second.explanation, mode: "model",
           repaired: true, first_problem: first.problem };
       }
-      return fallback("模型输出未通过 EditOp 校验（" + first.problem + "；自我修正一次后仍不合法：" + second.problem + "）", "validate");
+      return fallback("模型输出未通过操作格式校验（" + first.problem + "；自我修正一次后仍不合法：" + second.problem + "）", "validate");
     } catch (err2) {
-      return fallback("模型输出未通过 EditOp 校验（" + first.problem + "）；修正请求失败：" +
+      return fallback("模型输出未通过操作格式校验（" + first.problem + "）；修正请求失败：" +
         (err2 && err2.message ? err2.message : String(err2)), "validate");
     }
   };
 
   /**
    * FigAI.requestReview({doc, imageDataUrl, journalPreset})
-   *   -> Promise<{items, mode:"model"|"fallback"}>
+   *   -> Promise<{items, mode:"model"|"fallback", fallback_reason?, fallback_stage?}>
+   * 与 requestOps 同一回退契约：请求失败/输出不可解析时回退离线审阅，
+   * 但保留原因与阶段（request|validate），且对不可解析输出做一次自我修正。
    */
   FigAI.requestReview = async function (opts) {
     opts = opts || {};
     requireDoc(opts.doc, "requestReview");
-    var fallback = function () {
+    var fallback = function (reason, stage) {
       var r = FigAI.fallbackReview(opts);
-      return { items: r.items, explanation: r.explanation, mode: "fallback" };
+      var out = { items: r.items, explanation: r.explanation, mode: "fallback" };
+      if (reason) { out.fallback_reason = reason; out.fallback_stage = stage; }
+      return out;
     };
     if (!FigAI.enabled()) return fallback();
+    var timeoutMs = typeof FigAI.REVIEW_TIMEOUT_MS === "number" &&
+      FigAI.REVIEW_TIMEOUT_MS > 0 ? FigAI.REVIEW_TIMEOUT_MS : 180000;
     try {
       var checkResult = opts.checkResult || null;
       if (!checkResult && global.FigPresets && typeof global.FigPresets.check === "function") {
@@ -740,20 +955,39 @@
         journalPreset: opts.journalPreset,
         checkResult: checkResult
       });
-      var res = await FigAI.chat(messages, {
+      var chatOpts = {
         json: true,
         model: opts.imageDataUrl ? STATE.visionModel : undefined,
-        imageDataUrl: opts.imageDataUrl
-      });
-      var parsed = extractJSON(res.text);
-      var items = null;
-      if (Array.isArray(parsed)) items = parsed;
-      else if (isObj(parsed)) items = firstArrayValue(parsed);
-      items = validReviewArray(items);
-      if (!items) throw new Error("AI 返回的审阅意见不是合法的 JSON 数组");
-      return { items: items, explanation: "", mode: "model" };
+        imageDataUrl: opts.imageDataUrl,
+        timeoutMs: timeoutMs
+      };
+      var res = await FigAI.chat(messages, chatOpts);
+      var first = parseReviewOutput(res.text);
+      if (!first.problem) {
+        return { items: first.items, explanation: "", mode: "model" };
+      }
+      try {
+        var repairMessages = messages.concat([
+          { role: "assistant", content: String(res.text).slice(0, 8000) },
+          { role: "user", content: "上一条输出未通过审阅格式校验：" + first.problem +
+            "。请只输出修正后的 JSON 数组 [{\"severity\":\"high|medium|low\",\"target\":\"<id>\"," +
+            "\"issue\":\"...\",\"suggestion\":\"...\",\"op\":<EditOp|null>}]，不要输出其他文字。" }
+        ]);
+        var repairRes = await FigAI.chat(repairMessages, chatOpts);
+        var second = parseReviewOutput(repairRes.text);
+        if (!second.problem) {
+          return { items: second.items, explanation: "", mode: "model",
+            repaired: true, first_problem: first.problem };
+        }
+        return fallback("模型输出未通过审阅格式校验（" + first.problem +
+          "；自我修正一次后仍不合法：" + second.problem + "）", "validate");
+      } catch (err2) {
+        return fallback("模型输出未通过审阅格式校验（" + first.problem +
+          "）；修正请求失败：" + (err2 && err2.message ? err2.message : String(err2)),
+          "validate");
+      }
     } catch (err) {
-      return fallback();
+      return fallback(err && err.message ? err.message : String(err), "request");
     }
   };
 

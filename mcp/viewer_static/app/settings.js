@@ -98,7 +98,7 @@
             global.localStorage.setItem(LS_KEY, JSON.stringify(state));
         } catch (err) {
             // Storage may be unavailable (privacy mode, file:// quota...).
-            warn("设置写入 localStorage 失败：" + msgOf(err));
+            warn("设置保存失败：" + msgOf(err));
         }
     }
 
@@ -130,6 +130,25 @@
         return lastModelCallRec;
     }
 
+    // 把一次 chat 失败归类：timeout（前端超时或查看器 504）与真实传输
+    // 失败（fetch TypeError / 连接拒绝 / 查看器 502 桥不可达或未配置）分开，
+    // 供 AiPanel 徽章区分「模型响应超时（未断开）」与「桥未连接」。
+    function chatErrorKind(err) {
+        var status = err && typeof err.status === "number" ? err.status : 0;
+        var body = err && typeof err.body === "string" ? err.body : "";
+        var msg = String(err && err.message ? err.message : (err || ""));
+        var name = String(err && err.name ? err.name : "");
+        if (status === 504) return "timeout";
+        if (status === 0) {
+            if (body === "timeout" || name === "AbortError" ||
+                /请求超时|timeout|timed out/i.test(msg)) return "timeout";
+            return "transport";
+        }
+        if ((status === 502 || status === 503) &&
+            /模型桥不可达|未配置模型桥/.test(body + " " + msg)) return "transport";
+        return "other";
+    }
+
     // 包裹 FigAI.chat：请求参数与返回值 {text, usage, raw} 原样透传，
     // 失败时原样 rethrow（不改变内核语义），仅旁路记录最近一次真实调用，
     // 供 AiPanel 在 requestOps 静默回退后如实展示桥/直连的失败原因。
@@ -150,6 +169,8 @@
                     source: source, ok: false,
                     status: (err && typeof err.status === "number") ? err.status : 0,
                     message: describeChatError(err),
+                    errKind: chatErrorKind(err),
+                    timeoutMs: (opts && typeof opts.timeoutMs === "number") ? opts.timeoutMs : 0,
                     at: t0
                 };
                 throw err;
@@ -204,10 +225,10 @@
     function modeText() {
         var a = figAi();
         var enabled = !!(a && typeof a.enabled === "function" && a.enabled());
-        if (!enabled) return "离线模式（未配置 API Key）";
+        if (!enabled) return "未连接";
         return bridgeMode()
-            ? "模型模式（DSH 桥，零 key；连通性以真实请求为准）"
-            : "模型模式（Key 已配置）";
+            ? "已连接（通过 DSH；能否使用以“测试连接”为准）"
+            : "已配置（直接连接）";
     }
 
     function pushStatus(text, isError) {
@@ -285,11 +306,11 @@
     function testConnection() {
         var a = figAi();
         if (!a || typeof a.chat !== "function") {
-            return Promise.reject(new Error("AI 模块未加载（lib/ai.js）"));
+            return Promise.reject(new Error("AI 功能未加载"));
         }
         if (!(a && typeof a.enabled === "function" && a.enabled())) {
             return Promise.reject(new Error(
-                "AI 未启用：请先在设置里填写 API Key，或由 DSH 插件启动以复用其 DeepSeek"));
+                "AI 未启用：请先在设置里填写 API Key，或从 DSH 打开以使用其 AI"));
         }
         var t0 = Date.now();
         return a.chat(
@@ -311,22 +332,9 @@
 
     // ------------------------------------------------------------- DOM utils
 
-    // Minimal element builder so the form works even if Ui.h is absent.
+    // Local alias for Ui.h.
     function h(tag, attrs, children) {
-        var el = document.createElement(tag);
-        if (attrs) {
-            for (var k in attrs) {
-                if (!Object.prototype.hasOwnProperty.call(attrs, k)) continue;
-                if (k === "style") el.setAttribute("style", attrs[k]);
-                else if (k === "class") el.className = attrs[k];
-                else el.setAttribute(k, attrs[k]);
-            }
-        }
-        (children || []).forEach(function (c) {
-            if (c === null || c === undefined) return;
-            el.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
-        });
-        return el;
+      return global.Ui.h(tag, attrs, children);
     }
 
     function row(labelText, control, hintText) {
@@ -370,7 +378,7 @@
             try {
                 setApiKey(inp.value);
                 inp.value = state.apiKey;
-                pushStatus("API Key 已保存（仅存本机 localStorage）");
+                pushStatus("API Key 已保存（只保存在这台电脑上）");
             } catch (err) {
                 pushStatus(msgOf(err), true);
             }
@@ -510,7 +518,7 @@
         return inp;
     }
 
-    function canvasSizeControl() {
+    function canvasSizeControl(ctx) {
         var canvas = global.App && global.App.canvas ? global.App.canvas() : {};
         var widthInput = dimensionInput("width", canvas.width_mm || 120);
         var heightInput = dimensionInput("height", canvas.height_mm || 90);
@@ -540,7 +548,7 @@
                 pushStatus(msgOf(err), true);
             }
         });
-        return h("div", null, [
+        var wrap = h("div", null, [
             h("div", { style: "display:flex;align-items:center;gap:4px;flex-wrap:wrap" }, [
                 widthInput, h("span", { text: "×", style: "color:#666" }), heightInput,
                 h("span", { text: "mm", style: "color:#666" }), apply
@@ -549,6 +557,27 @@
                 fit, h("span", { text: "等比调整现有图形与编号选框（字号、原始数据和导出 DPI 不变）" })
             ])
         ]);
+        // 画布宽高/等比是「未应用」草稿：点「应用画布尺寸」才写文档，
+        // 因此对话框关闭前需要 isDirty 比对（其余设置均 change 即持久化生效）。
+        if (ctx) {
+            ctx.sizeDraft = {
+                width: widthInput, height: heightInput, fit: fit,
+                width0: widthInput.value, height0: heightInput.value,
+                fit0: fit.checked
+            };
+        }
+        return wrap;
+    }
+
+    function sizeDraftDirty(d) {
+        if (!d) return false;
+        function numEq(a, b) {
+            var na = parseFloat(a), nb = parseFloat(b);
+            return (isFinite(na) && isFinite(nb)) ? na === nb : String(a) === String(b);
+        }
+        return !numEq(d.width.value, d.width0) ||
+            !numEq(d.height.value, d.height0) ||
+            d.fit.checked !== d.fit0;
     }
 
     function refreshStatusLine() {
@@ -596,15 +625,15 @@
 
     // ------------------------------------------------------------------ form
 
-    function buildForm() {
+    function buildForm(ctx) {
         var root = h("div", { style: "padding:8px 10px;font-size:13px;max-width:640px;min-width:0" });
         root.appendChild(h("div", { style: "font-weight:bold;font-size:14px;margin:2px 0 8px" }, ["AI 连接（DeepSeek）"]));
         root.appendChild(h("div", {
             style: "padding:8px 10px;margin-bottom:12px;border:1px solid #bfdbfe;border-radius:6px;" +
                 "background:#eff6ff;color:#1e3a5f;font-size:12px;line-height:1.55"
-        }, ["DSH 复用优先（不需要单独填 key）：由 DSH 插件启动时自动使用本机 llm 桥。" +
-            "不填写 API Key 即可复用；填写后才改为直连。是否可用以“本地测试连接”的真实请求结果为准。"]));
-        root.appendChild(row("API Key（留空则优先复用 DSH；仅存本机 localStorage）", apiKeyControl()));
+        }, ["通常不用填：从 DSH 里打开本工具时，会自动借用 DSH 的模型连接。" +
+            "只有想改用自己的 API Key 时才需要填写。能不能用，以下面「测试连接」的实际结果为准。"]));
+        root.appendChild(row("API Key（可不填；只保存在这台电脑上）", apiKeyControl()));
         root.appendChild(h("div", { style: "font-size:11px;color:#6b7280;line-height:1.5;margin:-4px 0 12px" },
             ["Key 不会随文档或工程文件导出，也不会显示在连接结果中。"]));
         statusEl = h("div", {
@@ -616,7 +645,7 @@
         root.appendChild(testControl());
 
         root.appendChild(h("div", { style: "font-weight:bold;font-size:14px;margin:18px 0 10px" }, ["画布"]));
-        root.appendChild(row("当前画布宽高（mm）", canvasSizeControl(),
+        root.appendChild(row("当前画布宽高（mm）", canvasSizeControl(ctx),
             "确认后才写入文档；保留现有宽高自定义和等比适配逻辑。"));
         root.appendChild(row("新建文档默认 DPI", dpiControl(),
             "DPI 与画布尺寸集中在这里；已打开的文档请用“应用到当前文档”。"));
@@ -630,24 +659,24 @@
             style: "cursor:pointer;font-weight:bold;font-size:13px;color:#374151;margin-bottom:10px"
         }, ["高级设置（Base URL / 模型 / 代理）"]));
         advanced.appendChild(h("div", { style: "font-size:11px;color:#6b7280;line-height:1.5;margin:8px 0 12px" },
-            ["DSH 复用模式通常无需修改以下项目。更改后会立即重新应用 AI 配置。"]));
+            ["通过 DSH 打开时通常无需修改以下项目；改动会立即生效。"]));
         advanced.appendChild(row("Base URL",
             textInput(state.baseUrl, defaultBaseUrl(), plainChange("baseUrl", "Base URL"), 2048)));
         advanced.appendChild(row("模型",
             textInput(state.model, defaultModel(), plainChange("model", "模型"), 128)));
-        advanced.appendChild(row("代理地址 proxyUrl（可选）",
+        advanced.appendChild(row("代理地址（可选）",
             textInput(state.proxyUrl, "留空则直连官方地址", plainChange("proxyUrl", "代理地址"), 2048)));
         root.appendChild(advanced);
         return root;
     }
 
-    function mount(panelEl) {
+    function mount(panelEl, ctx) {
         if (!panelEl) {
             warn("mount：未提供面板元素，跳过内嵌面板（可从顶栏“设置”按钮打开）");
             return;
         }
         panelEl.textContent = "";
-        panelEl.appendChild(buildForm());
+        panelEl.appendChild(buildForm(ctx));
     }
 
     function open() {
@@ -656,23 +685,20 @@
             throw new Error("设置窗口需要 Ui.modal（app/ui.js）支持");
         }
         var host = document.createElement("div");
+        var ctx = {};
         var modal = ui.modal({
             title: "设置",
             body: host,
-            actions: [{ label: "关闭", primary: true, onClick: function () { modal.close(); } }]
+            className: "ui-modal-settings",
+            // 仅「应用画布尺寸」前的宽高/等比输入是未应用草稿；其余设置
+            // 在 change 时已 persist + applyToFigAI，即时生效不算脏。
+            isDirty: function () { return sizeDraftDirty(ctx.sizeDraft); },
+            actions: [{
+                label: "关闭", primary: true,
+                onClick: function () { modal.requestClose(); return false; }
+            }]
         });
-        var dialog = modal.root && modal.root.querySelector(".ui-modal");
-        var body = modal.root && modal.root.querySelector(".ui-modal-body");
-        if (dialog) {
-            dialog.style.width = "640px";
-            dialog.style.maxWidth = "calc(100vw - 40px)";
-            dialog.style.boxSizing = "border-box";
-        }
-        if (body) {
-            body.style.maxHeight = "calc(100vh - 160px)";
-            body.style.overflowY = "auto";
-        }
-        mount(host);
+        mount(host, ctx);
         return modal;
     }
 
@@ -775,6 +801,7 @@
         testConnection: testConnection,
         bridgeMode: bridgeMode,
         lastModelCall: lastModelCall,
+        chatErrorKind: chatErrorKind,
         reserveRequestId: reserveRequestId,
         releaseRequestId: releaseRequestId
     };

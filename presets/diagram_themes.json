@@ -1,0 +1,266 @@
+{
+ "version": "1.0",
+ "disclaimer": "流程图/示意图主题：节点、容器、连线、徽标样式。全部为纯色与描边，不使用 SVG 滤镜/渐变（MuPDF 导出可靠）；阴影仅允许偏移矩形。",
+ "fields": {
+  "id": "主题唯一标识（spec.theme 引用）",
+  "name": "显示名",
+  "node": "节点形状样式 {fill,stroke,strokeWidthPt,cornerRadiusMm,fontFamily,fontWeight,fillText,subtitleColor,groupFill,groupFill}",
+  "groupColors": "按 group/阶段顺序取色的浅彩/饱和色板",
+  "connector": "连线样式 {stroke,strokeWidthPt}（activate/inhibit 保留语义色）",
+  "container": "阶段/泳道容器 {fill,stroke,strokeWidthPt,dash,titleFill,titleBar,sideBar}",
+  "badge": "step 编号徽标 {fill,text}",
+  "arrow": "箭头尺寸提示 {size: small|medium}"
+ },
+ "themes": {
+  "soft-card": {
+   "name": "柔和卡片",
+   "node": {
+    "fill": null,
+    "stroke": null,
+    "strokeWidthPt": 0,
+    "cornerRadiusMm": 2,
+    "fontFamily": "Arial, sans-serif",
+    "fontWeight": "normal",
+    "fillText": "#374151",
+    "subtitleColor": "#4B5563",
+    "groupFill": "declared"
+   },
+   "groupColors": [
+    "#FDE68A",
+    "#BBF7D0",
+    "#BFDBFE",
+    "#FBCFE8",
+    "#DDD6FE",
+    "#FED7AA"
+   ],
+   "connector": {
+    "stroke": "#6B7280",
+    "strokeWidthPt": 0.6
+   },
+   "container": {
+    "fill": "#F9FAFB",
+    "stroke": "#E5E7EB",
+    "strokeWidthPt": 0.5,
+    "dash": null,
+    "titleFill": "#374151",
+    "titleBar": false
+   },
+   "badge": {
+    "fill": "#6B7280",
+    "text": "#FFFFFF"
+   },
+   "arrow": {
+    "size": "small"
+   }
+  },
+  "outline-academic": {
+   "name": "线框学术",
+   "node": {
+    "fill": "#FFFFFF",
+    "stroke": "#1F2937",
+    "strokeWidthPt": 0.5,
+    "cornerRadiusMm": 0.6,
+    "fontFamily": "Times New Roman, SimSun, serif",
+    "fontWeight": "normal",
+    "fillText": "#111827",
+    "subtitleColor": "#4B5563",
+    "groupFill": "theme"
+   },
+   "groupColors": [
+    "#FFFFFF",
+    "#FFFFFF",
+    "#FFFFFF",
+    "#FFFFFF",
+    "#FFFFFF",
+    "#FFFFFF"
+   ],
+   "connector": {
+    "stroke": "#111827",
+    "strokeWidthPt": 0.6
+   },
+   "container": {
+    "fill": "#FFFFFF",
+    "stroke": "#9CA3AF",
+    "strokeWidthPt": 0.5,
+    "dash": "3 2",
+    "titleFill": "#111827",
+    "titleBar": true
+   },
+   "badge": {
+    "fill": "#1F2937",
+    "text": "#FFFFFF"
+   },
+   "arrow": {
+    "size": "small"
+   }
+  },
+  "numbered-card": {
+   "name": "编号卡片",
+   "node": {
+    "fill": "#FFFFFF",
+    "stroke": "#E5E7EB",
+    "strokeWidthPt": 0.4,
+    "cornerRadiusMm": 1.5,
+    "fontFamily": "Arial, sans-serif",
+    "fontWeight": "bold",
+    "fillText": "#111827",
+    "subtitleColor": "#6B7280",
+    "groupFill": "theme"
+   },
+   "groupColors": [
+    "#60A5FA",
+    "#34D399",
+    "#FBBF24",
+    "#F472B6",
+    "#A78BFA",
+    "#FB923C"
+   ],
+   "connector": {
+    "stroke": "#9CA3AF",
+    "strokeWidthPt": 0.6
+   },
+   "container": {
+    "fill": "#F9FAFB",
+    "stroke": "#E5E7EB",
+    "strokeWidthPt": 0.5,
+    "dash": null,
+    "titleFill": "#374151",
+    "titleBar": false
+   },
+   "badge": {
+    "fill": null,
+    "text": "#1F2937",
+    "ungroupedPalette": true
+   },
+   "arrow": {
+    "size": "small"
+   }
+  },
+  "side-bar": {
+   "name": "左色条",
+   "node": {
+    "fill": "#FFFFFF",
+    "stroke": "#E5E7EB",
+    "strokeWidthPt": 0.5,
+    "cornerRadiusMm": 1.2,
+    "fontFamily": "Arial, sans-serif",
+    "fontWeight": "normal",
+    "fillText": "#111827",
+    "subtitleColor": "#6B7280",
+    "sideBar": true,
+    "groupFill": "theme"
+   },
+   "groupColors": [
+    "#6366F1",
+    "#0EA5E9",
+    "#10B981",
+    "#F59E0B",
+    "#EF4444",
+    "#8B5CF6"
+   ],
+   "connector": {
+    "stroke": "#6B7280",
+    "strokeWidthPt": 0.6
+   },
+   "container": {
+    "fill": "#FFFFFF",
+    "stroke": "#E5E7EB",
+    "strokeWidthPt": 0.5,
+    "dash": null,
+    "titleFill": "#111827",
+    "titleBar": false,
+    "sideBar": true
+   },
+   "badge": {
+    "fill": "#6B7280",
+    "text": "#FFFFFF"
+   },
+   "arrow": {
+    "size": "small"
+   }
+  },
+  "solid-block": {
+   "name": "实色块",
+   "node": {
+    "fill": null,
+    "stroke": null,
+    "strokeWidthPt": 0,
+    "cornerRadiusMm": 1,
+    "fontFamily": "Arial, sans-serif",
+    "fontWeight": "bold",
+    "fillText": "#FFFFFF",
+    "subtitleColor": "#FFFFFF",
+    "ungroupedPalette": true,
+    "groupFill": "palette"
+   },
+   "groupColors": [
+    "#2F5D8C",
+    "#2E7D5B",
+    "#B4572E",
+    "#6B4FA0",
+    "#8C3B5C",
+    "#3D6E8F"
+   ],
+   "connector": {
+    "stroke": "#4B5563",
+    "strokeWidthPt": 0.8
+   },
+   "container": {
+    "fill": null,
+    "stroke": null,
+    "strokeWidthPt": 0,
+    "dash": null,
+    "titleFill": "#FFFFFF",
+    "titleBar": true
+   },
+   "badge": {
+    "fill": "#FFFFFF",
+    "text": "#1F2937"
+   },
+   "arrow": {
+    "size": "medium"
+   }
+  },
+  "mono-grey": {
+   "name": "灰底极简",
+   "node": {
+    "fill": "#F3F4F6",
+    "stroke": null,
+    "strokeWidthPt": 0,
+    "cornerRadiusMm": 1.5,
+    "fontFamily": "Arial, sans-serif",
+    "fontWeight": "bold",
+    "fillText": "#111827",
+    "subtitleColor": "#4B5563",
+    "groupFill": "palette"
+   },
+   "groupColors": [
+    "#E5E7EB",
+    "#E5E7EB",
+    "#E5E7EB",
+    "#E5E7EB",
+    "#E5E7EB",
+    "#E5E7EB"
+   ],
+   "connector": {
+    "stroke": "#374151",
+    "strokeWidthPt": 0.7
+   },
+   "container": {
+    "fill": "#F9FAFB",
+    "stroke": null,
+    "strokeWidthPt": 0,
+    "dash": null,
+    "titleFill": "#374151",
+    "titleBar": false
+   },
+   "badge": {
+    "fill": "#374151",
+    "text": "#FFFFFF"
+   },
+   "arrow": {
+    "size": "small"
+   }
+  }
+ }
+}

@@ -60,7 +60,7 @@
 
   function _requirePresets() {
     if (!global.FigPresets || typeof global.FigPresets.journals !== "function") {
-      _fail("FigPresets 未加载（lib/presets.js）");
+      _fail("模板库未加载");
     }
   }
 

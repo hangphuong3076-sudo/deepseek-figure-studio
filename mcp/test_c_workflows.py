@@ -301,5 +301,40 @@ console.log(JSON.stringify({ doc: d2,
             self.assertIn("group|sample|s:S1", svg_text)
 
 
+class SetDocTitleTests(unittest.TestCase):
+    """R4：set_doc_title op——写 doc.title，trim，1–120 字符校验，
+    值不变 no-op，可经 FigOps.undo 撤销。"""
+
+    def test_set_doc_title_valid_invalid_undo(self):
+        out = run_node(r"""
+let doc = FigDoc.create({ title: '旧标题', width_mm: 120, height_mm: 90 });
+const v1 = FigOps.validateAll([{ op: 'set_doc_title', title: '  新标题  ' }], doc);
+const v2 = FigOps.validateAll([{ op: 'set_doc_title', title: '   ' }], doc);
+const v3 = FigOps.validateAll([{ op: 'set_doc_title', title: 'x'.repeat(121) }], doc);
+const v4 = FigOps.validateAll([{ op: 'set_doc_title', title: 42 }], doc);
+const v5 = FigOps.validateAll([{ op: 'set_doc_title' }], doc);
+const r1 = FigOps.applyAll(doc, [{ op: 'set_doc_title', title: '  新标题  ' }],
+  { label: 'rename' });
+const after = r1.doc;
+const r2 = FigOps.applyAll(after, [{ op: 'set_doc_title', title: '新标题' }],
+  { label: 'noop' });
+const back = FigOps.undo(after);
+console.log(JSON.stringify({
+  v1: v1.ok, v2: v2.ok, v3: v3.ok, v4: v4.ok, v5: v5.ok,
+  title1: after.title, histLen: after.history.length,
+  noopChanged: r2.changed, noopHist: r2.doc.history.length,
+  undoTitle: back.title
+}));
+""")
+        self.assertTrue(out["v1"], "合法标题应通过校验")
+        for k in ("v2", "v3", "v4", "v5"):
+            self.assertFalse(out[k], "%s 应校验失败" % k)
+        self.assertEqual(out["title1"], "新标题", "标题应 trim 后写入")
+        self.assertEqual(out["histLen"], 1, "一次修改一条历史")
+        self.assertFalse(out["noopChanged"], "同值标题应 no-op")
+        self.assertEqual(out["noopHist"], 1, "no-op 不产生新历史")
+        self.assertEqual(out["undoTitle"], "旧标题", "undo 应恢复原标题")
+
+
 if __name__ == "__main__":
     unittest.main()

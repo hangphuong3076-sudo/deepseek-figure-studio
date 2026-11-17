@@ -28,33 +28,33 @@
   };
 
   var EVIDENCE_ROLES = [
-    ["setup", "setup（铺垫/背景）"],
-    ["example", "example（示例）"],
-    ["primary", "primary（主证据）"],
-    ["control", "control（对照）"],
-    ["decomposition", "decomposition（分解）"],
-    ["stratification", "stratification（分层）"],
-    ["orthogonal", "orthogonal（正交验证）"],
-    ["perturbation", "perturbation（扰动实验）"],
-    ["boundary", "boundary（边界条件）"],
-    ["mechanistic", "mechanistic（机理）"]
+    ["setup", "铺垫/背景"],
+    ["example", "示例"],
+    ["primary", "主证据"],
+    ["control", "对照"],
+    ["decomposition", "分解"],
+    ["stratification", "分层"],
+    ["orthogonal", "正交验证"],
+    ["perturbation", "扰动实验"],
+    ["boundary", "边界条件"],
+    ["mechanistic", "机理"]
   ];
   var DESTINATIONS = [
-    ["main", "main（主图）"],
-    ["extended", "extended（扩展数据）"],
-    ["other", "other（其他）"],
-    ["discard", "discard（弃用）"]
+    ["main", "主图"],
+    ["extended", "扩展数据"],
+    ["other", "其他"],
+    ["discard", "弃用"]
   ];
   var ARCHETYPES = [
     ["", "未申报"],
-    ["quantitative_grid", "quantitative_grid（量化网格）"],
-    ["schematic_led_composite", "schematic_led_composite（示意主导复合）"],
-    ["image_plate_quant", "image_plate_quant（图像版+定量）"],
-    ["asymmetric_mixed", "asymmetric_mixed（非对称混合）"]
+    ["quantitative_grid", "量化网格"],
+    ["schematic_led_composite", "示意主导复合"],
+    ["image_plate_quant", "图像版+定量"],
+    ["asymmetric_mixed", "非对称混合"]
   ];
-  var SPREADS = [["", "未申报"], ["SD", "SD"], ["SEM", "SEM"], ["95CI", "95CI"], ["range", "range"]];
-  var SOURCES = [["", "未申报"], ["replicates", "replicates（原始重复观测）"], ["column", "column（误差列）"]];
-  var CENTERS = [["", "未申报"], ["mean", "mean"], ["median", "median"], ["geometric_mean", "geometric_mean"], ["other", "other"]];
+  var SPREADS = [["", "未申报"], ["SD", "标准差 SD"], ["SEM", "标准误 SEM"], ["95CI", "95% 置信区间"], ["range", "极差/范围"]];
+  var SOURCES = [["", "未申报"], ["replicates", "重复观测（原始重复样本）"], ["column", "误差列"]];
+  var CENTERS = [["", "未申报"], ["mean", "均值"], ["median", "中位数"], ["geometric_mean", "几何均值"], ["other", "其他"]];
 
   // ------------------------------------------------------------------
   // State
@@ -100,26 +100,7 @@
   // ------------------------------------------------------------------
 
   function h(tag, attrs, children) {
-    if (has("Ui") && typeof global.Ui.h === "function") {
-      return global.Ui.h(tag, attrs, children);
-    }
-    var el = document.createElement(tag);
-    if (attrs) {
-      Object.keys(attrs).forEach(function (k) {
-        var v = attrs[k];
-        if (v === null || v === undefined || v === false) return;
-        if (k === "class") el.className = String(v);
-        else if (k === "text") el.textContent = String(v);
-        else if (k.slice(0, 2) === "on" && typeof v === "function") el.addEventListener(k.slice(2).toLowerCase(), v);
-        else el.setAttribute(k, String(v));
-      });
-    }
-    (children || []).forEach(function (c) {
-      if (c == null) return;
-      if (c instanceof Node) el.appendChild(c);
-      else el.appendChild(document.createTextNode(String(c)));
-    });
-    return el;
+    return global.Ui.h(tag, attrs, children);
   }
 
   function button(opts) {
@@ -351,10 +332,23 @@
     var doc = requireDoc();
     var chartEl = getChartEl(doc, cand.element_id);
 
+    var cardDispEl = null;
+    try {
+      cardDispEl = (doc.elements || []).filter(function (e) { return e.id === cand.element_id; })[0] || null;
+    } catch (e3) { cardDispEl = null; }
+    var cardDispName = (cardDispEl && cardDispEl.name) ||
+      (global.FigDoc && typeof global.FigDoc.elementTypeName === "function" && cardDispEl
+        ? global.FigDoc.elementTypeName(cardDispEl.type) : cand.type);
+    var cardCtName = chartEl && chartEl.chart && chartEl.chart.chartType &&
+      global.FigData && typeof global.FigData.chartTypeName === "function"
+      ? global.FigData.chartTypeName(chartEl.chart.chartType) : null;
+    var cardTitleSpan = h("span", { class: "science-card-title", text: cardDispName });
+    cardTitleSpan.title = cand.element_id;
     el.appendChild(h("div", { class: "science-card-head" }, [
       h("span", { class: "science-card-badge", text: cand.label }),
-      h("span", { class: "science-card-title", text: cand.element_id }),
-      h("span", { class: "science-card-meta", text: cand.type + (chartEl && chartEl.chart && chartEl.chart.chartType ? " · " + chartEl.chart.chartType : "") })
+      cardTitleSpan,
+      h("span", { class: "science-card-meta",
+        text: (cardDispEl ? "" : cand.type + " · ") + (cardCtName || "") })
     ]));
 
     // --- evidence fields ---
@@ -367,12 +361,12 @@
     var gain = inputEl("text", existingPanel ? existingPanel.unique_gain : null);
     var dependency = inputEl("text", existingPanel ? existingPanel.claim_dependency : null);
 
-    el.appendChild(field("证据角色 evidence_role", role).wrap);
+    el.appendChild(field("证据角色", role).wrap);
     el.appendChild(field("该面板回答的问题", question).wrap);
-    el.appendChild(field("决定性比较 decisive_comparison", comparison).wrap);
-    el.appendChild(field("独立增益 unique_gain（去掉它读者失去什么）", gain).wrap);
-    el.appendChild(field("与图级声明的依赖 claim_dependency", dependency).wrap);
-    el.appendChild(field("去向 destination", destination).wrap);
+    el.appendChild(field("决定性比较", comparison).wrap);
+    el.appendChild(field("独立增益（去掉它读者失去什么）", gain).wrap);
+    el.appendChild(field("与图级声明的依赖", dependency).wrap);
+    el.appendChild(field("去向", destination).wrap);
 
     var card = {
       el: el, role: role, destination: destination, question: question,
@@ -409,24 +403,24 @@
       var unitX = inputEl("text", existingStats ? existingStats.unit_x : null);
       var unitY = inputEl("text", existingStats ? existingStats.unit_y : null);
 
-      statsWrap.appendChild(field("n 的定义 n_definition", nDefinition).wrap);
+      statsWrap.appendChild(field("n 的定义", nDefinition).wrap);
       var repRow = h("div", { class: "science-rep-row" });
-      repRow.appendChild(field("生物学重复", bio, "留空 = unknown，不默认 n=3").wrap);
+      repRow.appendChild(field("生物学重复", bio, "留空表示未知，不默认按 n=3 计算").wrap);
       repRow.appendChild(field("技术重复", tech).wrap);
       statsWrap.appendChild(repRow);
-      statsWrap.appendChild(field("中心量 center", center).wrap);
-      statsWrap.appendChild(field("离散度量 spread", spread).wrap);
-      statsWrap.appendChild(field("误差来源 uncertainty_source", source).wrap);
-      statsWrap.appendChild(field("误差列 uncertainty_column（column 模式）", column,
-        inline ? undefined : "需要内联数据列").wrap);
-      statsWrap.appendChild(field("检验 test", test).wrap);
-      statsWrap.appendChild(field("校正 correction", correction).wrap);
-      statsWrap.appendChild(field("比较对象 comparison", statComparison).wrap);
-      statsWrap.appendChild(field("p 值 p_value（0–1，不编造）", pValue).wrap);
-      statsWrap.appendChild(field("原始数据来源 source_data", sourceData).wrap);
+      statsWrap.appendChild(field("中心量", center).wrap);
+      statsWrap.appendChild(field("离散度量", spread).wrap);
+      statsWrap.appendChild(field("误差线怎么来的", source).wrap);
+      statsWrap.appendChild(field("误差所在的列（选“取自数据列”时填写）", column,
+        inline ? undefined : "需要表格里的数据列").wrap);
+      statsWrap.appendChild(field("检验方法", test).wrap);
+      statsWrap.appendChild(field("多重比较校正", correction).wrap);
+      statsWrap.appendChild(field("比较对象", statComparison).wrap);
+      statsWrap.appendChild(field("p 值（0–1，不编造）", pValue).wrap);
+      statsWrap.appendChild(field("原始数据来源", sourceData).wrap);
       var unitRow = h("div", { class: "science-rep-row" });
-      unitRow.appendChild(field("单位 unit_x", unitX).wrap);
-      unitRow.appendChild(field("单位 unit_y", unitY).wrap);
+      unitRow.appendChild(field("横轴单位", unitX).wrap);
+      unitRow.appendChild(field("纵轴单位", unitY).wrap);
       statsWrap.appendChild(unitRow);
 
       el.appendChild(statsWrap);
@@ -457,7 +451,7 @@
     try { cands = currentCandidates(); } catch (e) { cands = []; }
     var opts = [["", "未指定"]];
     cands.forEach(function (c) {
-      opts.push([c.element_id, c.label + " · " + c.element_id]);
+      opts.push([c.element_id, c.label]);
     });
     opts.forEach(function (o) {
       var op = document.createElement("option");
@@ -484,7 +478,7 @@
       return;
     }
     if (!has("App") || typeof App.commit !== "function") {
-      toast("缺少 App.commit，无法保存", { type: "error" });
+      toast("编辑器尚未就绪，无法保存", { type: "error" });
       return;
     }
     muted = true;
@@ -496,7 +490,7 @@
       var applied = result && typeof result.applied === "number" ? result.applied : 0;
       if (!applied) {
         // 执行器不支持该 OP 或校验失败：如实告知，不假装成功
-        toast("未保存：当前内核不支持 set_scientific_contract 或校验未通过（详见错误提示）",
+        toast("未保存：当前环境不支持保存科学论证，或内容未通过检查（详见错误提示）",
           { type: "error", ms: 5000 });
         renderAudit();
         return;
@@ -519,6 +513,72 @@
 
   var SEVERITY_LABEL = { error: "错误", warning: "警告", info: "提示" };
 
+  // 审计/合同字段名与枚举值 → 中文（仅界面显示用；内核与 API 仍用原始键名）。
+  var CHECK_LABEL = {
+    question_claim_falsifier: "整图问题 / 图级声明 / 反证",
+    panel_evidence_roles: "面板证据角色",
+    decisive_comparisons: "决定性比较",
+    statistics_trace: "统计溯源",
+    hero_panel_reference: "主图引用",
+    significance_declarations: "显著性声明",
+    physical_size: "物理尺寸"
+  };
+
+  var AUDIT_ZH = {
+    // snake_case / camelCase 字段与内部标识（含多词图表类型枚举）
+    results_question: "整图问题", figure_claim: "图级声明", falsifier: "反证条件",
+    evidence_role: "证据角色", unique_gain: "独立增益", destination: "去向",
+    decisive_comparison: "决定性比较", decisive_comparisons: "决定性比较",
+    hero_panel: "主图", hero_panel_reference: "主图引用",
+    n_definition: "样本量定义", biological_replicates: "生物学重复数",
+    technical_replicates: "技术重复数", source_data: "原始数据来源",
+    unit_x: "X 轴单位", unit_y: "Y 轴单位",
+    uncertainty_source: "误差来源", uncertainty_column: "误差列",
+    p_value: "p 值", characterization: "表征", fit_source: "拟合来源",
+    fit_model: "拟合模型", offset_each_series: "叠加偏移",
+    max_to_unity: "最大值归一", x_label: "X 轴标签", y_label: "Y 轴标签",
+    manual_edits: "手工修改", parse_options: "读取方式",
+    number_format: "数字写法", schema_version: "模式版本", chartType: "图表类型",
+    element_id: "元素", localStorage: "本地存储", App_commit: "文档提交",
+    // 多词图表类型枚举（单词图表类型由内核 chartTypeName 处理）
+    bar_grouped: "分组柱状图", bar_stacked: "堆叠柱状图", scatter_grouped: "分组散点图",
+    line_multi: "多折线图", stacked_area: "堆叠面积图", diagram_flow: "流程图",
+    diagram_architecture: "架构图",
+    // 元素类型 / 合同枚举值
+    chart: "图表", panel: "面板", panels: "面板",
+    primary: "主证据", setup: "铺垫", example: "示例", control: "对照",
+    decomposition: "分解", stratification: "分层", orthogonal: "正交验证",
+    perturbation: "扰动实验", boundary: "边界条件", mechanistic: "机理",
+    main: "正文", extended: "扩展数据", other: "其他", discard: "弃用",
+    replicates: "重复观测", column: "误差列",
+    mean: "均值", median: "中位数", geometric_mean: "几何均值",
+    SD: "标准差", SEM: "标准误", "95CI": "95% 置信区间", range: "极差",
+    // 单词合同字段名 / 状态 / 术语
+    test: "检验方式", center: "中心量", spread: "离散度", comparison: "比较",
+    mapping: "映射", technique: "技术", inline: "内联", archetype: "原型",
+    sequence: "顺序", geometry: "几何", bbox: "边界框", scope: "范围",
+    NOT_AUDITABLE: "不可审计", PASS: "通过", not_covered: "不在覆盖范围",
+    subscript: "下标", superscript: "上标", script: "上下标", parent: "父级"
+  };
+
+  var AUDIT_ZH_KEYS = Object.keys(AUDIT_ZH).sort(function (a, b) {
+    return b.length - a.length;
+  });
+  var AUDIT_ZH_RE = new RegExp("\\b(" + AUDIT_ZH_KEYS.map(function (k) {
+    return k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }).join("|") + ")\\b", "g");
+
+  function humanizeAudit(s) {
+    if (typeof s !== "string" || !s) return s;
+    return s
+      .replace(/\bnot covered\b/g, "不在覆盖范围")
+      .replace(/\bpositional only\b/g, "仅作位置")
+      .replace(/\bmapping\.x\b/g, "横轴映射")
+      .replace(/\bmapping\.group\b/g, "分组映射")
+      .replace(/\bmapping\.y\b/g, "纵轴映射")
+      .replace(AUDIT_ZH_RE, function (m) { return AUDIT_ZH[m] || m; });
+  }
+
   function renderAudit() {
     var box = refs.auditBox;
     box.innerHTML = "";
@@ -536,7 +596,7 @@
     box.appendChild(h("div", { class: "science-audit-head" }, [
       h("span", {
         class: "science-ready " + (ready ? "science-ready-ok" : "science-ready-no"),
-        text: ready ? "科学论证就绪" : "科学论证未就绪（非 PASS）"
+        text: ready ? "科学论证就绪" : "科学论证未就绪（检查未全部通过）"
       })
     ]));
 
@@ -555,9 +615,9 @@
     // checks（含“不适用”明细）
     (result.checks || []).forEach(function (c) {
       box.appendChild(h("div", { class: "science-check science-check-" + (c.status || "warn") }, [
-        h("span", { class: "science-check-name", text: c.name }),
-        h("span", { class: "science-check-status", text: c.status === "pass" ? "pass" : (c.status === "fail" ? "fail" : (c.status === "na" ? "不适用" : "warn")) }),
-        h("span", { class: "science-check-detail", text: c.detail || "" })
+        h("span", { class: "science-check-name", text: CHECK_LABEL[c.name] || humanizeAudit(c.name) }),
+        h("span", { class: "science-check-status", text: c.status === "pass" ? "通过" : (c.status === "fail" ? "未通过" : (c.status === "na" ? "不适用" : "警告")) }),
+        h("span", { class: "science-check-detail", text: humanizeAudit(c.detail || "") })
       ]));
     });
 
@@ -567,7 +627,7 @@
     }
     warnings.forEach(function (w) {
       var sev = SEVERITY_LABEL[w.severity] || w.severity || "警告";
-      var line = "[" + sev + "] " + (w.message || "");
+      var line = "[" + sev + "] " + humanizeAudit(w.message || "");
       if (w.element_id) line += "（" + w.element_id + "）";
       box.appendChild(h("div", { class: "science-warn science-warn-" + (w.severity || "warning"), text: line }));
     });
@@ -617,13 +677,13 @@
       panelEl.appendChild(h("div", { class: "ui-panel-title", text: "科学论证" }));
       panelEl.appendChild(h("div", {
         class: "science-intro",
-        text: "两步声明：整图问题/结论/反证 → 每个面板的证据角色、独立增益、比较与统计。全部字段由用户填写，留空表示 unknown，本面板不做 AI 推断。"
+        text: "两步声明：整图问题/结论/反证 → 每个面板的证据角色、独立增益、比较与统计。全部字段由用户填写，留空表示未知，本面板不做 AI 推断。"
       }));
 
       var btnRow = h("div", { class: "ui-btn-row" });
-      var btnAudit = button({ label: "审计检查", title: "运行 FigScience.audit（结构 + 统计 + 物理尺寸）", onClick: function () { renderAudit(); } });
+      var btnAudit = button({ label: "审计检查", title: "检查图的结构、统计和物理尺寸是否达标", onClick: function () { renderAudit(); } });
       var btnPreview = button({ label: "CSS 参考尺寸预览", title: "按 CSS 96 px/in 换算预览；不校准显示器，再次点击还原", onClick: function () { physicalSizePreview(); } });
-      var btnSave = button({ label: "保存到文档", title: "经 set_scientific_contract 写入文档（保留历史，可撤销）", onClick: function () { save(); } });
+      var btnSave = button({ label: "保存到文档", title: "把内容写入文档（保留历史，可撤销）", onClick: function () { save(); } });
       refs.btnPreview = btnPreview;
       btnRow.appendChild(btnAudit);
       btnRow.appendChild(btnPreview);
@@ -638,11 +698,11 @@
       refs.archetype = inputEl("select");
       fillSelect(refs.archetype, ARCHETYPES, "");
       refs.hero = inputEl("select");
-      panelEl.appendChild(field("整图问题 results_question", refs.question).wrap);
-      panelEl.appendChild(field("图级声明 figure_claim", refs.claim).wrap);
-      panelEl.appendChild(field("反证/失效条件 falsifier", refs.falsifier).wrap);
-      panelEl.appendChild(field("原型 archetype", refs.archetype).wrap);
-      panelEl.appendChild(field("主图 hero_panel", refs.hero).wrap);
+      panelEl.appendChild(field("整图要回答的问题", refs.question).wrap);
+      panelEl.appendChild(field("图级声明", refs.claim).wrap);
+      panelEl.appendChild(field("反证/失效条件", refs.falsifier).wrap);
+      panelEl.appendChild(field("原型", refs.archetype).wrap);
+      panelEl.appendChild(field("主图", refs.hero).wrap);
 
       // --- step 2: per-panel cards ---
       panelEl.appendChild(h("div", { class: "science-step-title", text: "第二步 · 面板（按阅读顺序 a,b,c…）" }));

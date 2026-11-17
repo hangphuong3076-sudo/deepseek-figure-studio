@@ -256,10 +256,20 @@
   // Cache key from what every call site can see (chart spec + render size +
   // journal/palette via App.canvas): calls originating from FigRender (no
   // doc object available) and from elementSVG dedupe onto the same entry.
+  // 大数据下 spec 含全部 inline.rows，stableJson 每次调用代价高；改用
+  // FigData.chartSignature（去 rows 的 JSON + 行指纹，按对象/数组缓存）。
+  function specSig(spec) {
+    if (global.FigData && typeof global.FigData.chartSignature === 'function') {
+      var s = global.FigData.chartSignature(spec);
+      if (s !== null && s !== undefined) return s;
+    }
+    return stableJson(isObj(spec) ? spec : {});
+  }
+
   function specKey(spec, w, h, dpi) {
     var s = isObj(spec) ? spec : {};
-    return stableJson([s, w, h, dpi, journalId(),
-      s.paletteId === undefined ? null : s.paletteId]);
+    return specSig(s) + '|' + w + '|' + h + '|' + dpi + '|' + journalId() + '|' +
+      (s.paletteId === undefined ? '' : s.paletteId);
   }
 
   // Repaint trigger. A direct Editor.render() call only — App events are
@@ -434,8 +444,37 @@
     if (!fd || typeof fd.renderChartSVG !== 'function') return false;
     var original = fd.renderChartSVG;
     if (original.__chartRenderWrapped) return false; // already installed
+    // 本地片段缓存：renderChartSVG 是 spec+w+h+dpi+字号 的纯函数；
+    // 拖动预览每帧重渲染整图时，未变图表直接命中缓存（签名按内容计算，
+    // 克隆文档同样命中）。上限 24 项 FIFO。
+    var localFragCache = {};
+    var localFragKeys = [];
+    var LOCAL_FRAG_MAX = 24;
+    function localFragKey(chartSpec, opts) {
+      var o = isObj(opts) ? opts : {};
+      return specSig(chartSpec) + '|' +
+        (global.FigData && typeof global.FigData.COMPACT_MARKS_THRESHOLD === 'number'
+          ? global.FigData.COMPACT_MARKS_THRESHOLD : '') + '|' +
+        (o.width_mm === undefined ? '' : o.width_mm) + '|' +
+        (o.height_mm === undefined ? '' : o.height_mm) + '|' +
+        (o.dpi === undefined ? '' : o.dpi) + '|' +
+        (o.fontSizePt === undefined ? '' : o.fontSizePt) + '|' +
+        (o.fontFamily === undefined ? '' : o.fontFamily) + '|' +
+        (o.compactMarks === true ? '1' : '');
+    }
+    function callOriginal(chartSpec, opts) {
+      var key = localFragKey(chartSpec, opts);
+      if (localFragCache[key] !== undefined) return localFragCache[key];
+      var out = original(chartSpec, opts);
+      if (localFragKeys.length >= LOCAL_FRAG_MAX) {
+        delete localFragCache[localFragKeys.shift()];
+      }
+      localFragKeys.push(key);
+      localFragCache[key] = out;
+      return out;
+    }
     var wrapped = function (chartSpec, opts) {
-      if (!backend()) return original(chartSpec, opts);
+      if (!backend()) return callOriginal(chartSpec, opts);
       var w = opts && isFinite(Number(opts.width_mm)) ? Number(opts.width_mm) : 0;
       var h = opts && isFinite(Number(opts.height_mm)) ? Number(opts.height_mm) : 0;
       var dpi = opts && isFinite(Number(opts.dpi)) && Number(opts.dpi) > 0
@@ -450,7 +489,7 @@
       if (!hit) requestBackend(chartSpec, key, w, h, dpi, null);
       // This call keeps the synchronous local answer; the backend SVG takes
       // over from the next repaint (notifyRefresh -> Editor.render()).
-      return original(chartSpec, opts);
+      return callOriginal(chartSpec, opts);
     };
     wrapped.__chartRenderWrapped = true;
     fd.renderChartSVG = wrapped;

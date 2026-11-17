@@ -66,6 +66,7 @@ class Element {
   }
   setAttribute(k, v) { this.attributes[k] = String(v); }
   getAttribute(k) { return this.attributes[k] == null ? null : this.attributes[k]; }
+  removeAttribute(k) { delete this.attributes[k]; }
   addEventListener(n, h) { (this.listeners[n] || (this.listeners[n] = [])).push(h); }
   click() { for (const h of this.listeners.click || []) h({target: this}); }
 }
@@ -77,7 +78,31 @@ global.document = {
 };
 global.modals = [];
 global.notices = [];
+function mockUiH(tag, attrs, children) {
+  var el = document.createElement(tag);
+  if (attrs) Object.keys(attrs).forEach(function (key) {
+    var value = attrs[key];
+    if (value === null || value === undefined || value === false) return;
+    if (key === "class" || key === "className") { el.className = String(value); el.setAttribute("class", String(value)); }
+    else if (key === "text") el.textContent = String(value);
+    else if (key === "html") el.innerHTML = String(value);
+    else if (key === "style" && value && typeof value === "object") {
+      var st = el.style || (el.style = {});
+      Object.keys(value).forEach(function (prop) { var pv = value[prop]; if (pv === null || pv === undefined) return; st[prop] = pv; });
+    } else if (key.indexOf("on") === 0 && typeof value === "function") { el.addEventListener(key.slice(2).toLowerCase(), value); }
+    else if (value === true) { el.setAttribute(key, ""); } else { el.setAttribute(key, String(value)); }
+  });
+  if (children != null) {
+    var list = Array.isArray(children) ? children : [children];
+    list.forEach(function (child) {
+      if (child === null || child === undefined || child === false) return;
+      el.appendChild(typeof child === "string" || typeof child === "number" ? document.createTextNode(String(child)) : child);
+    });
+  }
+  return el;
+}
 global.Ui = {
+  h: mockUiH,
   modal(options) { const item = {options, closed: false}; global.modals.push(item);
     return {close() { item.closed = true; }, root: options.body}; },
   toast(text, options) { global.notices.push({text: String(text), options}); }
@@ -164,7 +189,7 @@ const data = %s;
 
   // 3) 误差线路径说明（重复观测计算 或 科学合同 uncertainty_column）
   assert.ok(summary().includes('SD/SEM/95CI'), '应说明误差线统计量类型需科学合同申报');
-  assert.ok(summary().includes('uncertainty_column'), '应说明用户误差列的申报路径');
+  assert.ok(summary().includes('图表属性'), '应说明用户误差列的申报路径');
 
   // 4) 预览与最终一致 + 一次历史
   const previewBuild = wizardHandle.lastBuild();
@@ -292,6 +317,229 @@ const data = %s;
 })().catch(err => { console.error(err && err.stack ? err.stack : String(err)); process.exit(1); });
 """)
         self.assertTrue(out["ok"])
+
+    def test_steps_goTo_and_visible_text(self):
+        """a+d) step()/goTo() 与可见文本：无「匹配度 N」、无 uncertainty_column。"""
+        out = run_node(r"""
+const data = %s;
+(async () => {
+  let wizard = null;
+  const origOpen = global.DataWizard.open;
+  global.DataWizard.open = (o) => { wizard = origOpen(o); return wizard; };
+  global.Import._applyDataTable(
+    'condition,value_a,value_b,sem\nctrl,1.2,10.1,0.2\ntreat,2.1,20.3,0.3\n',
+    'demo-steps.csv', () => {});
+  assert.ok(wizard, '向导应打开');
+  assert.strictEqual(wizard.step(), 1, '初始应在第 1 步');
+  wizard.goTo(4);
+  assert.strictEqual(wizard.step(), 4);
+  const txt = wizard.body.textContent;
+  for (const s of ['数据预览', '字段映射', '画布', '确认',
+                   '创建后会作为一步操作写入历史', '排除的行']) {
+    assert.ok(txt.includes(s), 'body 应包含「' + s + '」');
+  }
+  // 可见文本统计：跳过 dw-tip 子树（技术细节在 ⓘ 内不算可见文本）
+  function visText(el) {
+    if (el.className && (' ' + el.className + ' ').indexOf(' dw-tip ') >= 0) return '';
+    let out = el._text || '';
+    (el.children || []).forEach(c => { out += visText(c); });
+    return out;
+  }
+  const visible = visText(wizard.body);
+  assert.ok(!visible.includes('uncertainty_column'),
+    '可见文本不应出现 uncertainty_column');
+  const m = visible.match(/匹配度\s*\d+/);
+  assert.ok(!m, '可见文本不应出现「匹配度 N」：' + (m && m[0]));
+  console.log(JSON.stringify({ok: true}));
+})().catch(err => { console.error(err && err.stack ? err.stack : String(err)); process.exit(1); });
+""" % json.dumps(DATA))
+        self.assertTrue(out["ok"])
+
+    def test_quick_create_single_commit(self):
+        """b) quickCreate：恰好 1 次 commit、首个推荐模板、画布不变。"""
+        out = run_node(r"""
+const data = %s;
+(async () => {
+  const app = global.App;
+  const canvas0 = JSON.parse(JSON.stringify(app.doc.canvas));
+  const hist0 = app.doc.history.length;
+  let wizard = null, openedOpts = null, cbInfo = null;
+  const origOpen = global.DataWizard.open;
+  global.DataWizard.open = (o) => { openedOpts = o; wizard = origOpen(o); return wizard; };
+  global.Import._applyDataTable(
+    'condition,value_a,value_b,sem\nctrl,1.2,10.1,0.2\ntreat,2.1,20.3,0.3\n',
+    'demo-quick.csv', (err, info) => { cbInfo = info; });
+  assert.ok(wizard, '向导应打开');
+  const ok = await wizard.quickCreate();
+  assert.strictEqual(ok, true, 'quickCreate 应成功');
+  assert.strictEqual(commits, 1, '必须恰好一次 commit');
+  assert.strictEqual(app.doc.history.length, hist0 + 1, '必须恰好一条历史');
+  assert.ok(cbInfo && cbInfo.template_id === openedOpts.recommendations[0].template_id,
+    '应使用首个推荐模板：' + (cbInfo && cbInfo.template_id));
+  const ops = app.doc.history[hist0].ops;
+  assert.ok(!ops.some(op => op.op === 'apply_journal' || op.op === 'set_canvas'),
+    'quickCreate 画布应保持不变');
+  assert.strictEqual(app.doc.canvas.width_mm, canvas0.width_mm);
+  console.log(JSON.stringify({ok: true}));
+})().catch(err => { console.error(err && err.stack ? err.stack : String(err)); process.exit(1); });
+""" % json.dumps(DATA))
+        self.assertTrue(out["ok"])
+
+    def test_mapping_memory_lru(self):
+        """c) 映射记忆：同名同表头重开沿用；表头不同不套用；不存画布。"""
+        out = run_node(r"""
+const data = %s;
+function makeLS() {
+  const m = {};
+  return {
+    getItem: k => (k in m ? m[k] : null),
+    setItem: (k, v) => { m[k] = String(v); },
+    removeItem: k => { delete m[k]; },
+    key: i => Object.keys(m)[i],
+    get length() { return Object.keys(m).length; },
+    _map: m
+  };
+}
+global.localStorage = makeLS();
+const CSV_A = 'condition,value_a,value_b,sem\nctrl,1.2,10.1,0.2\ntreat,2.1,20.3,0.3\n';
+const CSV_B = 'condition,value_a,value_c,sem\nctrl,1.2,5.5,0.2\ntreat,2.1,7.7,0.3\n';
+(async () => {
+  let w1 = null, w2 = null, w3 = null;
+  const origOpen = global.DataWizard.open;
+  global.DataWizard.open = (o) => {
+    const w = origOpen(o);
+    if (!w1) w1 = w; else if (!w2) w2 = w; else w3 = w;
+    return w;
+  };
+  // 第一次：改映射 y→value_b 后创建成功 → 写入记忆
+  global.Import._applyDataTable(CSV_A, 'demo-mem.csv', () => {});
+  assert.ok(w1);
+  w1.setMapping('y', 'value_b');
+  const d1 = w1.draft();
+  const ok1 = await w1.create();
+  assert.strictEqual(ok1, true);
+  // 同名同表头重开 → 沿用上次 templateId 与 mapping
+  global.Import._applyDataTable(CSV_A, 'demo-mem.csv', () => {});
+  assert.ok(w2, '第二次应打开向导');
+  const d2 = w2.draft();
+  assert.strictEqual(d2.templateId, d1.templateId, 'templateId 应沿用');
+  assert.deepStrictEqual(d2.mapping, d1.mapping, 'mapping 应沿用');
+  // 记忆值不含画布字段
+  const ls = global.localStorage;
+  let checked = 0;
+  for (let i = 0; i < ls.length; i++) {
+    const k = ls.key(i);
+    if (!k || k.indexOf('figwizard:last:') !== 0) continue;
+    checked++;
+    const rec = JSON.parse(ls.getItem(k));
+    assert.ok(!('canvas' in rec) && !('canvasChoice' in rec),
+      '记忆不应包含画布：' + k);
+    assert.strictEqual(typeof rec.ts, 'number');
+  }
+  assert.ok(checked >= 1, '应至少写入一条记忆');
+  // 表头不同（同文件名）→ 键不同，不套用
+  global.Import._applyDataTable(CSV_B, 'demo-mem.csv', () => {});
+  assert.ok(w3, '第三次应打开向导');
+  const d3 = w3.draft();
+  assert.notStrictEqual(d3.mapping.y, 'value_b',
+    '表头不同不应套用旧映射（value_b 列已不存在）');
+  w3.closeModal();
+  console.log(JSON.stringify({ok: true}));
+})().catch(err => { console.error(err && err.stack ? err.stack : String(err)); process.exit(1); });
+""" % json.dumps(DATA))
+        self.assertTrue(out["ok"])
+
+    def test_g07_date_x_excluded_zero(self):
+        """e) G07：日期 x 的 line_multi 排除行数为 0，drawn=渲染点数。"""
+        out = run_node(r"""
+(async () => {
+const rows = [];
+for (let i = 0; i < 40; i++) {
+  rows.push(['2024-01-' + String((i % 28) + 1).padStart(2, '0') +
+    ' ' + String(i % 24).padStart(2, '0') + ':00', i * 1.5, 'G' + (i % 3)]);
+}
+const data = {columns: ['time', 'value', 'group'], rows: rows};
+const mapping = {x: 'time', y: 'value', group: 'group'};
+// 1) renderableRows 直接断言：复用 prepareXY → 40 行全部画出
+const rr = FigData.renderableRows('line_multi', data, mapping);
+assert.strictEqual(rr.total, 40);
+assert.strictEqual(rr.drawn, 40, '日期 x 不应被排除：' + JSON.stringify(rr));
+assert.strictEqual(rr.excluded, 0);
+// 2) 渲染器本体不抛错（同一映射真实渲染成功）
+const tplId = FigPresets.templates().filter(t => t.chart_type === 'line_multi')[0].id;
+const built = FigPresets.templateFromStats(tplId, data, {mapping: mapping});
+assert.ok(built && built.chart, 'templateFromStats 应成功');
+// 3) 向导显示「排除的行：0 / 40」
+let wizard = null;
+const origOpen = global.DataWizard.open;
+global.DataWizard.open = (o) => { wizard = origOpen(o); return wizard; };
+wizard = origOpen({
+  filename: 'dates.csv', data: data,
+  recommendations: [{template_id: tplId, score: 1, reasons: []}],
+  currentCanvas: {width_mm: 120, height_mm: 90, dpi: 300},
+  buildDraft: (templateId, map, choice, title) => {
+    const opts = {journal_id: null, palette_id: null};
+    if (map && Object.keys(map).length) opts.mapping = map;
+    return FigPresets.templateFromStats(templateId, data, opts);
+  },
+  onCreate: () => Promise.resolve(true)
+});
+wizard.setMapping('x', 'time');
+wizard.setMapping('y', 'value');
+wizard.setMapping('group', 'group');
+const txt = wizard.body.textContent;
+assert.ok(txt.includes('排除的行：0 / 40'),
+  '向导应显示排除的行：0 / 40，实际：' + (txt.match(/排除的行[^\n]*/) || ['?'])[0]);
+console.log(JSON.stringify({ok: true, drawn: rr.drawn}));
+})().catch(err => { console.error(err && err.stack ? err.stack : String(err)); process.exit(1); });
+""")
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["drawn"], 40)
+
+    def test_duplicate_x_stats(self):
+        """G22：duplicateXStats 折线折返统计（真实读 examples/sample.csv）。
+
+        sample.csv = 4 category × 2 group(g1/g2) × 5 time，共 40 行。
+        推荐映射 {x:time, y:value, group:category} → 每条 category 线在每个
+        日期有 g1、g2 两点 → 同线同 x 折返。实算：series=4、dupX=20、
+        dupPoints=40、maxPerX=2、splitColumns 含「group」。
+        """
+        out = run_node(r"""
+(async () => {
+const fs = require('fs');
+const csv = fs.readFileSync('../examples/sample.csv', 'utf8');
+const data = FigData.parseCSV(csv);
+const mapping = {x: 'time', y: 'value', group: 'category'};
+const st = FigData.duplicateXStats('line_multi', data, mapping);
+assert.strictEqual(st.applicable, true);
+assert.strictEqual(st.series, 4, 'series 应为 4：' + JSON.stringify(st));
+assert.strictEqual(st.dupX, 20, 'dupX 应为 20：' + JSON.stringify(st));
+assert.strictEqual(st.dupPoints, 40, 'dupPoints 应为 40：' + JSON.stringify(st));
+assert.strictEqual(st.maxPerX, 2, 'maxPerX 应为 2：' + JSON.stringify(st));
+assert.ok(st.splitColumns.indexOf('group') >= 0,
+  'splitColumns 应含 group：' + JSON.stringify(st.splitColumns));
+// 每条线每个 x 只有一个点 → dupX=0
+const d2 = {columns: ['x', 'y', 'g'],
+  rows: [['a', 1, 'A'], ['b', 2, 'A'], ['a', 3, 'B'], ['b', 4, 'B']]};
+const st2 = FigData.duplicateXStats('line_multi', d2, {x: 'x', y: 'y', group: 'g'});
+assert.strictEqual(st2.applicable, true);
+assert.strictEqual(st2.dupX, 0, '无重复应 dupX=0：' + JSON.stringify(st2));
+// 非折线图型 → applicable:false
+const stb = FigData.duplicateXStats('bar', data, {x: 'category', y: 'value'});
+assert.strictEqual(stb.applicable, false, 'bar 应 applicable:false');
+// 映射缺失 → applicable:false
+const stm = FigData.duplicateXStats('line_multi', data, {x: 'time'});
+assert.strictEqual(stm.applicable, false, '缺映射应 applicable:false');
+console.log(JSON.stringify({ok: true, st: st, st2: st2}));
+})().catch(err => { console.error(err && err.stack ? err.stack : String(err)); process.exit(1); });
+""")
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["st"]["series"], 4)
+        self.assertEqual(out["st"]["dupX"], 20)
+        self.assertEqual(out["st"]["dupPoints"], 40)
+        self.assertEqual(out["st"]["maxPerX"], 2)
+        self.assertIn("group", out["st"]["splitColumns"])
+        self.assertEqual(out["st2"]["dupX"], 0)
 
 
 if __name__ == "__main__":

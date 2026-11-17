@@ -344,15 +344,18 @@ class TemplateCapabilityTests(unittest.TestCase):
         "pie", "histogram", "heatmap", "box",
     ))
 
-    def test_all_60_are_classified_but_unsupported_are_opt_in_preview_only(self):
+    def test_all_templates_are_classified_but_unsupported_are_opt_in_preview_only(self):
         with mock.patch.object(server, "_render_chart_types", return_value=self.NATIVE_TYPES):
             default = server.tool_figure_templates({})
             preview = server.tool_figure_templates({"include_unsupported": True})
             unsupported = server.tool_figure_templates({"capability": "unsupported"})
             layout = server.tool_figure_templates({"capability": "layout"})
 
-        self.assertLess(len(default["templates"]), 60)
-        self.assertEqual(len(preview["templates"]), 60)
+        # R7+R9+R10 后模板总数 88；mock 只认 10 个原生图型，
+        # R10 图型与无渲染器图型在此模拟环境下仍判 unsupported
+        total = len(server._PRESETS_RAW["templates"]["templates"])
+        self.assertEqual(len(preview["templates"]), total)
+        self.assertLess(len(default["templates"]), total)
         self.assertTrue(all(item["can_apply"] for item in default["templates"]))
         self.assertTrue(all(item["capability"] in ("full", "layout", "unsupported")
                             for item in preview["templates"]))
@@ -417,9 +420,11 @@ class TemplateCapabilityTests(unittest.TestCase):
     def test_unsupported_direct_apply_and_create_are_rejected_before_mutation(self):
         with mock.patch.object(server, "_render_chart_types", return_value=frozenset(("bar",))), \
                 mock.patch.object(server, "_apply_ops_with_history") as apply_ops:
+            # R9 后 diagram 模板经 FigDiagram 判定、不受 _render_chart_types 影响；
+            # 用仍无渲染器的 tpl-violin 验证 unsupported 拒绝路径
             rejected = server.tool_figure_apply_edits({
                 "doc": DOC,
-                "ops": [{"op": "apply_template", "template_id": "tpl-diagram-decision"}],
+                "ops": [{"op": "apply_template", "template_id": "tpl-violin"}],
             })
             self.assertFalse(rejected["ok"])
             self.assertIn("禁止", rejected["error"])

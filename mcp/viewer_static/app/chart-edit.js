@@ -1,25 +1,13 @@
 (function (global) {
   'use strict';
 
-  var svgImportPromise = null;
-
+  // svg-import.js 由 index.html 静态加载；这里只解析已就绪的全局，
+  // 不在点击时再发网络请求。
   function loadSvgImport() {
     if (global.SvgImport && typeof global.SvgImport.convert === 'function') {
       return Promise.resolve(global.SvgImport);
     }
-    if (!svgImportPromise) {
-      svgImportPromise = new Promise(function (resolve, reject) {
-        var script = document.createElement('script');
-        script.src = 'app/svg-import.js';
-        script.onload = function () {
-          if (global.SvgImport && typeof global.SvgImport.convert === 'function') resolve(global.SvgImport);
-          else reject(new Error('SVG 转换模块未正确加载'));
-        };
-        script.onerror = function () { reject(new Error('无法加载 SVG 转换模块')); };
-        document.head.appendChild(script);
-      });
-    }
-    return svgImportPromise;
+    return Promise.reject(new Error('页面缺少拆分组件，请刷新窗口'));
   }
 
   function app() {
@@ -154,8 +142,8 @@
   }
 
    function confirmSplit(count) {
-    var text = '将选中的 ' + count + ' 个图表拆为独立形状与文本。每根柱子、坐标轴和图例都可分别编辑。\n\n' +
-      '原始图表配置会保存在新分组的来源信息里，但拆分后不再根据原始数据自动重绘。此操作可通过撤销完整恢复。';
+    var text = '将选中的 ' + count + ' 个图表拆为独立形状与文本。图表本身已是矢量 SVG，拆分后每根柱子、坐标轴和图例都可分别编辑。\n\n' +
+      '拆分后这些形状与文字不再根据原始数据自动重绘；原始图表配置会保存在新分组的来源信息里。此操作可通过撤销完整恢复。';
     if (global.Ui && typeof global.Ui.confirm === 'function') return global.Ui.confirm(text);
     return Promise.resolve(true);
   }
@@ -181,7 +169,7 @@
         charts.forEach(function (source) {
           var box = global.ChartRender.resolveBoxMm(doc, source);
           var fragment = isolatedChart(doc, source);
-          if (/data-render=["']placeholder["']/.test(fragment)) {
+          if (/data-render=["'](?:placeholder|unsupported-preview|empty-layout)["']/.test(fragment)) {
             throw new Error(source.id + ' 暂时不能由前端拆分为真实图元，请先导出 SVG 后再逐元素导入');
           }
           var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' +
