@@ -443,6 +443,44 @@
     ]);
   }
 
+  // R04 修复：committed 峰标注归一化为 {x,label,id?}。原始记录缺合法 id
+  // 时用内核 normalizeCharacterization 的确定性自动 id 补齐（同 (x,label)
+  // 同 id），保证 presentation.peaks 样式键在改标签/轴向后不失联；归一化
+  // 不可用或长度不齐时保留 id 缺省（提交时由内核重新分配）。
+  function committedPeaks(chart) {
+    var raw = committedChar(chart).peak_annotations;
+    var list = Array.isArray(raw) ? raw : [];
+    var out = list.map(function (pk) {
+      var rec = {
+        x: (pk && typeof pk.x === "number" && isFinite(pk.x)) ? pk.x : null,
+        label: (pk && typeof pk.label === "string") ? pk.label : ""
+      };
+      if (pk && typeof pk.id === "string" && /^pk-[A-Za-z0-9-]{1,40}$/.test(pk.id)) {
+        rec.id = pk.id;
+      }
+      return rec;
+    });
+    if (out.some(function (r) { return r.id === undefined; }) &&
+        global.FigData && typeof global.FigData.normalizeCharacterization === "function") {
+      try {
+        var d = chart && chart.data && chart.data.inline;
+        var cols = (d && Array.isArray(d.columns)) ? d.columns : [];
+        var norm = global.FigData.normalizeCharacterization(
+          chart && chart.characterization, cols);
+        var normPeaks = norm && norm.char && norm.char.peak_annotations;
+        if (Array.isArray(normPeaks) && normPeaks.length === list.length) {
+          for (var i = 0; i < out.length; i++) {
+            if (out[i].id === undefined) {
+              var nid = normPeaks[i] && normPeaks[i].id;
+              if (typeof nid === "string" && nid !== "") out[i].id = nid;
+            }
+          }
+        }
+      } catch (e) { /* 归一化失败时保留原始 id 缺省 */ }
+    }
+    return out;
+  }
+
   function pendFromChart(chart) {
     var eff = effectiveChar(chart);
     var p = JSON.parse(JSON.stringify(eff));
@@ -466,13 +504,7 @@
         label: (c && typeof c.label === "string" && c.label !== "") ? c.label : col
       };
     });
-    p.peak_annotations = (Array.isArray(p.peak_annotations) ? p.peak_annotations : [])
-      .map(function (pk) {
-        return {
-          x: (pk && typeof pk.x === "number" && isFinite(pk.x)) ? pk.x : null,
-          label: (pk && typeof pk.label === "string") ? pk.label : ""
-        };
-      });
+    p.peak_annotations = committedPeaks(chart);
     return p;
   }
 
@@ -767,9 +799,13 @@
         App.error("峰标注第 " + (i + 1) + " 行的标签不能为空");
         return null;
       }
-      peaks.push({ x: pk.x, label: pk.label });
+      var rec = { x: pk.x, label: pk.label };
+      if (typeof pk.id === "string" && pk.id !== "") rec.id = pk.id;
+      peaks.push(rec);
     }
-    if (JSON.stringify(peaks) !== JSON.stringify(eff.peak_annotations || [])) {
+    // 与 committedPeaks 同形（{x,label,id?}，键序一致）才比较，否则无关
+    // 改动（如 x_reverse）也会因键序/缺 id 误判 peak_annotations 有差异。
+    if (JSON.stringify(peaks) !== JSON.stringify(committedPeaks(chart))) {
       patch.peak_annotations = peaks;
     }
 

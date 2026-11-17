@@ -7,6 +7,7 @@
 
 检查项（每项给出 ok 与具体下一步，不以“启动成功”概括）：
   python   实际解释器路径与版本
+  launcher 启动器（.bat / index.js）将使用的解释器，与 doctor 是否同一文件
   node     Node 可执行路径与版本（Python 锁文件不证明 Node 已装）
   deps     PyMuPDF / Pillow / openpyxl / xlrd（导出与 Excel 必需）
   bridge   mcp/bridge.js 是否存在且语法可加载（node --check）
@@ -60,6 +61,53 @@ def check_python():
         "version": "%d.%d.%d" % (ver.major, ver.minor, ver.micro),
         "next_step": None if ver >= (3, 10) else
         "当前解释器版本过低；请使用 Python 3.10+（本机已验证环境为 3.13）",
+    }
+
+
+def _same_interpreter(a, b):
+    """两个解释器路径是否指向同一文件（Windows 大小写不敏感，先比实体）。"""
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        pass
+    try:
+        pa = os.path.realpath(os.path.abspath(str(a)))
+        pb = os.path.realpath(os.path.abspath(str(b)))
+        if sys.platform == "win32":
+            pa, pb = pa.lower(), pb.lower()
+        return pa == pb
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def check_launcher():
+    """启动器解析顺序与 index.js/.bat 一致：FIGURE_PYTHON → .venv → PATH python。
+
+    若启动器实际会用的解释器与本 doctor 的 sys.executable 不是同一文件，
+    依赖检查结论不适用于启动器——如实报 FAIL 并给出用该解释器复查的下一步。
+    """
+    env = os.environ.get("FIGURE_PYTHON", "").strip()
+    if env:
+        chosen, source = env, "环境变量 FIGURE_PYTHON"
+    else:
+        venv = ROOT / ".venv" / ("Scripts/python.exe" if sys.platform == "win32"
+                                 else "bin/python")
+        if venv.is_file():
+            chosen, source = str(venv), "项目 .venv"
+        else:
+            chosen = shutil.which("python") or shutil.which("python.exe")
+            source = "PATH 上的 python"
+    if not chosen:
+        return {"ok": False, "path": None, "source": source,
+                "next_step": "未找到 python：请安装 Python 3.10+ 或设置 FIGURE_PYTHON"}
+    same = _same_interpreter(chosen, sys.executable)
+    return {
+        "ok": same,
+        "path": chosen,
+        "source": source,
+        "same_as_doctor": same,
+        "next_step": None if same else
+        "启动器将使用 %s；请用该解释器运行 scripts/doctor.py 复查依赖" % chosen,
     }
 
 
@@ -166,7 +214,7 @@ def check_datadir():
             "legacy_project_dir": st["legacy_project_dir"],
             "legacy_pending_migration": len(st["legacy_pending_migration"]),
             "next_step": None if not st["legacy_pending_migration"] else
-            "旧目录有 %d 个工程待迁移；在工作台「历史」页显式复制迁移（保留原文件）"
+            "旧目录有 %d 个工程待迁移；在工作台「工程」面板显式复制迁移（保留原文件）"
             % len(st["legacy_pending_migration"]),
         }
     except Exception as exc:  # noqa: BLE001
@@ -190,6 +238,7 @@ def check_model():
 def collect():
     checks = {
         "python": check_python(),
+        "launcher": check_launcher(),
         "node": check_node(),
         "deps": check_deps(),
         "bridge": check_bridge(),
@@ -205,7 +254,8 @@ def collect():
 
 
 _LABEL = {
-    "python": "Python 解释器", "node": "Node 运行时", "deps": "导出/Excel 依赖",
+    "python": "Python 解释器", "launcher": "启动器解释器", "node": "Node 运行时",
+    "deps": "导出/Excel 依赖",
     "bridge": "Node 内核桥", "viewer": "工作台与预设", "window": "窗口容器",
     "datadir": "用户数据目录", "model": "模型凭据（不外发请求）",
 }

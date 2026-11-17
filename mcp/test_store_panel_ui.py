@@ -130,6 +130,68 @@ class StorePanelUiTest(unittest.TestCase):
         self.assertTrue(box and box["width"] > 0 and box["height"] > 0)
         ctx.close()
 
+    # ------------------------------------------------------------- d
+    def test_legacy_migration_prompt_and_copy(self):
+        """旧版工程待迁移：工程面板给出提示与复制按钮，POST body overwrite:false。
+
+        /api/data-dirs 与 /api/projects/migrate 均用 page.route 拦截 mock，
+        绝不触达真实 mcp/projects 目录或真实迁移逻辑。
+        """
+        import json as _json
+        migrate_body = {}
+
+        def _dirs(route):
+            route.fulfill(status=200, content_type="application/json", body=_json.dumps({
+                "ok": True,
+                "data_dir": "X:/figdata",
+                "data_dir_env": "FIGURE_DATA_DIR",
+                "data_dir_env_set": True,
+                "current_project_exists": False,
+                "legacy_project_dir": "X:/plugin/mcp/projects",
+                "legacy_pending_migration": [
+                    {"name": "old-a.figureproj.json", "source": "s", "target": "t",
+                     "target_exists": False, "conflict": False},
+                ],
+            }, ensure_ascii=False))
+
+        def _migrate(route):
+            try:
+                migrate_body["data"] = _json.loads(route.request.post_data or "{}")
+            except Exception:
+                migrate_body["data"] = None
+            route.fulfill(status=200, content_type="application/json", body=_json.dumps({
+                "ok": True, "overwrite": False,
+                "copied": 1, "skipped_identical": 1,
+                "conflicts": [{"name": "dup.figureproj.json"}], "invalid": [],
+                "plan": [],
+            }, ensure_ascii=False))
+
+        # Store.mount 在页面 boot 时即拉取 /api/data-dirs，路由须先于 goto 注册
+        ctx = self.browser.new_context(viewport={"width": 1280, "height": 860})
+        page = ctx.new_page()
+        page.route("**/api/data-dirs", _dirs)
+        page.route("**/api/projects/migrate", _migrate)
+        page.goto(self.server.base + "/", wait_until="domcontentloaded")
+        page.wait_for_selector("#tab-store", timeout=20000)
+        page.wait_for_timeout(600)
+        self.open_store_tab(page)
+
+        panel = page.locator("#panel-store")
+        panel.get_by_text("发现 1 个旧版工程", exact=False).wait_for(timeout=10000)
+        self.assertIn("原文件会保留", panel.inner_text())
+        btn = panel.get_by_role("button", name="复制旧工程到当前目录")
+        self.assertEqual(btn.count(), 1, "应有且仅有一个迁移按钮")
+        btn.click()
+        panel.get_by_text("已复制 1 个", exact=False).wait_for(timeout=10000)
+        result_text = panel.inner_text()
+        self.assertIn("相同已跳过 1 个", result_text)
+        self.assertIn("同名冲突未覆盖 1 个", result_text)
+        self.assertIn("dup.figureproj.json", result_text)
+        self.assertIn("无效 0 个", result_text)
+        self.assertEqual(migrate_body.get("data"), {"overwrite": False},
+                         "迁移请求必须显式 overwrite:false（不覆盖冲突）")
+        ctx.close()
+
 
 if __name__ == "__main__":
     unittest.main()

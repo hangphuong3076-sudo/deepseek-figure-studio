@@ -1887,70 +1887,195 @@
     });
   }
 
-  function _minFontSizeOf(doc) {
-    var min = null;
+  // R07 修复：期刊规则测量按对象出证——每个可测元素给出
+  // {element_id, name, measured}，无法测量的进 unmeasured（带原因），
+  // 不再用单一聚合值掩盖「部分对象达标、部分无法测量」的真实覆盖度。
+  // 图表字号/线宽经 FigData.describeChartStyle 取渲染器实际生效值
+  // （与 ai.js 同一调用形状）；未加载或解析失败 → unmeasured，不猜默认值。
+
+  function _fontSizePass(doc) {
+    var items = [], unmeasured = [];
     (doc.elements || []).forEach(function (el) {
       if (!el) return;
-      var candidates = [];
-      if (el.type === "text" && el.style && typeof el.style.fontSizePt === "number") {
-        candidates.push(el.style.fontSizePt);
+      var name = el.name || el.id;
+      if (el.type === "text") {
+        // 渲染器默认字号 7pt（render.js styleToAttrs），未单独设置按 7 计
+        var fs = el.style && typeof el.style.fontSizePt === "number" &&
+          isFinite(el.style.fontSizePt) ? el.style.fontSizePt : 7;
+        items.push({ element_id: el.id, name: name, sizes: [fs] });
+        return;
       }
-      var pres = el.chart && el.chart.presentation;
-      if (pres) {
-        ["axes", "legend", "series", "peaks"].forEach(function () { /* noop */ });
-        if (pres.axes) ["x", "y"].forEach(function (ax) {
-          var a = pres.axes[ax];
-          if (a && a.title && typeof a.title.fontSizePt === "number") candidates.push(a.title.fontSizePt);
-          if (a && a.tick && typeof a.tick.fontSizePt === "number") candidates.push(a.tick.fontSizePt);
+      if (el.type !== "chart") return; // 其他元素类型不参与字号测量
+      if (!(global.FigData && typeof global.FigData.describeChartStyle === "function")) {
+        unmeasured.push({ element_id: el.id, name: name, reason: "图表样式无法解析" });
+        return;
+      }
+      var dcs;
+      try {
+        var st = el.style || {};
+        dcs = global.FigData.describeChartStyle(el.chart, {
+          fontSizePt: st.fontSizePt,
+          fontFamily: st.fontFamily
         });
-        if (pres.legend && typeof pres.legend.fontSizePt === "number") candidates.push(pres.legend.fontSizePt);
-        if (pres.peaks) Object.keys(pres.peaks).forEach(function (id) {
-          if (pres.peaks[id] && typeof pres.peaks[id].fontSizePt === "number") {
-            candidates.push(pres.peaks[id].fontSizePt);
+      } catch (e) {
+        unmeasured.push({ element_id: el.id, name: name, reason: "图表样式无法解析" });
+        return;
+      }
+      var font = (dcs && dcs.font) || {};
+      var tick = font.tickPt || {};
+      var titles = font.axisTitlePt || {};
+      var feat = (dcs && dcs.features) || {};
+      var tickHidden = feat.tickHidden || {};
+      var labels = (dcs && dcs.labels) || {};
+      var sizes = [];
+      if (!tickHidden.x && typeof tick.x === "number" && isFinite(tick.x)) sizes.push(tick.x);
+      if (!tickHidden.y && typeof tick.y === "number" && isFinite(tick.y)) sizes.push(tick.y);
+      if (typeof labels.x === "string" && labels.x !== "" &&
+          typeof titles.x === "number" && isFinite(titles.x)) sizes.push(titles.x);
+      if (typeof labels.y === "string" && labels.y !== "" &&
+          typeof titles.y === "number" && isFinite(titles.y)) sizes.push(titles.y);
+      var legend = (dcs && dcs.legend) || {};
+      if (legend.position !== "none" &&
+          typeof legend.fontPt === "number" && isFinite(legend.fontPt)) sizes.push(legend.fontPt);
+      var pres = el.chart && el.chart.presentation;
+      var pks = pres && pres.peaks;
+      if (pks && typeof pks === "object" && !Array.isArray(pks)) {
+        Object.keys(pks).forEach(function (id) {
+          var p = pks[id];
+          if (p && typeof p.fontSizePt === "number" && isFinite(p.fontSizePt)) {
+            sizes.push(p.fontSizePt);
           }
         });
       }
-      candidates.forEach(function (v) {
-        if (min === null || v < min) min = v;
-      });
-    });
-    return min; // null = 文档无可测字号（图表内部默认字号不在元素上，保持 unknown）
-  }
-
-  function _maxFontSizeOf(doc) {
-    var max = null;
-    (doc.elements || []).forEach(function (el) {
-      if (el && el.type === "text" && el.style && typeof el.style.fontSizePt === "number") {
-        if (max === null || el.style.fontSizePt > max) max = el.style.fontSizePt;
+      if (sizes.length) {
+        items.push({ element_id: el.id, name: name, sizes: sizes });
       }
     });
-    return max;
+    return { items: items, unmeasured: unmeasured };
   }
+
+  function _fontSizeAgg(pass, wantMin) {
+    var objects = [], value = null;
+    pass.items.forEach(function (it) {
+      var m = it.sizes[0];
+      for (var i = 1; i < it.sizes.length; i++) {
+        m = wantMin ? Math.min(m, it.sizes[i]) : Math.max(m, it.sizes[i]);
+      }
+      if (value === null || (wantMin ? m < value : m > value)) value = m;
+      objects.push({ element_id: it.element_id, name: it.name, measured: m });
+    });
+    return {
+      kind: wantMin ? "min" : "max",
+      value: value, objects: objects, unmeasured: pass.unmeasured
+    };
+  }
+
+  function _minFontSizeOf(fontPass) { return _fontSizeAgg(fontPass, true); }
+  function _maxFontSizeOf(fontPass) { return _fontSizeAgg(fontPass, false); }
 
   function _minStrokeWidthOf(doc) {
-    var min = null;
+    var objects = [], unmeasured = [], value = null;
     (doc.elements || []).forEach(function (el) {
-      if (el && el.style && typeof el.style.strokeWidthPt === "number") {
-        if (min === null || el.style.strokeWidthPt < min) min = el.style.strokeWidthPt;
+      if (!el) return;
+      var name = el.name || el.id;
+      var candidates = [];
+      if (el.style && typeof el.style.strokeWidthPt === "number" &&
+          isFinite(el.style.strokeWidthPt)) {
+        candidates.push(el.style.strokeWidthPt);
       }
+      if (el.type === "chart") {
+        if (!(global.FigData && typeof global.FigData.describeChartStyle === "function")) {
+          unmeasured.push({ element_id: el.id, name: name, reason: "图表样式无法解析" });
+          return;
+        }
+        var dcs;
+        try {
+          var st = el.style || {};
+          dcs = global.FigData.describeChartStyle(el.chart, {
+            fontSizePt: st.fontSizePt,
+            fontFamily: st.fontFamily
+          });
+        } catch (e) {
+          unmeasured.push({ element_id: el.id, name: name, reason: "图表样式无法解析" });
+          return;
+        }
+        var axis = (dcs && dcs.axis) || {};
+        var marks = (dcs && dcs.marks) || {};
+        if (typeof axis.widthPt === "number" && isFinite(axis.widthPt)) {
+          candidates.push(axis.widthPt);
+        }
+        if (typeof marks.lineWidthPt === "number" && isFinite(marks.lineWidthPt)) {
+          candidates.push(marks.lineWidthPt);
+        }
+      }
+      if (!candidates.length) return;
+      var m = candidates[0];
+      for (var i = 1; i < candidates.length; i++) {
+        if (candidates[i] < m) m = candidates[i];
+      }
+      if (value === null || m < value) value = m;
+      objects.push({ element_id: el.id, name: name, measured: m });
     });
-    return min;
+    return { kind: "min", value: value, objects: objects, unmeasured: unmeasured };
   }
 
-  // 位图有效 DPI：仅对带像素尺寸记录的 image 元素可测（pxWidth/pxWidth 由
-  // 导入时记录）；无记录 → null（unknown，不用 dpi 标签冒充）。
+  // 位图有效 DPI：逐图像出证（pxWidth/pxHeight 由导入时记录；缺记录 →
+  // unmeasured，不用 dpi 标签冒充）。dpi = min(宽向, 高向有效 dpi)。
   function _minRasterDpiOf(doc) {
-    var min = null, anyImage = false;
+    var objects = [], unmeasured = [], value = null, anyImage = false;
     (doc.elements || []).forEach(function (el) {
       if (!el || el.type !== "image") return;
       anyImage = true;
-      if (typeof el.pxWidth !== "number" || typeof el.pxHeight !== "number") return;
-      var wMm = el.transform && el.transform.w;
-      if (!(wMm > 0)) return;
-      var dpi = el.pxWidth / (wMm / 25.4);
-      if (min === null || dpi < min) min = dpi;
+      var name = el.name || el.id;
+      var hasPx = typeof el.pxWidth === "number" && isFinite(el.pxWidth) &&
+        typeof el.pxHeight === "number" && isFinite(el.pxHeight);
+      if (!hasPx) {
+        unmeasured.push({ element_id: el.id, name: name, reason: "缺少像素尺寸" });
+        return;
+      }
+      var t = el.transform || {};
+      var wOk = typeof t.w === "number" && isFinite(t.w) && t.w > 0;
+      var hOk = typeof t.h === "number" && isFinite(t.h) && t.h > 0;
+      if (!wOk || !hOk) {
+        unmeasured.push({ element_id: el.id, name: name, reason: "缺少放置尺寸" });
+        return;
+      }
+      var dpi = Math.min(el.pxWidth / (t.w / 25.4), el.pxHeight / (t.h / 25.4));
+      if (value === null || dpi < value) value = dpi;
+      objects.push({ element_id: el.id, name: name, measured: dpi });
     });
-    return { dpi: min, anyImage: anyImage };
+    return {
+      kind: "min", value: value, objects: objects,
+      unmeasured: unmeasured, anyImage: anyImage
+    };
+  }
+
+  // 建议文案里的测量值保留 1 位小数（结果字段 measured 仍为原值）
+  function _fmtNum(v) { return Math.round(v * 10) / 10; }
+
+  var FIGURE_TYPE_NAMES = {
+    line_art: "线稿", grayscale: "灰度", halftone_color: "彩色/照片"
+  };
+
+  function _figureTypeOfRule(rule) {
+    var at = rule && rule.appliesTo;
+    return (at && typeof at.figureType === "string" && at.figureType) || "any";
+  }
+
+  function _ruleViolates(rule, measured) {
+    var tol = typeof rule.tolerance === "number" ? rule.tolerance : 0;
+    if (rule.operator === "equal") return Math.abs(measured - rule.value) > tol;
+    if (rule.operator === "min") return measured < rule.value;
+    if (rule.operator === "max") return measured > rule.value;
+    return false;
+  }
+
+  function _ruleSatisfied(rule, measured) {
+    var tol = typeof rule.tolerance === "number" ? rule.tolerance : 0;
+    if (rule.operator === "equal") return Math.abs(measured - rule.value) <= tol;
+    if (rule.operator === "min") return measured >= rule.value;
+    if (rule.operator === "max") return measured <= rule.value;
+    return false;
   }
 
   function checkJournalRules(doc, opts) {
@@ -1976,13 +2101,18 @@
         note: "该预设暂无逐条证据规则（沿用预设默认值，投稿前自行核对官方指南）"
       };
     }
-    var minFont = _minFontSizeOf(doc);
-    var maxFont = _maxFontSizeOf(doc);
+    var fontPass = _fontSizePass(doc); // min/max 共用一次测量
+    var minFont = _minFontSizeOf(fontPass);
+    var maxFont = _maxFontSizeOf(fontPass);
     var minStroke = _minStrokeWidthOf(doc);
     var raster = _minRasterDpiOf(doc);
     var canvas = doc.canvas || {};
+    // 图类别：显式 opts > 文档 meta；未知（null）时 figureType 规则按
+    // 「可能属于更严类别」处理，避免把类别未声明误报成 fail。
+    var figType = opts.figure_type || (doc.meta && doc.meta.figure_type) || null;
     var results = rules.map(function (rule) {
       var measured = null, comparable = false, violates = false, applicable = true;
+      var meas = null;
       switch (rule.property) {
         case "figure_width":
           measured = typeof canvas.width_mm === "number" ? canvas.width_mm : null;
@@ -1993,45 +2123,91 @@
           comparable = measured !== null;
           break;
         case "min_font_size":
-          measured = minFont;
-          comparable = measured !== null;
+          meas = minFont;
           break;
         case "max_font_size":
-          measured = maxFont;
-          comparable = measured !== null;
+          meas = maxFont;
           break;
         case "line_width":
-          measured = minStroke;
-          comparable = measured !== null;
+          meas = minStroke;
           break;
         case "raster_dpi":
-          measured = raster.dpi;
-          comparable = measured !== null;
+          meas = raster;
           applicable = raster.anyImage; // 无位图素材 → not_applicable
           break;
         default:
           comparable = false;
       }
-      if (comparable) {
-        var tol = typeof rule.tolerance === "number" ? rule.tolerance : 0;
-        if (rule.operator === "equal") violates = Math.abs(measured - rule.value) > tol;
-        else if (rule.operator === "min") violates = measured < rule.value;
-        else if (rule.operator === "max") violates = measured > rule.value;
+      var elementIds = [], unmeasuredIds = [], coverage = "full";
+      if (meas) {
+        measured = meas.value;
+        comparable = measured !== null;
+        meas.objects.forEach(function (o) {
+          if (_ruleViolates(rule, o.measured)) elementIds.push(o.element_id);
+        });
+        unmeasuredIds = meas.unmeasured.map(function (u) { return u.element_id; });
+        coverage = unmeasuredIds.length ? "partial" : "full";
+      }
+      if (comparable) violates = _ruleViolates(rule, measured);
+      // appliesTo.figureType：已知类别不符 → not_applicable；类别未知时正常
+      // 评估，但若违反而同属性的另一类别规则已被实测值满足 → unknown
+      // （可能属于更宽松类别，请用户确认图类别），不直接判 fail。
+      var ruleFt = _figureTypeOfRule(rule);
+      var ftSiblingOk = false;
+      if (ruleFt !== "any") {
+        if (figType !== null && figType !== ruleFt) {
+          applicable = false;
+        } else if (figType === null && comparable && violates) {
+          ftSiblingOk = rules.some(function (sib) {
+            return sib !== rule && sib.id !== rule.id &&
+              sib.property === rule.property &&
+              _figureTypeOfRule(sib) !== "any" &&
+              _ruleSatisfied(sib, measured);
+          });
+        }
       }
       var status;
       if (!applicable) status = "not_applicable";
       else if (rule.verification !== "verified") status = "unknown";
       else if (!comparable) status = "unknown";
+      else if (violates && ftSiblingOk) status = "unknown";
       else if (violates) status = (rule.level === "required") ? "fail" : "warning";
+      else if (unmeasuredIds.length) status = "unknown"; // 部分对象无法测量
       else status = "pass";
       var suggestion = null;
       if (status === "fail" || status === "warning") {
-        suggestion = "调整 " + rule.property + "（当前 " + (measured === null ? "未知" : measured) +
+        suggestion = "调整 " + rule.property + "（当前 " + (measured === null ? "未知" : _fmtNum(measured)) +
           " " + (rule.unit || "") + "，要求 " + rule.operator + " " + rule.value + "）";
+        if (meas && elementIds.length) {
+          var badNames = meas.objects.filter(function (o) {
+            return elementIds.indexOf(o.element_id) >= 0;
+          }).map(function (o) { return o.name; });
+          if (badNames.length) suggestion += "（涉及：" + badNames.join("、") + "）";
+        }
       } else if (status === "unknown" && rule.verification !== "verified") {
         suggestion = "规则值未经官方页面直接核对（" + rule.sourceUrl + "），投稿前自行确认";
+      } else if (status === "unknown" && ftSiblingOk) {
+        var dirTxt = meas && meas.kind === "max" ? "当前最高 " :
+          meas && meas.kind === "min" ? "当前最低 " : "当前 ";
+        var opTxt = rule.operator === "min" ? "≥" : rule.operator === "max" ? "≤" : "=";
+        var ftName = FIGURE_TYPE_NAMES[ruleFt] || ruleFt;
+        suggestion = dirTxt + _fmtNum(measured) + " " + (rule.unit || "") +
+          "；若本图属于「" + ftName + "」需 " + opTxt + rule.value + " " +
+          (rule.unit || "") + "，请确认图类别";
+      } else if (status === "unknown" && comparable && unmeasuredIds.length) {
+        var okCount = meas.objects.length - elementIds.length;
+        var um = meas.unmeasured.map(function (u) {
+          return u.name + "（" + u.reason + "）";
+        });
+        suggestion = "已测 " + okCount + " 个对象符合要求；另有 " + unmeasuredIds.length +
+          " 个对象无法测量：" + um.join("、");
       } else if (status === "unknown") {
         suggestion = "文档中无可测量的 " + rule.property + " 对象";
+        if (meas && unmeasuredIds.length) {
+          suggestion += "；" + meas.unmeasured.map(function (u) {
+            return u.name + "（" + u.reason + "）";
+          }).join("、");
+        }
       }
       return {
         rule_id: rule.id, property: rule.property, level: rule.level,
@@ -2039,6 +2215,8 @@
         unit: rule.unit || null, operator: rule.operator,
         verification: rule.verification, source_url: rule.sourceUrl || null,
         checked_at: rule.checkedAt || null, evidence: rule.evidence || null,
+        element_ids: elementIds, unmeasured_ids: unmeasuredIds,
+        coverage: coverage,
         suggestion: suggestion
       };
     });

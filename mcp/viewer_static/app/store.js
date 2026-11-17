@@ -400,6 +400,56 @@
             }
             dirLine.textContent = "工程保存在本机：" + j.data_dir +
               "（当前文档自动保存于 projects/current.figureproj.json）";
+            // R08：旧版内嵌工程目录有待迁移清单时给出显式复制入口
+            // （只复制不移动、冲突不覆盖、原文件保留；迁移走 loopback POST）。
+            var pending = Array.isArray(j.legacy_pending_migration)
+              ? j.legacy_pending_migration : [];
+            if (!pending.length) return;
+            var migLine = global.Ui.h("div", {
+              style: "font-size:11px;color:#6b7280;margin:6px 0 0;line-height:1.5;word-break:break-all;",
+              text: "发现 " + pending.length + " 个旧版工程（" +
+                (j.legacy_project_dir || "") + "），原文件会保留"
+            });
+            var migBtn = global.Ui.button({
+              label: "复制旧工程到当前目录",
+              title: "把旧目录中的工程复制到当前数据目录（同名冲突不覆盖，原文件保留）",
+              onClick: function () {
+                migBtn.disabled = true;
+                global.fetch("/api/projects/migrate", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ overwrite: false })
+                })
+                  .then(function (r) { return r && r.json ? r.json() : null; })
+                  .then(function (res) {
+                    if (!res || res.ok !== true) {
+                      migLine.textContent = "迁移失败：" +
+                        ((res && res.error) || "服务无响应");
+                      migBtn.disabled = false;
+                      return;
+                    }
+                    var conflicts = Array.isArray(res.conflicts) ? res.conflicts : [];
+                    var names = conflicts.map(function (c) {
+                      return c && c.name;
+                    }).filter(function (n) { return !!n; });
+                    migLine.textContent = "已复制 " + (res.copied || 0) +
+                      " 个；相同已跳过 " + (res.skipped_identical || 0) +
+                      " 个；同名冲突未覆盖 " + conflicts.length + " 个" +
+                      (names.length ? "（" + names.join("、") + "）" : "") +
+                      "；无效 " +
+                      (Array.isArray(res.invalid) ? res.invalid.length : 0) + " 个";
+                    Store.refreshList();
+                  })
+                  .catch(function (err) {
+                    migLine.textContent = "迁移失败：" + errText(err);
+                    migBtn.disabled = false;
+                  });
+              }
+            });
+            panelEl.appendChild(migLine);
+            panelEl.appendChild(global.Ui.h("div", {
+              style: "margin:4px 0 0;"
+            }, [migBtn]));
           })
           .catch(function () {
             dirLine.textContent = "数据目录查询失败（不影响使用）";

@@ -779,7 +779,8 @@
             });
           var unkText = ruleRes.results.filter(function (r) { return r.status === "unknown"; })
             .map(function (r) {
-              return "【待人工确认】" + r.rule_id + (r.verification !== "verified" ? "（规则未经官方页核对）" : "");
+              return "【待人工确认】" + r.rule_id + "：" + (r.suggestion || r.property) +
+                (r.verification !== "verified" ? "（规则未经官方页核对）" : "");
             });
           warnings = warnings.concat(failText, warnText, unkText);
         }

@@ -301,6 +301,27 @@ FigPresets.RENDERER_SEMANTICS -> {
 //   <chart_type>: {required:[槽位], aggregation, note} }
 //   与 lib/data.js RENDERS 实际聚合行为对应（bar/bar_grouped=均值、
 //   pie=求和、line/scatter=不聚合等）；改渲染聚合必须同步本表。
+
+// --- R07 期刊规则证据与检查 ---
+FigPresets.journalRules(journalId?) -> rule[]
+//   journals.json 的逐条证据规则（官方 URL/核查日期/等级/依据/适用范围）；
+//   不传 journalId 返回全部，传 id 只返回关联该期刊的规则。
+FigPresets.checkJournalRules(doc, {journal_id?, figure_type?}) -> {
+//   ok, journal_id, results: [{
+//     rule_id, property, level, status:"pass"|"fail"|"warning"|"unknown"|"not_applicable",
+//     measured, required, unit, operator, verification, source_url, checked_at, evidence,
+//     element_ids, unmeasured_ids, coverage:"full"|"partial", suggestion
+//   }], counts:{pass,fail,warning,unknown,not_applicable}, note?
+// }
+//   检查目标：opts.journal_id > doc.canvas/meta.journal_preset_id；都没有 → 空结果+note。
+//   figure_type ∈ line_art/grayscale/halftone_color（缺省读 doc.meta.figure_type）：
+//   规则 appliesTo.figureType 与已知图类别不符 → not_applicable；图类别未知时
+//   正常评估，若违反而同属性的另一类别规则已被实测值满足 → unknown（请确认图类别），
+//   不误报 fail。
+//   element_ids=违反该规则的元素 id（画布规则为 []）；unmeasured_ids=无法测量的
+//   元素 id；coverage=partial 表示存在无法测量对象（此时无违反也给 unknown，不产生 pass）。
+//   图表字号/线宽经 FigData.describeChartStyle 取渲染器实际生效值；位图有效
+//   DPI=pxWidth/pxHeight ÷ 放置 mm，缺像素或放置尺寸记录 → unmeasured。
 ```
 
 ---

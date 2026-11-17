@@ -12,7 +12,7 @@
  * 工具 schema 的单一事实来源是 `mcp/tools.json`（由 `mcp/tools_spec.py` 生成）。
  */
 import { spawn } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { readFileSync, existsSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -68,7 +68,17 @@ let pythonBin = null
 
 function resolvePython(config) {
   if (pythonBin) return pythonBin
-  pythonBin = (config && config.python) || process.env.FIGURE_PYTHON || 'python'
+  const explicit = (config && config.python) || process.env.FIGURE_PYTHON
+  if (explicit) {
+    pythonBin = explicit
+    return pythonBin
+  }
+  // 与 start-viewer.bat / start-native-viewer.bat / doctor.py 同一顺序：
+  // 显式配置/环境变量 → 项目 .venv → PATH 上的 python。
+  const venv = process.platform === 'win32'
+    ? path.join(__dirname, '.venv', 'Scripts', 'python.exe')
+    : path.join(__dirname, '.venv', 'bin', 'python')
+  pythonBin = existsSync(venv) ? venv : 'python'
   return pythonBin
 }
 

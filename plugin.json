@@ -1,6 +1,6 @@
 {
   "name": "figure-drawing",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "科研绘图插件（skill + MCP + 斜杠命令）：按期刊预设建图、用 CSV/JSON/TSV 或 Excel 生成图表、EditOp 自然语言改图、导出 PNG/JPEG/TIFF/PDF/SVG。Python 3.13 + Pillow + PyMuPDF + openpyxl + xlrd + Node 22，无 npm/构建/CDN 依赖，完全自包含。",
   "skills": ["./skills/figure-drawing"],
   "mcpServers": {

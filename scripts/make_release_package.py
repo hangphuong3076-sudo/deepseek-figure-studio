@@ -21,6 +21,7 @@ NAME = "deepseek-figure-studio-1.1.0-rc1"
 # 允许的顶层文件
 TOP_FILES = [
     "package.json", "plugin.json", "cordis.patch.yml", "index.js", "client.js",
+    "llm-bridge.js",
     "README.md", "INSTALL.md", "SKILL.md", "pyproject.toml", "uv.lock",
     "start-native-viewer.bat", "start-viewer.bat",
 ]

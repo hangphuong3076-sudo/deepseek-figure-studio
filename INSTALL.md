@@ -5,11 +5,18 @@
 
 > **依赖的单一事实来源（2026-11-12 起）**：`pyproject.toml` + `uv.lock`。Python 依赖 =
 > PyMuPDF/Pillow/openpyxl/xlrd（desktop 可选组=pywebview）。安装方式二选一：
-> - 有 uv：`uv sync --locked`（锁文件过期时该命令失败，适合固定安装验证；`--frozen` 不检查过期，不能替代一致性检查）
-> - 无 uv：`python -m pip install PyMuPDF Pillow openpyxl xlrd`（版本范围见 pyproject；pywebview 可选）
+> - 有 uv：`uv sync --locked`（在插件根目录执行；创建 `.venv` 后启动器自动使用它。
+>   锁文件过期时该命令失败，适合固定安装验证；`--frozen` 不检查过期，不能替代一致性检查）
+> - 无 uv：先 `python -m venv .venv` 创建虚拟环境，再执行
+>   `.venv\Scripts\python -m pip install "PyMuPDF>=1.24,<2" "Pillow>=10,<12" "openpyxl>=3.1,<4" "xlrd>=2,<3"`
+>   （注意：这是按版本范围的普通安装，不是锁定安装；pywebview 桌面可选组另装）。
+>   此后 `start-viewer.bat` / `start-native-viewer.bat` 与 `index.js` 会按
+>   「`FIGURE_PYTHON` 环境变量 → 项目 `.venv` → PATH 上的 python」顺序自动选解释器；
+>   也可用 `FIGURE_PYTHON` 显式指定任意解释器。`plugin.json` 的 `mcpServers.figure.command`
+>   仍是裸 `python`——走 MCP 注册路线的用户应把它改成 `.venv` 解释器的路径。
 > Node 22 系列由系统安装（Python 锁文件不管理 Node），`scripts/doctor.py` 会单独检查。
 > **本地诊断**：`python scripts/doctor.py`（人读）或 `--json`（机器可读）；解释器/Node/依赖/桥/预设/窗口容器/数据目录/模型凭据状态逐项给出具体下一步，不调用模型、不输出密钥。
-> **用户数据目录（R08）**：工程与配置存于 `%LOCALAPPDATA%\DeepSeekFigureStudio`（Windows）/ `~/.local/share/DeepSeekFigureStudio`（其他），可用环境变量 `FIGURE_DATA_DIR` 显式指定；旧 `mcp/projects` 原样保留，首次启动日志与 `GET /api/data-dirs` 提示待迁移清单，经 UI「历史」页或 `POST /api/projects/migrate`（`{"overwrite":false}`，loopback 限定）显式复制迁移——冲突不覆盖、覆盖前自动备份、原文件始终保留。
+> **用户数据目录（R08）**：工程与配置存于 `%LOCALAPPDATA%\DeepSeekFigureStudio`（Windows）/ `~/.local/share/DeepSeekFigureStudio`（其他），可用环境变量 `FIGURE_DATA_DIR` 显式指定；旧 `mcp/projects` 原样保留，首次启动日志与 `GET /api/data-dirs` 提示待迁移清单，经 UI「工程」面板或 `POST /api/projects/migrate`（`{"overwrite":false}`，loopback 限定）显式复制迁移——冲突不覆盖、覆盖前自动备份、原文件始终保留。
 
 
 - **路线 A（推荐，官方）**：作为 DSH bundle 用 `dsh plugin add` 安装 —— 26 个

@@ -10,15 +10,14 @@
    - unverified_secondary 规则即使测量达标 → unknown（不产生 pass）；
    - 无位图素材的 raster_dpi → not_applicable；
    - 带像素尺寸的低 DPI 位图 → fail（有效 DPI=px/放置mm，不用 dpi 标签）；
-   - 无像素尺寸的位图 → unknown；
-   - 无可测字号（图表内部默认不在元素上）→ unknown；
+   - 无像素尺寸的位图 → unknown + coverage partial；
+   - 无任何可测字号对象 → unknown；图表字号经 describeChartStyle 实测；
 3. 规则按 journal_ids 关联，未套用预设的其他期刊规则不混入。
 """
 
 import json
 import os
 import subprocess
-import sys
 import unittest
 from pathlib import Path
 
@@ -149,6 +148,97 @@ console.log(JSON.stringify({ scoped: !mixed, count: ids.length }));
 """)
         self.assertTrue(out["scoped"])
         self.assertEqual(out["count"], 5)  # width/max-height/font-min/font-max/dpi
+
+    def test_per_object_measurement_and_figure_type(self):
+        """逐对象测量出证 + appliesTo.figureType 未知类别降级（审计反例回归）。"""
+        out = node_json(PRELUDE + r"""
+function img(id, pxw, pxh, w, h) {
+  const e = { id, type: 'image', name: id,
+    transform: { x: 0, y: 0, w, h, rotation: 0 },
+    style: {}, src: 'data:image/png;base64,x' };
+  if (pxw !== undefined) e.pxWidth = pxw;
+  if (pxh !== undefined) e.pxHeight = pxh;
+  return e;
+}
+function dpiRules(res) {
+  return res.results.filter(r => r.property === 'raster_dpi');
+}
+// a) 1200×150px 放 50.8mm → 高向 75dpi 为最小 → nature-dpi-color fail
+let da = FigDoc.create({ width_mm: 89, height_mm: 70 });
+da.elements.push(img('vertical-low', 1200, 150, 50.8, 50.8));
+const dpiA = dpiRules(FigPresets.checkJournalRules(da, { journal_id: 'nature-single' }))
+  .find(r => r.rule_id === 'nature-dpi-color');
+// b) 一张 600dpi + 一张无像素尺寸 → unknown + coverage partial
+let db = FigDoc.create({ width_mm: 89, height_mm: 70 });
+db.elements.push(img('known', 1200, 1200, 50.8, 50.8),
+                 img('unknown', undefined, undefined, 50.8, 50.8));
+const dpiB = dpiRules(FigPresets.checkJournalRules(db, { journal_id: 'nature-single' }))
+  .find(r => r.rule_id === 'nature-dpi-color');
+// c) ACS 300dpi 无图类别 → color pass、grayscale/lineart unknown（不 fail）
+let dc = FigDoc.create({ width_mm: 84.7, height_mm: 100 });
+dc.elements.push(img('photo', 600, 600, 50.8, 50.8)); // 300 dpi
+const acsNoType = dpiRules(FigPresets.checkJournalRules(dc, { journal_id: 'acs-single' }));
+const acsColorType = dpiRules(FigPresets.checkJournalRules(
+  dc, { journal_id: 'acs-single', figure_type: 'halftone_color' }));
+dc.elements[0] = img('photo', 400, 400, 50.8, 50.8); // 200 dpi
+const acsLow = dpiRules(FigPresets.checkJournalRules(dc, { journal_id: 'acs-single' }));
+// d) tpl-bar 图表轴标题 40pt + 6pt 文本 → max_font warning（图表参与测量）
+const built = FigPresets.templateFromStats('tpl-bar',
+  { columns: ['group', 'value'], rows: [['a', 1], ['b', 2]] },
+  { mapping: { x: 'group', y: 'value' } });
+let dd = FigDoc.create({ width_mm: 89, height_mm: 70 });
+dd.elements.push(...built.elements);
+const chartD = dd.elements.find(e => e.type === 'chart');
+chartD.chart.presentation = { version: 1, axes: { x: { title: { fontSizePt: 40 } } } };
+dd.elements.push({ id: 'label-6pt', type: 'text', text: 'label',
+  transform: { x: 0, y: 0, w: 10, h: 5, rotation: 0 }, style: { fontSizePt: 6 } });
+const fontRes = FigPresets.checkJournalRules(dd, { journal_id: 'nature-single' }).results;
+// e) 只有默认 tpl-bar 图表 → min_font 实测 7 pass（此前 null/unknown）
+let de = FigDoc.create({ width_mm: 89, height_mm: 70 });
+de.elements.push(...FigPresets.templateFromStats('tpl-bar',
+  { columns: ['group', 'value'], rows: [['a', 1], ['b', 2]] },
+  { mapping: { x: 'group', y: 'value' } }).elements);
+const minOnly = FigPresets.checkJournalRules(de, { journal_id: 'nature-single' }).results
+  .find(r => r.property === 'min_font_size');
+console.log(JSON.stringify({
+  a: dpiA, b: dpiB,
+  acsNoType: acsNoType.map(r => ({ id: r.rule_id, status: r.status, measured: r.measured })),
+  acsColorType: acsColorType.map(r => ({ id: r.rule_id, status: r.status })),
+  acsLow: acsLow.map(r => ({ id: r.rule_id, status: r.status })),
+  chartId: chartD.id,
+  maxFont: fontRes.find(r => r.property === 'max_font_size'),
+  minFontD: fontRes.find(r => r.property === 'min_font_size'),
+  minOnly
+}));
+""")
+        a = out["a"]
+        self.assertEqual(a["status"], "fail")
+        self.assertEqual(a["measured"], 75)  # min(1200/2, 150/2)：高向决定有效 DPI
+        self.assertEqual(a["element_ids"], ["vertical-low"])
+        b = out["b"]
+        self.assertEqual(b["status"], "unknown")
+        self.assertEqual(b["coverage"], "partial")
+        self.assertEqual(b["measured"], 600)
+        self.assertIn("unknown", b["unmeasured_ids"])
+        by_id = {r["id"]: r for r in out["acsNoType"]}
+        self.assertEqual(by_id["acsnano-dpi-color"]["status"], "pass")
+        self.assertEqual(by_id["acsnano-dpi-grayscale"]["status"], "unknown")
+        self.assertEqual(by_id["acsnano-dpi-lineart"]["status"], "unknown")
+        self.assertTrue(all(r["status"] == "fail" for r in out["acsLow"]),
+                        "200dpi 低于所有类别下限必须全部 fail")
+        by_id2 = {r["id"]: r for r in out["acsColorType"]}
+        self.assertEqual(by_id2["acsnano-dpi-color"]["status"], "pass")
+        self.assertEqual(by_id2["acsnano-dpi-grayscale"]["status"], "not_applicable")
+        self.assertEqual(by_id2["acsnano-dpi-lineart"]["status"], "not_applicable")
+        max_font = out["maxFont"]
+        self.assertEqual(max_font["status"], "warning")
+        self.assertEqual(max_font["measured"], 40)
+        self.assertIn(out["chartId"], max_font["element_ids"],
+                      "图表轴标题 40pt 必须计入 max_font_size 并定位到图表元素")
+        self.assertEqual(out["minFontD"]["measured"], 6)
+        self.assertEqual(out["minOnly"]["status"], "pass")
+        self.assertEqual(out["minOnly"]["measured"], 7,
+                         "默认图表刻度字号 7pt 必须可测（渲染器默认值）")
 
 
 if __name__ == "__main__":

@@ -1910,7 +1910,7 @@ def serve(port=DEFAULT_PORT, host="127.0.0.1"):
             pending = status.get("legacy_pending_migration") or []
             if pending:
                 print("[v3 viewer] 检测到旧目录 %s 有 %d 个工程未迁移到 %s；"
-                      "保留原文件，可在工作台「历史」页或 POST /api/projects/migrate "
+                      "保留原文件，可在工作台「工程」面板或 POST /api/projects/migrate "
                       "显式复制迁移（不覆盖冲突）。"
                       % (status["legacy_project_dir"], len(pending),
                          status["data_dir"]), flush=True)
