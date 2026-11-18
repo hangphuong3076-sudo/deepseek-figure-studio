@@ -1,33 +1,33 @@
 # -*- coding: utf-8 -*-
-"""构建本地发布候选包（R09）。
+"""在 Git 仓库中构建可分发的插件 ZIP。
 
 白名单打包：只收明确允许的源文件/目录；排除 .venv、用户工程、密钥、
 缓存、日志、测试输出、__pycache__、.git、index.js.orig-backup 等。
-产物：dist/deepseek-figure-studio-1.1.0-rc1.zip + SHA-256。
-许可未决（LICENSE 由权利人决定）已在包内 RELEASE-NOTES.md 记录。
+产物：dist/deepseek-figure-studio-<版本>.zip 和对应的 SHA-256 文件。
 运行：python scripts/make_release_package.py
 """
 import hashlib
 import json
+import subprocess
 import sys
 import zipfile
-from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT_DIR = ROOT / "dist"
-NAME = "deepseek-figure-studio-1.1.0-rc1"
+VERSION = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))["version"]
+NAME = f"deepseek-figure-studio-{VERSION}"
 
-# 允许的顶层文件
+# 发布所需的文件与目录
 TOP_FILES = [
     "package.json", "plugin.json", "cordis.patch.yml", "index.js", "client.js",
     "llm-bridge.js",
     "README.md", "INSTALL.md", "SKILL.md", "pyproject.toml", "uv.lock",
     "start-native-viewer.bat", "start-viewer.bat",
+    "docs/user-guide.md", "images/workbench.png",
 ]
-# 允许的目录（整目录收，内部再按扩展名/名称排除）
 DIRS = [
-    "mcp", "presets", "skills", "commands", "examples", "docs", "scripts",
+    "mcp", "presets", "skills", "commands", "examples", "docs/images/walkthrough", "scripts",
 ]
 # 目录内排除规则
 EXCLUDE_DIRS = {"__pycache__", "projects", "node_modules", ".venv", ".git",
@@ -35,56 +35,30 @@ EXCLUDE_DIRS = {"__pycache__", "projects", "node_modules", ".venv", ".git",
 EXCLUDE_NAMES = {"index.js.orig-backup"}
 EXCLUDE_SUFFIXES = {".pyc", ".pyo", ".log", ".tmp", ".bak"}
 
-RELEASE_NOTES = """# 发布候选 {name}
+RELEASE_NOTES = f"""# DeepSeek Figure Studio {VERSION}
 
-日期：{date}。本包为本地可审查候选（RC1），未推送远程、未创建 Release。
+## 安装与启动
 
-## 内容
-- 完整插件源代码（DSH bundle / MCP / 可视化工作台，同一核心）；
-- 锁定依赖：pyproject.toml + uv.lock（Python）；Node 22 系列由系统安装；
-- 三组教学示例（examples/teaching，合成演示数据，已标注 demo）；
-- 优化状态矩阵与证据：docs/optimization/progress.md。
+1. 将 ZIP 完整解压到本地目录，准备 Python 3.10 或以上版本及 Node.js 22。
+2. 在解压目录打开终端，按 [安装指南](INSTALL.md) 安装依赖。有 uv 时可执行 `uv sync --locked`。
+3. Windows 用户双击 `start-viewer.bat` 打开工作台。使用 DeepSeek Harness 的用户可按安装指南注册插件。
 
-## 快速开始
-1. python scripts/doctor.py        # 本地诊断（依赖/桥/预设/窗口/数据目录）
-2. start-native-viewer.bat         # 打开可视化工作台（或 dsh plugin add 本目录）
-3. 空文档任务卡三步开始；教学示例可直接打开
-4. 回归：python -B mcp/selftest.py && python -B -m unittest discover -s mcp -p "test_*.py"
-
-## 已验证（本地）
-- selftest 142 PASS / 0 FAIL；unittest 133 OK（2026-11-12，Windows/Python 3.13.5/Node 22.19.0）
-- C01/C02/C03 端到端（真实导出+独立解码）；A01-A07 内核级测试全过
-
-## 未决项（须权利人/用户决定）
-- 项目 LICENSE 类型与 PyMuPDF（AGPL/商业）分发方式；
-- 完全离线安装包（Python/Node/wheels/WebView2 打包来源与体积）；
-- Science 期刊官方页（HTTP 403）规则再核实；真实账号模型调用；
-  原生窗口人工视觉复核；期刊合规人工核对。
-
-## 用户数据
-工程/设置/日志存于用户数据目录（FIGURE_DATA_DIR 可指定），不在本包内；
-旧 mcp/projects 未包含在包内（迁移在目标机器上按提示显式执行）。
-""".format(name=NAME, date=date.today().isoformat())
+[图文操作手册](docs/user-guide.md) 包含数据导入、手动调线宽、锚点框选与 AI 修改、组图和导出。
+"""
 
 
 def iter_allowed():
-    for name in TOP_FILES:
-        p = ROOT / name
-        if p.is_file():
-            yield p
-    for d in DIRS:
-        base = ROOT / d
-        if not base.is_dir():
+    tracked = subprocess.check_output(
+        ["git", "ls-files", "-z", "--", *TOP_FILES, *DIRS], cwd=ROOT
+    )
+    for name in tracked.decode("utf-8").split("\0"):
+        if not name:
             continue
-        for p in base.rglob("*"):
-            if not p.is_file():
-                continue
-            rel = p.relative_to(ROOT)
-            if any(part in EXCLUDE_DIRS for part in rel.parts):
-                continue
-            if p.name in EXCLUDE_NAMES or p.suffix in EXCLUDE_SUFFIXES:
-                continue
-            yield p
+        rel = Path(name)
+        if any(part in EXCLUDE_DIRS for part in rel.parts):
+            continue
+        if rel.name not in EXCLUDE_NAMES and rel.suffix not in EXCLUDE_SUFFIXES:
+            yield ROOT / rel
 
 
 def main():

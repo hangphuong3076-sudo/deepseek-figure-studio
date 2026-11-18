@@ -1,6 +1,6 @@
 [project]
 name = "deepseek-figure-studio"
-version = "1.1.0"
+version = "1.2.0"
 description = "科研绘图插件：FigureDocument/EditOp/canonical SVG 单一事实链 + 可视化工作台（DSH bundle / MCP / 独立运行共用同一核心）"
 requires-python = ">=3.10"
 # 依赖版本以本机实测为准（2026-11-12：Python 3.13.5 / PyMuPDF 1.27.2.2 /

@@ -1,6 +1,6 @@
 {
   "name": "dsh-figure-studio",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "科研绘图工作台（DeepSeek Harness 插件 bundle）：AI 建图/改图/审阅 + 左画布右对话可视化工作台 + 期刊规范 + 可追溯历史 + PNG/JPG/TIFF/PDF/SVG 导出。",
   "type": "module",
   "main": "index.js",
