@@ -8,3 +8,5 @@ node_modules/
 .devin-backup*/
 mcp/projects/
 dist/
+docs/optimization/
+docs/review-*/

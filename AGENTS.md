@@ -13,3 +13,4 @@
 - 取证拼图脚本在 `docs/optimization/shot_scripts/`（不提交）；拼图前确认文档画布能完整包住图表元素（默认图表 transform 是 (10,10) 起 120×90 mm）。
 - 示意图质量门禁：`python -B -m unittest test_diagram_r9 -v`（模板 × 主题：对比度、徽标压字、越界、连线穿节点）。
 - 模板能力计数（selftest、test_schematic_mcp、test_templates_r7 有断言）：增删模板后同步更新。
+- 用户偏好（2026-11-18）：只做必要的测试——按改动影响只跑相关测试模块（可用 test-value skill 判断）；全量 `unittest discover` 只在发布前或用户明确要求时跑。
