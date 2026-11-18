@@ -1110,7 +1110,7 @@
   var DECIMAL_DOTNUM_RE = /^[+-]?,\d+([eE][+-]?\d+)?$/;
 
   function assertNumberFormat(numberFormat, fnName) {
-    var fmt = numberFormat || "plain";
+    var fmt = numberFormat === undefined ? "plain" : numberFormat;
     if (NUMBER_FORMATS.indexOf(fmt) < 0) {
       throw new Error(fnName + "：numberFormat 仅支持 \"plain\"、\"comma_thousands\"、\"comma_decimal\"");
     }
@@ -1259,6 +1259,10 @@
   }
 
   function parseCSV(text, opts) {
+    return readCSV(text, opts, parseCell);
+  }
+
+  function readCSV(text, opts, readCell) {
     opts = opts || {};
     if (typeof text !== "string") throw new Error("parseCSV：输入必须是字符串");
     if (text.length === 0) throw new Error("parseCSV：CSV 内容为空");
@@ -1303,7 +1307,7 @@
     for (var r = 0; r < dataRows.length; r++) {
       var src = dataRows[r], out = [];
       for (var j = 0; j < width; j++) {
-        out.push(parseCell(j < src.length ? src[j] : "", numberFormat));
+        out.push(readCell(j < src.length ? src[j] : "", numberFormat));
       }
       rows.push(out);
     }
@@ -1328,8 +1332,8 @@
     }
     var data;
     try {
-      data = parseCSV(text, { delimiter: delimiter, numberFormat: "plain",
-        header: opts.header !== false });
+      data = readCSV(text, { delimiter: delimiter, header: opts.header !== false },
+        function (cell) { return cell.trim(); });
     } catch (e) {
       return { delimiter: delimiter, suggestion: null, ambiguous: false,
         columns: [], example: null };
@@ -1340,11 +1344,10 @@
     for (var c = 0; c < ncols; c++) {
       var hasCommaCell = false, allT = true, allD = true, saw = false;
       for (var r = 0; r < data.rows.length; r++) {
-        var cell = data.rows[r][c];
-        if (cell === null || cell === undefined) continue;
+        var raw = data.rows[r][c];
+        if (MISSING_TOKENS.indexOf(raw.toLowerCase()) >= 0) continue;
         saw = true;
-        var raw = String(cell);
-        if (typeof cell === "string" && cell.indexOf(",") >= 0) {
+        if (raw.indexOf(",") >= 0) {
           hasCommaCell = true;
           if (exampleOf[c] === undefined) exampleOf[c] = raw;
         }

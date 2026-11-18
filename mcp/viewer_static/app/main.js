@@ -485,6 +485,7 @@
     "category": "chart / diagram / composite",
     "chart_type": "对应 figure-document element.chart.chartType",
     "panels": "默认子图布局 [cols, rows]",
+    "areas": "可选：按子图顺序列出每个区域的起始格（从 0 起）和跨度 {col,row,colSpan,rowSpan}",
     "recommend_when": "数据特征匹配规则（供模板推荐器解释）",
     "default_mapping": "列角色默认映射",
     "characterization": "可选：表征谱图骨架（technique/x_reverse/x_scale/x_label/y_label/curves/fit_model/fit_source/peak_annotations/normalize/offset_each_series）；curves[].column 引用 default_mapping 的槽名，应用时解析为真实数据列",
@@ -944,6 +945,39 @@
       "journal_default": "nature-double",
       "palette_default": "npg",
       "notes": "(a) 承担主论点；(b)(c)(d) 依次为对照/分解/验证。面板标签 8pt bold。"
+    },
+    {
+      "id": "tpl-composite-top-large",
+      "name": "上大下二复合图",
+      "category": "composite",
+      "chart_type": null,
+      "panels": [2, 3],
+      "areas": [
+        {"col": 0, "row": 0, "colSpan": 2, "rowSpan": 2},
+        {"col": 0, "row": 2, "colSpan": 1, "rowSpan": 1},
+        {"col": 1, "row": 2, "colSpan": 1, "rowSpan": 1}
+      ],
+      "recommend_when": "一张主图与两张支撑图",
+      "default_mapping": {},
+      "journal_default": "nature-double",
+      "palette_default": "npg",
+      "notes": "上方为主图，下方两幅小图并列。"
+    },
+    {
+      "id": "tpl-composite-left-wide",
+      "name": "左宽右窄复合图",
+      "category": "composite",
+      "chart_type": null,
+      "panels": [3, 1],
+      "areas": [
+        {"col": 0, "row": 0, "colSpan": 2, "rowSpan": 1},
+        {"col": 2, "row": 0, "colSpan": 1, "rowSpan": 1}
+      ],
+      "recommend_when": "主图与一张辅助图并排",
+      "default_mapping": {},
+      "journal_default": "nature-double",
+      "palette_default": "npg",
+      "notes": "左侧主图占两列，右侧辅助图占一列。"
     },
     {
       "id": "tpl-composite-1x3",
@@ -2357,16 +2391,6 @@
                 apply.__phase5Guard = true;
                 templates.apply = apply;
             }
-            if (typeof templates.mount === "function" && !templates.mount.__phase5Gallery) {
-                var prevMount = templates.mount;
-                var mount = function (panel) {
-                    var result = prevMount.apply(templates, arguments);
-                    installTemplateGallery(panel);
-                    return result;
-                };
-                mount.__phase5Gallery = true;
-                templates.mount = mount;
-            }
         }
         if (has("App") && typeof App.commit === "function" && !App.commit.__phase5TemplateGuard) {
             var prevCommit = App.commit;
@@ -2384,104 +2408,6 @@
         runtimeInstalled = true;
         installRenderSafety();
         installTemplateSafety();
-    }
-
-    function templateGalleryNode(doc, tag, text, style) {
-        var el = doc.createElement(tag);
-        if (text !== undefined) el.textContent = text;
-        if (style) el.setAttribute("style", style);
-        return el;
-    }
-
-    function installTemplateGallery(panel) {
-        if (!panel || !global.document) return;
-        var doc = global.document;
-        if (panel.__phase5ShowUnsupported === undefined) panel.__phase5ShowUnsupported = false;
-        if (!panel.__phase5Capture) {
-            panel.__phase5Capture = true;
-            panel.addEventListener("click", function (ev) {
-                var node = ev.target;
-                while (node && node !== panel) {
-                    if (node.getAttribute && node.getAttribute("data-capability") === "unsupported") {
-                        ev.preventDefault();
-                        ev.stopPropagation();
-                        if (has("App") && typeof App.status === "function") {
-                            App.status("该模板仅示意，暂不支持真实生成，已禁止应用");
-                        }
-                        return;
-                    }
-                    node = node.parentNode;
-                }
-            }, true);
-        }
-        function decorate() {
-            var items = panel.querySelectorAll ? panel.querySelectorAll(".template-item") : [];
-            items.forEach(function (item) {
-                if (item.__phase5Capability) return;
-                var found = null;
-                var id = item.getAttribute && item.getAttribute("data-template-id");
-                var title = item.querySelector && item.querySelector("span");
-                var name = title ? String(title.textContent || "").trim() : "";
-                capabilityList().forEach(function (tpl) {
-                    if (!found && ((id && tpl.id === id) || (!id && name && tpl.name === name))) found = tpl;
-                });
-                if (!found) return;
-                item.__phase5Capability = found.capability;
-                item.setAttribute("data-capability", found.capability);
-                item.setAttribute("data-template-id", found.id);
-                var badge = templateGalleryNode(doc, "div", CAPABILITY_TEXT[found.capability],
-                    "font-size:11px;font-weight:bold;padding:2px 5px;border-radius:3px;" +
-                    (found.capability === "full" ? "color:#176b3a;background:#e7f6ec;" :
-                        found.capability === "layout" ? "color:#755400;background:#fff4cc;" :
-                            "color:#9b1c1c;background:#fee2e2;"));
-                item.insertBefore(badge, item.firstChild);
-                var button = item.querySelector && item.querySelector("button");
-                if (button) {
-                    if (found.capability === "unsupported") {
-                        button.disabled = true;
-                        button.textContent = "禁止应用";
-                        button.title = "仅示意，无真实 SVG 生成能力";
-                        button.setAttribute("aria-disabled", "true");
-                    } else if (found.capability === "layout") {
-                        button.textContent = "创建空版式";
-                        button.title = "只创建复合空版式，不自动填图；请逐面板添加真实数据";
-                    } else {
-                        button.title = "使用真实数据本地生成 SVG；无数据不会生成占位图";
-                    }
-                }
-                item.style.display = found.capability === "unsupported" && !panel.__phase5ShowUnsupported ? "none" : "";
-            });
-            items.forEach(function (item) {
-                var cap = item.getAttribute("data-capability");
-                item.style.display = cap === "unsupported" && !panel.__phase5ShowUnsupported ? "none" : "";
-            });
-        }
-        if (!panel.__phase5ToolbarEl || panel.__phase5ToolbarEl.parentNode !== panel) {
-            var bar = templateGalleryNode(doc, "div", null,
-                "position:sticky;top:0;z-index:3;background:#fff;border-bottom:1px solid #ddd;padding:5px 8px;font-size:11px;");
-            var label = templateGalleryNode(doc, "label", null, "display:flex;gap:5px;align-items:center;cursor:pointer;");
-            var toggle = templateGalleryNode(doc, "input");
-            toggle.type = "checkbox";
-            toggle.checked = panel.__phase5ShowUnsupported;
-            toggle.addEventListener("change", function () {
-                panel.__phase5ShowUnsupported = toggle.checked;
-                decorate();
-            });
-            label.appendChild(toggle);
-            label.appendChild(doc.createTextNode("这张图暂时还不能生成（仅示意预览，不能应用）"));
-            bar.appendChild(label);
-            bar.appendChild(templateGalleryNode(doc, "div",
-                "full 需真实数据；layout 只建空版式，不自动填图。默认不推荐、不展示 unsupported。",
-                "color:#666;margin-top:3px;line-height:1.35;"));
-            panel.insertBefore(bar, panel.firstChild);
-            panel.__phase5ToolbarEl = bar;
-        }
-        panel.__phase5Decorate = decorate;
-        decorate();
-        if (!panel.__phase5Observer && typeof global.MutationObserver === "function") {
-            panel.__phase5Observer = new global.MutationObserver(function () { decorate(); });
-            panel.__phase5Observer.observe(panel, { childList: true, subtree: true });
-        }
     }
 
     function appFail(err) {
@@ -2656,14 +2582,8 @@
                 }
             }],
             ["Import", function () {
-                // Mount only into the dedicated panel; a toolbar/panel-templates
-                // fallback lets Templates.mount wipe the Import buttons later.
                 var el = pickEl(["panel-import"]);
                 if (el) Import.mount(el);
-            }],
-            ["Templates", function () {
-                var el = pickEl(["panel-templates"]);
-                if (el) Templates.mount(el);
             }],
             ["Presets", function () {
                 var el = pickEl(["panel-presets"]);
@@ -2739,7 +2659,6 @@
         { id: "anchors", label: "锚点" },
         { id: "layers", label: "图层" },
         { id: "props", label: "属性" },
-        { id: "templates", label: "模板" },
         { id: "presets", label: "期刊" },
         { id: "history", label: "历史" },
         { id: "store", label: "工程" }
@@ -2747,9 +2666,9 @@
 
     // AI 对话始终固定在下半栏，不再占用上半栏的工具标签。
     var VARIANT_TABS = {
-        a: ["science", "diagram", "templates", "presets", "anchors", "history", "store", "layers", "props"],
-        b: ["props", "layers", "diagram", "anchors", "science", "templates", "presets", "history", "store"],
-        c: ["science", "diagram", "presets", "history", "store", "props", "layers", "anchors", "templates"]
+        a: ["science", "diagram", "presets", "anchors", "history", "store", "layers", "props"],
+        b: ["props", "layers", "diagram", "anchors", "science", "presets", "history", "store"],
+        c: ["science", "diagram", "presets", "history", "store", "props", "layers", "anchors"]
     };
     var VARIANT_DEFAULT_TAB = { a: "science", b: "props", c: "science" };
     var VARIANT_LABEL = { a: "对话创作", b: "专业编辑", c: "投稿审阅" };
@@ -3616,8 +3535,7 @@
         renderNyquist: drawNyquist,
         fallbackTemplates: FB_TEMPLATES,
         fallbackRenderTypes: FALLBACK_RENDER_TYPES.slice(),
-        loadPresets: loadPresets,
-        decorateTemplateGallery: installTemplateGallery
+        loadPresets: loadPresets
     };
     if (typeof module !== "undefined" && module.exports) module.exports = global.FigurePhase5;
 

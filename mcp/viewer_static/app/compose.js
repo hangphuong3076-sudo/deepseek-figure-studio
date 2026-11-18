@@ -86,13 +86,36 @@
       el.transform && el.transform.w > 0 && el.transform.h > 0);
   }
 
-  function currentSources() {
+  function currentSources(includeCanvas) {
     var d = doc();
     if (!d) return [];
-    return (d.elements || []).filter(eligible).map(function (el) {
+    var sources = (d.elements || []).filter(eligible).map(function (el) {
       return { kind: "current", tabId: d.id, tabTitle: d.title || "当前画布",
         el: el, srcDoc: d };
     });
+    if (!includeCanvas) (d.elements || []).forEach(function (el) {
+      if (el.parent_id && el.type === "chart" && !isEmptyCell(el)) {
+        sources.push({kind:"current", tabId:d.id, tabTitle:d.title, el:el, srcDoc:d});
+      }
+    });
+    if (includeCanvas && needsCanvasSource(d, sources)) sources.unshift(canvasSource(d));
+    return sources;
+  }
+
+  function needsCanvasSource(d, sources) {
+    return d.elements.length && !(sources.length === 1 && d.elements.filter(function (el) { return !el.parent_id; }).length === 1);
+  }
+
+  // A canvas can contain several independent roots (e.g. template panel and title).
+  // Wrap a copy so the source tab and its native editable elements survive placement.
+  function canvasSource(d) {
+    var roots = d.elements.filter(function (el) { return !el.parent_id; });
+    var wrapper = {id:uid("canvas"), type:"group", name:"整张画布 · " + (d.title || "未命名"),
+      transform:{x:0, y:0, w:d.canvas.width_mm, h:d.canvas.height_mm, rotation:0},
+      children:roots.map(function (el) { return el.id; }), style:{}};
+    var nodes = d.elements.map(function (el) { return el.parent_id ? el : Object.assign({}, el, {parent_id:wrapper.id}); });
+    return {kind:"tab", tabId:d.id, tabTitle:d.title, el:wrapper,
+      srcDoc:Object.assign({}, d, {elements:[wrapper].concat(nodes)})};
   }
 
   var _tabsCache = { at: 0, tabs: [] };
@@ -122,6 +145,9 @@
                   el: el, srcDoc: j.doc });
               }
             });
+            if (needsCanvasSource(j.doc, out)) {
+              out.unshift(canvasSource(j.doc));
+            }
             return out.length ? { tab: t, sources: out } : null;
           }).catch(function () { return null; });
       });
@@ -297,6 +323,14 @@
         c.children = c.children.map(function (cid) { return idMap[cid]; })
           .filter(function (cid) { return !!cid; });
       }
+      if (!keepIds) {
+        ["label_element_id", "relation_label_for"].forEach(function (key) {
+          if (idMap[c[key]]) c[key] = idMap[c[key]];
+        });
+        if (c.relation) ["source", "target"].forEach(function (key) {
+          if (idMap[c.relation[key]]) c.relation[key] = idMap[c.relation[key]];
+        });
+      }
       out.push(c);
     });
     return out;
@@ -305,21 +339,8 @@
   // group 内容：把后代 transform 从旧包围盒线性映射进目标矩形（绝对 mm）。
   // bbox 必须在源文档上按原始 id 计算（克隆可能已换新 id）。
   function fitGroupIntoRect(nodes, srcDoc, srcRootId, rect) {
-    var F = figdoc();
-    if (!F || typeof F.bbox !== "function") return;
-    var bb;
-    try { bb = F.bbox(srcDoc, srcRootId, { recursive: true }); } catch (e) { bb = null; }
-    if (!bb || !(bb.w > 0) || !(bb.h > 0)) return;
-    var sx = rect.w / bb.w, sy = rect.h / bb.h;
-    nodes.forEach(function (n) {
-      var t = n.transform; if (!t) return;
-      var nx = rect.x + (t.x - bb.x) * sx;
-      var ny = rect.y + (t.y - bb.y) * sy;
-      var nw = Math.max(0.1, t.w * sx);
-      var nh = Math.max(0.1, t.h * sy);
-      t.x = nx; t.y = ny; t.w = nw; t.h = nh;
-      if (n.style) n.style.panelRelative = false;
-    });
+    var bb = figdoc().bbox(srcDoc, srcRootId, { recursive: true });
+    figdoc().fitElements(nodes, bb, rect);
   }
 
   // ------------------------------------------------------------------
@@ -428,6 +449,13 @@
       elements.push(cpanel);
       outer.children.push(cid);
 
+      if (!s) {
+        var slot = {id:uid("slot"), name:"子图 " + letter, type:"chart", chart:{},
+          parent_id:cid, style:{panelRelative:true}, transform:{x:0,y:0,w:1,h:1,rotation:0}, z:1};
+        cpanel.children.push(slot.id);
+        elements.push(slot);
+        return;
+      }
       var keepIds = s.kind === "current";
       var nodes = cloneSubtree(s, keepIds);
       var contentRoot = nodes[0];
@@ -693,6 +721,8 @@
       cfg.sources = sel;
       var newDoc = newDocFor(struct, cfg, title);
       newDoc = applyUnifyToDoc(newDoc, struct, cfg, d);
+      var check = figdoc().validate(newDoc);
+      if (!check.ok) throw new Error("组图结构无效：" + check.errors.join("；"));
       var curIds = sel.filter(function (s) { return s.kind === "current"; })
         .map(function (s) { return s.el.id; });
       var go = function () {
@@ -806,7 +836,7 @@
     return out;
   }
 
-  function sourcePicker(onChange) {
+  function sourcePicker(onChange, single) {
     var wrap = h("div", { class: "cp-sources" });
     var listEl = h("div", { class: "cp-source-list" });
     var orderEl = h("div", { class: "cp-order-list" });
@@ -828,11 +858,12 @@
         cb.checked = inOrder;
         cb.addEventListener("change", function () {
           if (cb.checked) {
-            if (state.selected.indexOf(it) < 0) state.selected.push(it);
+            if (single) state.selected = [it];
+            else if (state.selected.indexOf(it) < 0) state.selected.push(it);
           } else {
             state.selected = state.selected.filter(function (x) { return x !== it; });
           }
-          renderOrder(); onChange && onChange();
+          renderOrder(); renderListKeep(); onChange && onChange();
         });
         var thumb = h("span", { class: "cp-thumb" });
         if (it.thumb) thumb.appendChild(h("img", { src: it.thumb, alt: "" }));
@@ -876,7 +907,7 @@
 
     wrap.appendChild(h("div", { class: "cp-picker-cols" }, [
       h("div", {}, [h("div", { class: "cp-sub", text: "可用图表 / 图片 / 组" }), listEl]),
-      h("div", {}, [h("div", { class: "cp-sub", text: "已选顺序（上=子图 a）" }), orderEl])
+      h("div", {}, [h("div", { class: "cp-sub", text: "子图位置（先从左到右，再从上到下）" }), orderEl])
     ]));
 
     function load(preIds) {
@@ -884,7 +915,7 @@
       orderEl.textContent = "";
       state.items = [];
       state.selected = [];
-      var cur = currentSources();
+      var cur = currentSources(!single);
       return fetchTabSources().then(function (tabSrcs) {
         state.items = cur.concat(tabSrcs);
         refreshThumbs();
@@ -907,7 +938,7 @@
     var U = ui();
     if (!U || typeof U.modal !== "function") return;
     var ji = journalInfo();
-    var picker = sourcePicker();
+    var picker = sourcePicker(function () { refreshPreview(); });
 
     var layoutSel = selectInput(LAYOUT_PRESETS, "auto");
     var rowsInput = numInput(2, { min: "1" });
@@ -947,11 +978,19 @@
       styleSel: styleSel, unifyColors: unifyColors, sameRowY: sameRowY,
       destSel: destSel };
 
+    function emptySlots(cfg) {
+      var counts = {"2x2":4, "2x3":6, "3x2":6, "3x3":9, top2:3, left2:3, top3:4};
+      var n = counts[cfg.layout] || (cfg.layout === "custom" ? cfg.rows * cfg.cols :
+        cfg.layout === "1xn" ? cfg.cols : cfg.layout === "nx1" ? cfg.rows : 2);
+      if (!Number.isInteger(n) || n < 1 || n > 100 || (cfg.layout === "custom" && (cfg.rows < 1 || cfg.cols < 1))) return [];
+      return Array(n).fill(null);
+    }
     var previewBox = h("div", { class: "cp-preview" });
     function refreshPreview() {
       var sel = picker.getSelected();
-      if (!sel.length) { previewBox.innerHTML = ""; return; }
       var cfg = readCfg(ui2);
+      if (!sel.length) sel = emptySlots(cfg);
+      if (!sel.length) { previewBox.textContent = "请设置 1–100 个位置"; return; }
       var svg = previewSVG(sel, cfg);
       if (!svg) {
         var why = lastPreviewError
@@ -1070,8 +1109,14 @@
         }
       }
       return promise.then(function (r) {
-        if (r == null) return false; // 取消：留在组图对话框
-        if (global.Ui && Ui.toast) Ui.toast("组图已完成");
+        if (r == null || r.applied === 0) return false; // 取消：留在组图对话框
+        if (dest === "current" && global.ViewerBoot && typeof ViewerBoot.flush === "function") {
+          return ViewerBoot.flush().then(function (saved) {
+            if (saved && saved.ok) ui().toast("组图已保存");
+            return true;
+          });
+        }
+        ui().toast("组图已完成");
         return true;
       });
     }
@@ -1082,6 +1127,15 @@
       body: body,
       actions: [
         { label: "取消", variant: "ghost" },
+        { label: "先建空版式", onClick: function () {
+          var cfg = readCfg(ui2), slots = emptySlots(cfg);
+          if (!slots.length) throw new Error("请设置 1–100 个位置");
+          var struct = buildStructure(slots, cfg);
+          return global.Tabs.newTab(newDocFor(struct, cfg, "组图")).then(function (result) {
+            if (result) ui().toast("点击空位，选择已有图或新建子图画布");
+            return !!result;
+          });
+        } },
         { label: "生成组图", primary: true, "data-compose-apply": "1",
           onClick: function () { return doApply(); } }
       ]
@@ -1295,49 +1349,59 @@
   // 空版式格「放入图表…」：选一个图表深拷贝进该格
   // ------------------------------------------------------------------
 
+  function fillCell(chartId, src) {
+    var d = doc(), ph = elById(d, chartId);
+    if (!isEmptyCell(ph)) throw new Error("这个位置已填入或已删除，原子图仍在其画布中");
+    var parent = elById(d, ph.parent_id);
+    var nodes = cloneSubtree(src, false), root = nodes[0];
+    if (root.type === "group") {
+      fitGroupIntoRect(nodes, src.srcDoc, src.el.id, figdoc().bbox(d, ph.id, {recursive:false}));
+    } else {
+      root.transform = copy(ph.transform);
+      root.style = Object.assign({}, root.style, {panelRelative:!!(ph.style && ph.style.panelRelative)});
+    }
+    root.parent_id = ph.parent_id;
+    var ops = [{op:"delete", targets:[ph.id]}];
+    nodes.forEach(function (node) { ops.push({op:"add_element", element:node}); });
+    if (parent.children[parent.children.length - 1] !== ph.id) {
+      ops.push({op:"panel_layout", targets:[parent.id], panel:{order:parent.children.map(function (id) {
+        return id === ph.id ? root.id : id;
+      })}});
+    }
+    return global.App.commit(ops, {label:"放入图表", source:"user"}).then(function (r) { return !!r.applied; });
+  }
+
+  function returnToCell() {
+    var source = doc(), target = source.meta.compose_target;
+    if (!source.elements.length) throw new Error("先在子图画布上绘制或导入内容");
+    var snapshot = canvasSource(source);
+    return global.Tabs.switchTab(target.doc_id).then(function (result) {
+      if (!result || doc().id !== target.doc_id) return false;
+      return fillCell(target.slot_id, snapshot);
+    });
+  }
+
   function placeIntoCell(chartId) {
-    var U = ui(); if (!U || typeof U.modal !== "function") return;
-    var d = doc(); var ph = elById(d, chartId);
-    if (!ph || !isEmptyCell(ph)) return;
-    var picker = sourcePicker();
-    var listOnly = h("div", {});
-    var body = h("div", { class: "cp-dialog" }, [
-      h("div", { class: "cp-sec" }, [
-        h("div", { class: "cp-sec-title", text: "选择要放入的图表（当前/其他标签）" }),
-        picker.el
-      ])
-    ]);
+    var U = ui(), d = doc(), ph = elById(d, chartId);
+    if (!U || !isEmptyCell(ph)) return;
+    var picker = sourcePicker(null, true);
     picker.load([]);
-    U.modal({
-      title: "放入图表",
-      className: "compose-modal",
-      body: body,
+    return U.modal({
+      title: "放入图表 · " + elLabel(ph), className: "compose-modal", body: picker.el,
       actions: [
-        { label: "取消", variant: "ghost" },
-        { label: "放入", primary: true, onClick: function () {
+        {label:"取消", variant:"ghost"},
+        {label:"新建子图画布", onClick:function () {
+          var box = figdoc().bbox(d, chartId, {recursive:false});
+          var zoom = Math.max(1, 120 / box.w, 90 / box.h);
+          var child = figdoc().create({title:elLabel(ph), width_mm:box.w * zoom, height_mm:box.h * zoom, dpi:d.canvas.dpi});
+          child.meta.compose_target = {doc_id:d.id, slot_id:chartId};
+          return global.Tabs.newTab(child).then(function (result) { return !!result; });
+        }},
+        {label:"放入", primary:true, onClick:function () {
           var sel = picker.getSelected();
-          if (!sel.length) {
-            if (global.Ui && Ui.toast) Ui.toast("请选择一个图表", { type: "error" });
-            return false;
-          }
-          var s = sel[0];
-          if (s.el.type !== "chart") {
-            if (global.Ui && Ui.toast) Ui.toast("只能放入图表", { type: "error" });
-            return false;
-          }
-          var nodes = cloneSubtree(s, false); // 新 id
-          var nc = nodes[0];
-          nc.parent_id = ph.parent_id;
-          nc.transform = copy(ph.transform || { x: 0, y: 0, w: 1, h: 1 });
-          nc.style = copy(nc.style || {});
-          nc.style.panelRelative = !!(ph.style && ph.style.panelRelative);
-          var ops = [{ op: "delete", targets: [ph.id] }];
-          nodes.forEach(function (nd) { ops.push({ op: "add_element", element: nd }); });
-          ops.push({ op: "note", note: "放入图表「" + elLabel(s.el) + "」" +
-            (s.kind === "tab" ? "（来自标签「" + s.tabTitle + "」）" : "") });
-          return global.App.commit(ops, { label: "放入图表", source: "user" })
-            .then(function () { return true; });
-        } }
+          if (sel.length !== 1) { U.toast("请选择一张图", {type:"error"}); return false; }
+          return fillCell(chartId, sel[0]);
+        }}
       ]
     });
   }
@@ -1367,6 +1431,17 @@
       var btn = document.getElementById("btn-compose");
       if (btn && !btn.__composeBound) {
         btn.__composeBound = true;
+        var putBack = h("button", {type:"button", text:"放回组图", onclick:function () {
+          putBack.disabled = true;
+          Promise.resolve().then(returnToCell).catch(function (err) { ui().toast(err.message, {type:"error"}); })
+            .finally(function () { putBack.disabled = false; });
+        }});
+        btn.after(putBack);
+        function updateReturn() {
+          putBack.hidden = !(doc() && doc().meta && doc().meta.compose_target);
+        }
+        updateReturn();
+        global.App.on("doc:changed", updateReturn);
         btn.addEventListener("click", function () {
           var ids = null;
           try {

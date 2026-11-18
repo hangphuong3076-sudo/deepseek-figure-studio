@@ -359,6 +359,45 @@
     return elementBBox(doc, el, recursive, new Set());
   }
 
+  function strokeElements(doc, el, expandGroup) {
+    if (!el) return [];
+    const nodes = expandGroup && el.type === 'group' ? descendants(doc, el.id) : [el];
+    return nodes.filter(node => ['line', 'arrow', 'path', 'rect', 'ellipse', 'connector'].includes(node.type));
+  }
+
+  // Fit native millimetre geometry as a unit. Relative panel children stay in panel coordinates.
+  function fitElements(elements, box, rect) {
+    const k = Math.min(rect.w / box.w, rect.h / box.h);
+    if (!Number.isFinite(k) || k <= 0) throw new Error('无效的源图或目标区域尺寸');
+    const dx = rect.x + (rect.w - box.w * k) / 2 - box.x * k;
+    const dy = rect.y + (rect.h - box.h * k) / 2 - box.y * k;
+    for (const el of elements) {
+      const t = el.transform, style = el.style || {};
+      if (!style.panelRelative) {
+        t.x = dx + t.x * k; t.y = dy + t.y * k;
+        t.w *= k; t.h *= k;
+      }
+      for (const key of ['fontSizePt', 'strokeWidthPt', 'cornerRadiusMm']) {
+        if (Number.isFinite(style[key])) style[key] *= k;
+      }
+      if (el.panelLayout) {
+        for (const key of ['padding_mm', 'gap_mm']) {
+          if (Number.isFinite(el.panelLayout[key])) el.panelLayout[key] *= k;
+        }
+      }
+      if (el.pathData && k !== 1) {
+        // Native paths use SVG coordinates. Arc rotation and flags are dimensionless.
+        let command = '', index = 0;
+        el.pathData = el.pathData.replace(/[a-z]|[-+]?(?:\d*\.\d+|\d+\.?\d*)(?:e[-+]?\d+)?/gi, token => {
+          if (/^[a-z]$/i.test(token)) { command = token.toUpperCase(); index = 0; return token; }
+          const position = index++ % 7;
+          return command === 'A' && position >= 2 && position <= 4 ? token : String(Number(token) * k);
+        });
+      }
+    }
+    return { k, dx, dy };
+  }
+
   function rectsIntersect(a, b) {
     return a.x <= b.x + b.w && b.x <= a.x + a.w &&
            a.y <= b.y + b.h && b.y <= a.y + a.h;
@@ -1065,7 +1104,7 @@
     ELEMENT_TYPES, elementTypeName,
     create, uid,
     mmToPx, pxToMm, ptToPx, normToMm, mmToNorm,
-    get, byType, children, descendants, ancestors, bbox, hitTest,
+    get, byType, children, descendants, ancestors, bbox, hitTest, fitElements, strokeElements,
     anchorsOf, elementsInAnchor,
     addElement, removeElement, setParent, reorder, setCanvas, touch, clone,
     normalize, validate, serialize, sha256,

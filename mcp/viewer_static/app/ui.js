@@ -426,10 +426,28 @@
       opts = opts || {};
       var roots = ensureRoots();
       var type = ["info", "error", "success"].indexOf(opts.type) >= 0 ? opts.type : "info";
-      var el = Ui.h("div", { class: "ui-toast ui-toast-" + type, text: String(text == null ? "" : text) });
+      var message = String(text == null ? "" : text);
+      var el = Ui.h("div", { class: "ui-toast ui-toast-" + type });
+      var details;
+      if (type === "error") {
+        var previous = Array.from(roots.toastRoot.children).find(function (item) {
+          return item.toastMessage === message;
+        });
+        if (previous) return previous;
+        el.toastMessage = message;
+        var summary = opts.summary || (message.length > 100 ? message.slice(0, 96) + "…" : message);
+        el.appendChild(Ui.h("span", { role: "alert", text: summary }));
+        el.appendChild(Ui.h("button", { type: "button", class: "toast-close", "aria-label": "关闭提示",
+          text: "×", onclick: function () { el.remove(); } }));
+        if (summary !== message) {
+          details = Ui.h("details", {}, [Ui.h("summary", { text: "查看详情" }), Ui.h("pre", { text: message })]);
+          el.appendChild(details);
+        }
+      } else el.textContent = message;
       roots.toastRoot.appendChild(el);
       var ms = typeof opts.ms === "number" && opts.ms > 0 ? opts.ms : 3000;
       global.setTimeout(function () {
+        if (details && details.open) return;
         el.classList.add("ui-toast-out");
         global.setTimeout(function () {
           if (el.parentNode) el.parentNode.removeChild(el);

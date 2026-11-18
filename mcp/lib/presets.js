@@ -1624,22 +1624,25 @@
         }
       }
     }
-    var panelCount = ((Array.isArray(tpl.panels) && tpl.panels[0]) || 1) *
-      ((Array.isArray(tpl.panels) && tpl.panels[1]) || 1);
+    var cols = (Array.isArray(tpl.panels) && tpl.panels[0]) || 1;
+    var rowsN = (Array.isArray(tpl.panels) && tpl.panels[1]) || 1;
+    var areas = tpl.areas;
+    var panelCount = areas ? areas.length : cols * rowsN;
     if (panelCount > 1 && columns.length) {
       warnings.push("多面板模板把同一数据列默认映射到所有面板（源列歧义）：请逐面板确认 mapping 与曲线列后再出图");
     }
 
     // --- build elements: panel container + optional title + chart(s) ---
     var els = [];
-    var margin = 4;
+    var fill = opts.canvas_fill;
+    if (fill != null && fill !== 1 && fill !== 0.8) _fail("canvas_fill 必须为 1 或 0.8");
+    var margin = fill == null ? 4 : W * (1 - fill) / 2;
+    var marginY = fill == null ? 4 : H * (1 - fill) / 2;
     var titleH = 8;
     var hasTitle = typeof opts.title === "string" && opts.title.length > 0;
-    var topY = margin + (hasTitle ? titleH + 4 : 0);
+    var topY = marginY + (hasTitle ? titleH + 4 : 0);
     var panelW = W - margin * 2;
-    var panelH = H - topY - margin;
-    var cols = (Array.isArray(tpl.panels) && tpl.panels[0]) || 1;
-    var rowsN = (Array.isArray(tpl.panels) && tpl.panels[1]) || 1;
+    var panelH = H - topY - marginY;
 
     var panelId = _uid("panel");
     var panelEl = {
@@ -1661,6 +1664,7 @@
       },
       clip: false
     };
+    if (areas) panelEl.panelLayout.areas = _deepCopy(areas);
     els.push(panelEl);
 
     if (hasTitle) {
@@ -1668,7 +1672,7 @@
         id: _uid("text"),
         type: "text",
         z: 2,
-        transform: { x: margin, y: margin, w: panelW, h: titleH, rotation: 0 },
+        transform: { x: margin, y: marginY, w: panelW, h: titleH, rotation: 0 },
         style: {
           fontFamily: fontFamily,
           fontSizePt: Math.max(basePt + 1, 9),
@@ -1690,7 +1694,7 @@
     var innerH = panelH - pad * 2;
     var cellW = (innerW - gap * (cols - 1)) / cols;
     var cellH = (innerH - gap * (rowsN - 1)) / rowsN;
-    if (useTargetCanvas) {
+    if (useTargetCanvas && fill == null) {
       // H1：单元格高度上限为宽度 0.8 倍；超出时面板与图表靠上、不拉长
       var cellCap = cellW * 0.8;
       if (cellH > cellCap) {
@@ -1702,12 +1706,10 @@
         }
       }
     }
-    var total = cols * rowsN;
     var firstChart = null;
 
-    for (var i = 0; i < total; i++) {
-      var cx = i % cols;
-      var cy = Math.floor(i / cols);
+    for (var i = 0; i < panelCount; i++) {
+      var area = areas ? areas[i] : { col: i % cols, row: Math.floor(i / cols), colSpan: 1, rowSpan: 1 };
       var label = String.fromCharCode(97 + (i % 26));
       var chartSpec;
       if (isComposite) {
@@ -1798,10 +1800,10 @@
         z: 1,
         parent_id: panelId,
         transform: {
-          x: _round2(innerX + cx * (cellW + gap)),
-          y: _round2(innerY + cy * (cellH + gap)),
-          w: _round2(cellW),
-          h: _round2(cellH),
+          x: _round2(innerX + area.col * (cellW + gap)),
+          y: _round2(innerY + area.row * (cellH + gap)),
+          w: _round2(cellW * area.colSpan + gap * (area.colSpan - 1)),
+          h: _round2(cellH * area.rowSpan + gap * (area.rowSpan - 1)),
           rotation: 0
         },
         style: {},

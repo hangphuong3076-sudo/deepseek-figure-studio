@@ -134,12 +134,18 @@
       ? ViewerBoot.baseToken() : null;
   }
 
+  function flushBeforeTabChange() {
+    if (!has("ViewerBoot") || typeof ViewerBoot.flush !== "function") return Promise.resolve();
+    return ViewerBoot.flush().then(function (saved) {
+      if (saved && saved.ok === false) throw new Error("当前画布有未保存修改，请先重试保存");
+    });
+  }
+
   function newTab(doc) {
     if (state.busy || conflictLocked()) return Promise.resolve(null);
     state.busy = true;
     render();
-    return (has("ViewerBoot") && typeof ViewerBoot.flush === "function"
-      ? ViewerBoot.flush() : Promise.resolve())
+    return flushBeforeTabChange()
       .then(function () {
         return api("/api/tabs/new", { doc: doc, base_token: baseToken() });
       })
@@ -167,8 +173,7 @@
     }
     state.busy = true;
     render();
-    return (has("ViewerBoot") && typeof ViewerBoot.flush === "function"
-      ? ViewerBoot.flush() : Promise.resolve())
+    return flushBeforeTabChange()
       .then(function () {
         return api("/api/tabs/switch", { to_id: toId, base_token: baseToken() });
       })
@@ -196,8 +201,7 @@
     }
     state.busy = true;
     render();
-    return (has("ViewerBoot") && typeof ViewerBoot.flush === "function"
-      ? ViewerBoot.flush() : Promise.resolve())
+    return flushBeforeTabChange()
       .then(function () {
         return api("/api/tabs/close", { id: tabId, base_token: baseToken() });
       })
@@ -354,8 +358,7 @@
     if (state.busy || conflictLocked() || !file) return Promise.resolve(null);
     state.busy = true;
     render();
-    return (has("ViewerBoot") && typeof ViewerBoot.flush === "function"
-      ? ViewerBoot.flush() : Promise.resolve())
+    return flushBeforeTabChange()
       .then(function () {
         return api("/api/tabs/restore", { file: file, base_token: baseToken() });
       })

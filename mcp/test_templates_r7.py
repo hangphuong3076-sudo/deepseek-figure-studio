@@ -175,11 +175,32 @@ class PresetValidationTests(unittest.TestCase):
         self.assertIn("preview", r["err"])
 
     def test_shipped_templates_all_valid(self):
-        # 正式库 88 个模板全部通过加载校验（load 已在 PRELUDE 执行；R9 +8 示意图）
+        # 正式库 90 个模板全部通过加载校验（load 已在 PRELUDE 执行；R9 +8 示意图）
         r = run("console.log(JSON.stringify({n: FigPresets.templates().length, "
                 "newOk: NEW_IDS.every(id=>!!FigPresets.template(id))}));")
-        self.assertEqual(r["n"], 88)
+        self.assertEqual(r["n"], 90)
         self.assertTrue(r["newOk"])
+
+    def test_all_template_previews(self):
+        failures = run(r"""
+require('./lib/diagram.js');
+require('./viewer_static/app/template-preview.js');
+const failures = [];
+for (const tpl of FigPresets.templates()) {
+  try {
+    const svg = TemplatePreview.svg(tpl);
+    if (!svg || !svg.startsWith('<svg ') || !svg.endsWith('</svg>')) {
+      failures.push([tpl.id, '缺少 SVG 预览']);
+    } else if (svg.includes('data-preview-empty="true"')) {
+      failures.push([tpl.id, '空白占位预览']);
+    }
+  } catch (err) {
+    failures.push([tpl.id, err.message]);
+  }
+}
+console.log(JSON.stringify(failures));
+""")
+        self.assertEqual(failures, [])
 
 
 class TemplateApplyTests(unittest.TestCase):
@@ -211,6 +232,30 @@ class TemplateApplyTests(unittest.TestCase):
     docHasHints:JSON.stringify(res.doc).indexOf('下一步')>=0}));
 })()
 """ % (json.dumps(tpl_id), data))
+
+    def test_unequal_layouts_apply(self):
+        layouts = run(r"""
+const result = {};
+for (const id of ['tpl-composite-top-large', 'tpl-composite-left-wide']) {
+  const {doc} = FigOps.applyAll(FigDoc.create(), [{op:'apply_template', template_id:id}]);
+  const panel = doc.elements.find(el => el.type === 'panel');
+  const rects = panel.children.map(cid => doc.elements.find(el => el.id === cid).transform);
+  result[id] = {rects, areas: panel.panelLayout.areas};
+}
+console.log(JSON.stringify(result));
+""")
+        top, left, right = layouts["tpl-composite-top-large"]["rects"]
+        self.assertEqual(len(layouts["tpl-composite-top-large"]["areas"]), 3)
+        self.assertGreater(top["w"], left["w"])
+        self.assertGreater(top["h"], left["h"])
+        self.assertLess(top["y"] + top["h"], left["y"])
+        self.assertEqual(left["y"], right["y"])
+        self.assertEqual(left["w"], right["w"])
+        left, right = layouts["tpl-composite-left-wide"]["rects"]
+        self.assertEqual(len(layouts["tpl-composite-left-wide"]["areas"]), 2)
+        self.assertLess(left["x"] + left["w"], right["x"])
+        self.assertGreater(left["w"], right["w"])
+        self.assertEqual(left["h"], right["h"])
 
     def test_all_20_apply(self):
         cases = {
@@ -541,57 +586,46 @@ class TemplateGalleryUiTests(unittest.TestCase):
         page = self.browser.new_page(viewport={"width": 1440, "height": 900})
         try:
             self._open(page)
-            # 打开模板面板（#tab-templates；勿用文本匹配——工具栏另有
-            # 「模板库」按钮会先命中）
-            page.locator("#tab-templates").click()
-            page.wait_for_timeout(600)
-            # 电化学/统计筛选按钮存在（exact 防止命中含「表征」等字的其他按钮）
-            for label in ["电化学", "统计", "表征"]:
-                self.assertTrue(
-                    page.get_by_role("button", name=label, exact=True).count() >= 1,
-                    "缺少分类筛选「%s」" % label)
-            # 切到统计 → 应见 tpl-bar-hatch 卡片
-            page.get_by_role("button", name="统计", exact=True).first.click()
-            page.wait_for_timeout(500)
-            self.assertTrue(
-                page.locator("text=黑白打印柱图").count() >= 1,
-                "统计分类应含黑白打印柱图")
-            # 切到电化学 → 应见充放电循环曲线
-            page.get_by_role("button", name="电化学", exact=True).first.click()
-            page.wait_for_timeout(500)
-            self.assertTrue(
-                page.locator("text=充放电循环曲线").count() >= 1,
-                "电化学分类应含充放电循环曲线")
-            # 应用一个表征模板 → props hints 显示。
-            # 画廊应用需要文档里已有数据（checkTemplateData 拦截空文档），
-            # 先用 apply_template 播一份内联数据模拟「已导入数据」状态。
-            page.evaluate(r"""(() => {
-              App.commit([{op:'apply_template',template_id:'tpl-line',
-                data:{columns:['x','y'],rows:[[1,2],[2,3],[3,5],[4,4],[5,7]]},
-                options:{}}],{label:'seed'});
-            })()""")
-            page.wait_for_timeout(800)
-            page.get_by_role("button", name="表征", exact=True).first.click()
-            page.wait_for_timeout(500)
-            card = page.locator("text=XRD 多样品叠放").first
-            self.assertTrue(card.count() >= 1, "表征分类应含 XRD 多样品叠放")
-            # 点击该模板卡的应用按钮（卡片内最后一个 button）
-            card.locator("xpath=ancestor::*[contains(@class,'')][1]")
-            applied = page.evaluate(r"""(() => {
-              const els=[...document.querySelectorAll('*')].filter(e=>
-                e.children.length===0 && /XRD 多样品叠放/.test(e.textContent||''));
-              if(!els.length) return 'no-card';
-              let node=els[0];
-              for(let i=0;i<8&&node;i++){ 
-                const btns=node.querySelectorAll?node.querySelectorAll('button'):[];
-                for(const b of btns){ if(/应用|使用|创建/.test(b.textContent)){b.click();return 'clicked'} }
-                node=node.parentElement;
-              }
-              return 'no-btn';
-            })()""")
-            self.assertEqual(applied, "clicked", "模板卡片应用按钮未找到")
-            page.wait_for_timeout(1500)
-            # 画廊与属性面板是互斥标签页：切回 props 再选中图表
+            page.get_by_role("button", name="打开组图", exact=True).click()
+            compose = page.locator(".compose-modal")
+            compose.get_by_role("button", name="取消").click()
+            page.locator("#btn-template-library").click()
+            modal = page.locator(".template-library-modal")
+            category = modal.locator(".tl-cat")
+            topic = modal.locator(".tl-group")
+            headings = modal.get_by_role("heading", level=3)
+            self.assertEqual(headings.all_text_contents(), ["数据图", "表征图", "机制图", "流程图", "组图"])
+            for key, name in [("mechanism", "模型/系统架构图"), ("flow", "PRISMA 文献筛选流程")]:
+                category.select_option(key)
+                self.assertTrue(modal.locator(".tl-card", has_text=name).is_visible())
+                self.assertEqual(headings.count(), 1)
+            category.select_option("chart")
+            topic.select_option("stats")
+            self.assertTrue(modal.locator(".tl-card", has_text="黑白打印柱图").is_visible())
+            topic.select_option("electrochem")
+            self.assertTrue(modal.locator(".tl-empty").is_visible())
+            category.select_option("characterization")
+            self.assertTrue(modal.locator(".tl-card", has_text="充放电循环曲线").is_visible())
+            self.assertEqual(headings.all_text_contents(), ["表征图"])
+            topic.select_option("all")
+
+            # 模板应用需要数据；同时用这一张图验证换色的两种操作。
+            page.evaluate("""() => App.commit([{op:'apply_template',template_id:'tpl-line',
+                data:{columns:['x','y'],rows:[[1,2],[2,3],[3,5]]}}],{label:'seed'})""")
+            recolor = modal.locator(".recolor-section")
+            recolor.locator(".recolor-strategy").select_option("byRole")
+            recolor.locator(".recolor-palette").select_option("aaas")
+            recolor.get_by_role("button", name="换色", exact=True).click()
+            page.wait_for_function("App.doc.meta.palette_id === 'aaas'")
+            self.assertEqual(page.evaluate("App.doc.history.at(-1).ops[0].recolor_strategy"),
+                             "byRole")
+            recolor.locator(".palette-card").filter(has_text="NPG").first.click()
+            page.wait_for_function("App.doc.meta.palette_id === 'npg'")
+            self.assertEqual(recolor.locator(".recolor-palette").input_value(), "npg")
+            category.select_option("characterization")
+            modal.locator(".tl-card", has_text="XRD 多样品叠放").click()
+            modal.get_by_role("button", name="应用此模板").click()
+            modal.wait_for(state="detached")
             page.locator("#tab-props").click()
             page.wait_for_timeout(400)
             # 选中图表 → props hints
@@ -620,10 +654,7 @@ class TemplateGalleryUiTests(unittest.TestCase):
         page = self.browser.new_page(viewport={"width": 1440, "height": 900})
         try:
             self._open(page)
-            # 面板顶部「打开模板库」入口存在
-            self.assertTrue(
-                page.locator("#panel-templates .tl-open-btn").count() >= 1,
-                "模板面板应有「打开模板库」入口")
+            self.assertEqual(page.locator("#tab-templates, #panel-templates, .tl-open-btn").count(), 0)
             # 先种子一份数据，保证 apply 有映射来源（与既有用例同法）
             page.evaluate(r"""(() => {
               App.commit([{op:'apply_template',template_id:'tpl-line',
@@ -662,7 +693,7 @@ class TemplateGalleryUiTests(unittest.TestCase):
             for i in range(betCards.count()):
                 self.assertIn("BET", betCards.nth(i).inner_text(),
                               "搜索结果不应混入无关模板")
-            # 仅显示可用：R10 补齐 13 个图型渲染器后全部 88 个模板均可应用
+            # 仅显示可用：R10 补齐 13 个图型渲染器后全部 90 个模板均可应用
             # （full/layout），过滤器当前无可滤项——断言 nOk<=nAll 且开关
             # 本身不报错；若未来新增 unsupported 模板，此处应恢复 nOk<nAll。
             modal.locator(".tl-search").fill("")
@@ -703,6 +734,39 @@ class TemplateGalleryUiTests(unittest.TestCase):
             self.assertEqual(
                 page.locator(".template-library-modal").count(), 0,
                 "应用成功后模板库应关闭")
+        finally:
+            page.close()
+
+    def test_thumbnail_label_geometry(self):
+        page = self.browser.new_page(viewport={"width": 1440, "height": 900})
+        try:
+            self._open(page)
+            page.locator("#btn-template-library").click()
+            for tid in ["tpl-volcano", "tpl-taylor", "tpl-paired"]:
+                svg = page.locator(".tl-preview[data-preview-for='%s'] > svg" % tid)
+                svg.wait_for(state="attached")
+                issues = svg.evaluate("""svg => {
+                  const texts = [...svg.querySelectorAll("text[data-chart-part]")];
+                  const issues = [];
+                  if (svg.dataset.templateId === "tpl-volcano") {
+                    const top = svg.querySelector('[data-chart-part="threshold"]').getBoundingClientRect().top;
+                    for (const t of texts.filter(t => t.dataset.chartPart === 'volcano-label')) {
+                      if (t.getBoundingClientRect().top < top) issues.push(t.textContent);
+                    }
+                  } else {
+                    texts.forEach((t, i) => {
+                      const a = t.getBoundingClientRect();
+                      for (const other of texts.slice(i + 1)) {
+                        const b = other.getBoundingClientRect();
+                        if (a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom)
+                          issues.push([t.textContent, other.textContent]);
+                      }
+                    });
+                  }
+                  return issues;
+                }""")
+                self.assertTrue(svg.locator("text[data-chart-part]").count(), tid)
+                self.assertEqual(issues, [], tid)
         finally:
             page.close()
 

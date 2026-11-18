@@ -1240,6 +1240,26 @@
     if (tool === 'marquee') { beginMarquee(p, evt, false); return; }
     if (tool === 'anchor') { beginMarquee(p, evt, true); return; }
 
+    if ((evt.ctrlKey || evt.metaKey) && evt.target.closest) {
+      var leafNode = evt.target.closest('[data-fig-id]');
+      var leaf = leafNode && FigDoc.get(A.doc, leafNode.getAttribute('data-fig-id'));
+      if (leaf && leaf.parent_id && ![leaf].concat(FigDoc.ancestors(A.doc, leaf.id)).some(function (node) {
+        return node.locked || node.visible === false;
+      })) {
+        if (evt.shiftKey) A.toggleSelect(leaf.id); else A.select([leaf.id]);
+        return;
+      }
+    }
+    // Normal hit testing selects the parent panel. An empty slot has its own action.
+    var cellNode = !evt.shiftKey && !evt.altKey && evt.target.closest && evt.target.closest('[data-render="empty-layout"]');
+    if (cellNode && global.Compose) {
+      var cell = FigDoc.get(A.doc, cellNode.getAttribute('data-fig-id'));
+      if (global.Compose.isEmptyCell(cell)) {
+        A.select([cell.id]);
+        global.Compose.placeIntoCell(cell.id);
+        return;
+      }
+    }
     // select tool
     if (evt.detail >= 2 && !evt.shiftKey) {
       var dblText = textElementAt(p);

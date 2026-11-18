@@ -1228,7 +1228,14 @@ body.ai-split-dragging {
 }
 
 #toast-root > .toast-error,
-#toast-root > .ui-toast-error { background: var(--danger); }
+#toast-root > .ui-toast-error { background: var(--surface, #fff); color: var(--text, #222); border-left: 3px solid var(--danger); position: relative; padding-right: 32px; }
+.ui-toast .toast-close { position: absolute; top: 3px; right: 4px; background: transparent; color: inherit; border: 0; cursor: pointer; font-size: 18px; }
+@media (max-width: 700px) {
+  #toast-root { right: 8px; left: 8px; }
+  #toast-root > * { box-sizing: border-box; max-width: 100%; }
+}
+.ui-toast summary { cursor: pointer; margin-top: 4px; }
+.ui-toast pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 22vh; overflow: auto; font: inherit; }
 #toast-root > .toast-success,
 #toast-root > .ui-toast-success { background: var(--success); }
 
@@ -1277,20 +1284,6 @@ body[data-variant="a"] #topbar button[id^="btn-z-"] {
 
 /* C：投稿审阅 —— 弱化手绘工具，突出期刊/审阅/导出 */
 body[data-variant="c"] #variant-badge { background: #7c4dff; }
-
-/* Narrow template cards: the side pane, not the browser width, sets the layout. */
-#side-pane { container-type: inline-size; }
-#side-pane .templates-list .template-item > div { min-width: 0; flex-wrap: wrap; }
-#side-pane .template-thumb { flex: 1 1 140px; max-width: 100%; min-width: 100px; }
-#side-pane .template-preview { max-width: 100%; height: auto; }
-#side-pane .template-info { flex: 1 1 110px; min-width: 80px; overflow-wrap: break-word; }
-#side-pane .template-info > div { flex-wrap: wrap; min-width: 0; gap: 4px; }
-#side-pane .template-info > div > span { flex: 1 1 88px; overflow-wrap: break-word; }
-@container (max-width: 370px) {
-  #side-pane .template-thumb { flex-basis: 100%; }
-  #side-pane .template-thumb .template-preview { width: 100%; }
-  #side-pane .template-info { flex-basis: 100%; min-width: 0; }
-}
 
 /* Viewport-fixed, transient canvas menu; all labels are built with textContent. */
 .editor-context-menu {

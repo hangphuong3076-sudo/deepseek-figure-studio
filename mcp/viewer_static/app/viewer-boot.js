@@ -25,7 +25,6 @@
   var HEALTH_URL = "/api/health";
   var DEBOUNCE_MS = 800;          // 实际 doc:changed 发布后等待回写的防抖时长
   var SAVE_TIMEOUT_MS = 10000;    // 单次回写超时
-  var SAVE_FAIL_TOASTS = 3;       // 连续失败达到该次数后每次都弹提示
   var HEALTH_INTERVAL_MS = 15000; // 后端存活轮询间隔
   var HEALTH_TIMEOUT_MS = 5000;   // 单次健康检查超时
   var BACKEND_DOWN_TEXT =
@@ -38,7 +37,7 @@
   var baseToken = null;           // 最后一次由服务端确认的 save_token
   var queuedVersion = 0;
   var acknowledgedVersion = 0;
-  var consecutiveFailures = 0;
+  var failureToast = null;
   var attached = false;
   var lastSavedAt = 0;
   var dirty = false;
@@ -192,11 +191,15 @@
   }
 
   function reportFailure(err) {
-    consecutiveFailures += 1;
     var text = "自动回写文档失败（最新修改仍保留在本页，未确认落盘）：" + msgOf(err);
     console.warn("[ViewerBoot] " + text);
-    if (consecutiveFailures >= SAVE_FAIL_TOASTS || !has("App")) notifyError(text);
-    else status(text + "；可继续编辑产生新版本，或点击保存重试");
+    var summary = "自动保存失败，本页修改仍未落盘。" +
+      (/children 不一致/.test(text) ? "SVG 分组关系不一致。" : "") + "可点击保存重试。";
+    status(summary);
+    if (has("Ui") && typeof Ui.toast === "function") {
+      if (failureToast && failureToast.toastMessage !== text) failureToast.remove();
+      failureToast = Ui.toast(text, { type: "error", summary: summary, ms: 8000 });
+    } else notifyError(summary);
     // 保存失败可能意味着后端已退出：立刻补一次健康检查，不等下一个轮询点。
     checkBackendHealth();
   }
@@ -231,7 +234,7 @@
           baseToken = j.save_token;
           acknowledgedVersion = Math.max(acknowledgedVersion, batch.version);
           active = null;
-          consecutiveFailures = 0;
+          if (failureToast) { failureToast.remove(); failureToast = null; }
           lastSavedAt = Date.now();
           dirty = !!pending;
           status("已自动回写文档到查看器服务（" +

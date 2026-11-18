@@ -170,16 +170,21 @@
     return out.replace(/#000000/gi, INK).replace(/#DDDDDD/gi, GRID);
   }
 
-  function localKernel(specValue, width, height) {
+  function localKernel(specValue, scale) {
     if (!global.FigData || typeof global.FigData.renderChartSVG !== "function") return null;
+    scale = scale || 1;
     try {
       var rendered = global.FigData.renderChartSVG(specValue, {
-        width_mm: (width || W) * 25.4 / 60,
-        height_mm: (height || CHART_H) * 25.4 / 60,
+        width_mm: W * scale * 25.4 / 60,
+        height_mm: CHART_H * scale * 25.4 / 60,
         dpi: 60
       });
       var result = String(rendered == null ? "" : rendered).trim();
       if (!result || /data-render=["']placeholder["']|该图表类型需 v2 服务端渲染/.test(result)) return null;
+      // 带 viewBox 的完整 SVG 交给 fitRenderedSVG；本地片段按虚拟画布缩回卡片。
+      if (scale !== 1 && !/^<svg(\s|>)/i.test(result)) {
+        return '<g transform="scale(' + (1 / scale) + ')">' + result + '</g>';
+      }
       return result;
     } catch (e) {
       return null;
@@ -220,7 +225,7 @@
   }
 
   function fallbackEmpty(message) {
-    return text(W / 2, 45, message + "（示意）", 6.7);
+    return '<g data-preview-empty="true">' + text(W / 2, 45, message + "（示意）", 6.7) + '</g>';
   }
 
   function fallbackLegend(labels, y) {
@@ -488,7 +493,7 @@
     // （如表征峰标注——模板 characterization 会整体替换，先设会被覆盖）
     if (postId && PREVIEW_POST[postId]) s = PREVIEW_POST[postId](s);
     LAST_SPEC = s; // R7 返工：specFor 经此取回与缩略图完全一致的合并后 spec
-    var fragment = localKernel(s);
+    var fragment = localKernel(s, s.chartType === "line_multi" && s.axes.y2 ? 2 : 1);
     var cachedBackend = !!fragment && /^<svg(\s|>)/i.test(fragment);
     var source = fragment ? (cachedBackend ? "Backend.renderChart" : "FigData.renderChartSVG") : "local-deterministic-fallback";
     var body = fragment ? fitRenderedSVG(recolorKernel(fragment)) : fallbackDataChart(s);
@@ -562,7 +567,7 @@
     [["Control", 0.45, 0.30, 0.25], ["Treatment A", 0.55, 0.28, 0.17],
      ["Treatment B", 0.38, 0.42, 0.20], ["Treatment C", 0.60, 0.22, 0.18]].forEach(function (v, i) {
       ["Fraction 1", "Fraction 2", "Fraction 3"].forEach(function (g, j) {
-        rows.push([String.fromCharCode(65 + i), g, +(v[j] + (i * 0.013 + j * 0.007)).toFixed(3)]);
+        rows.push([String.fromCharCode(65 + i), g, +(v[j + 1] + (i * 0.013 + j * 0.007)).toFixed(3)]);
       });
     });
     return spec("bar_stacked", ["Condition", "Fraction", "Share"], rows,
@@ -590,16 +595,13 @@
   };
   G.paired = function () {
     var rows = [];
-    for (var s = 0; s < 8; s++) {
-      var base = 2.5 + (s % 3) * 0.5;
-      rows.push(["Baseline", +(base + 0.2).toFixed(2), "Subject " + (s + 1)]);
-      rows.push(["Follow-up", +(base - 0.5 - (s % 2) * 0.3).toFixed(2), "Subject " + (s + 1)]);
-      rows.push(["Endpoint", +(base - 0.9 + (s % 2) * 0.2).toFixed(2), "Subject " + (s + 1)]);
+    for (var s = 0; s < 4; s++) {
+      var base = 2.5 + s * 0.4;
+      rows.push(["Before", base, "S" + (s + 1)]);
+      rows.push(["After", +(base - 0.5 - (s % 2) * 0.3).toFixed(2), "S" + (s + 1)]);
     }
-    var sp = spec("paired", ["Timepoint", "Score", "Subject"], rows,
-      { x: "Timepoint", y: "Score", group: "Subject" }, { yLabel: "Score" });
-    sp.presentation = { plot: { pairedSummary: true } };
-    return sp;
+    return spec("paired", ["Timepoint", "Score", "Subject"], rows,
+      { x: "Timepoint", y: "Score", group: "Subject" }, { yLabel: "Score" }, undefined, "none");
   };
   G.marginal = function () {
     return spec("marginal", ["Variable x", "Variable y"], numericRows(42, function (i) {
@@ -613,12 +615,12 @@
       var fc = -4 + i * 0.14 + Math.sin(i * 2.7) * 0.5;
       var p = 0.5 + Math.abs(fc) * 0.9 + Math.cos(i * 1.3) * 0.6;
       var neg = Math.min(8, Math.max(0.2, p));
-      rows.push([+fc.toFixed(2), +neg.toFixed(2), "Gene" + String(i + 1).padStart(2, "0")]);
+      rows.push([+fc.toFixed(2), +neg.toFixed(2), i === 6 || i === 48 ? "G" + (i + 1) : ""]);
     }
     var sp = spec("volcano", ["log2FC", "-log10(p)", "Gene"], rows,
-      { x: "log2FC", y: "-log10(p)", label: "Gene" }, { xLabel: "log2 fold change", yLabel: "-log10(p)" });
+      { x: "log2FC", y: "-log10(p)", label: "Gene" }, { xLabel: "log2 fold change", yLabel: "-log10(p)", yMax: 6 });
     sp.thresholds = { fc: 1.0, p_neglog10: 1.3 };
-    sp.presentation = { plot: { labelTop: 6 } };
+    sp.presentation = { plot: { labelTop: 2 } };
     return sp;
   };
   G.forest = function () {
@@ -667,15 +669,6 @@
     sp.presentation = { plot: { ellipse: true } };
     return sp;
   };
-  G.venn = function () {
-    var rows = [];
-    for (var i = 0; i < 40; i++) {
-      var a = i % 3 !== 0, b = i % 4 !== 0, c = i % 5 !== 0;
-      if (i % 11 === 0) { a = true; b = true; c = true; }
-      rows.push([a ? 1 : 0, b ? 1 : 0, c ? 1 : 0]);
-    }
-    return spec("venn", ["Set A", "Set B", "Set C"], rows, { ys: ["Set A", "Set B", "Set C"] }, {});
-  };
   G.sankey = function () {
     var rows = [
       ["Raw reads", "QC passed", 120], ["Raw reads", "QC failed", 18],
@@ -687,10 +680,9 @@
       { x: "Stage", y: "Next", size: "Weight" }, {});
   };
   G.taylor = function () {
-    var rows = [[1.0, 0.98, "Ref"], [1.25, 0.93, "Model A"], [1.5, 0.86, "Model B"],
-      [0.8, 0.90, "Model C"], [1.1, 0.80, "Model D"]];
+    var rows = [[0.8, 0.95, "A"], [1.4, 0.75, "B"], [2.0, 0.40, "C"]];
     var sp = spec("taylor", ["Std", "Correlation", "Model"], rows,
-      { x: "Std", y: "Correlation", group: "Model" }, {});
+      { x: "Std", y: "Correlation", group: "Model" }, { tickLabelSizePt: 8 }, undefined, "none");
     sp.reference_std = 1.0;
     return sp;
   };
@@ -744,7 +736,14 @@
 
   P.pca = function (template) { return kernelPreview(G.pca(), FOOTER_CHART, template); };
 
-  P.venn = function (template) { return kernelPreview(G.venn(), FOOTER_CHART, template); };
+  P.venn = function () {
+    var circles = [[73, 36], [107, 36], [90, 62]].map(function (center, i) {
+      return '<circle cx="' + center[0] + '" cy="' + center[1] + '" r="26" fill="' + SERIES[i] +
+        '" fill-opacity="0.24" stroke="' + SERIES[i] + '"/>';
+    });
+    return frame(circles.join("") + text(40, 32, "Set A", 8, "end") +
+      text(140, 32, "Set B", 8, "start") + text(90, 76, "Set C", 8), FOOTER_CHART);
+  };
 
   P.sankey = function (template) { return kernelPreview(G.sankey(), FOOTER_CHART, template); };
 
@@ -815,17 +814,17 @@
     box: miniBox
   };
 
-  function panelsGridPainted(cols, rows, kinds, footer) {
+  function panelsGridPainted(cols, rows, kinds, footer, areas) {
     var out = "", pw = 164 / cols, ph = 88 / rows;
-    for (var r = 0; r < rows; r++) {
-      for (var c = 0; c < cols; c++) {
-        var i = r * cols + c, x = 8 + c * pw, y = 5 + r * ph;
-        var w = pw - 4, h = ph - 4;
-        var fn = MINI[(kinds && kinds[i]) || "bar"] || miniBar;
-        out += '<rect x="' + fmt(x) + '" y="' + fmt(y) + '" width="' + fmt(w) + '" height="' + fmt(h) + '" rx="1" fill="#fcfdff" stroke="#cbd5e1" stroke-width="0.65"/>';
-        out += fn(x + 4, y + 5, Math.max(5, w - 9), Math.max(4, h - 10), SERIES[i % SERIES.length]);
-        out += text(x + 3, y + 8, String.fromCharCode(97 + i), 6.4, "start", INK, "bold");
-      }
+    var count = areas ? areas.length : cols * rows;
+    for (var i = 0; i < count; i++) {
+      var area = areas ? areas[i] : { col: i % cols, row: Math.floor(i / cols), colSpan: 1, rowSpan: 1 };
+      var x = 8 + area.col * pw, y = 5 + area.row * ph;
+      var w = area.colSpan * pw - 4, h = area.rowSpan * ph - 4;
+      var fn = MINI[(kinds && kinds[i]) || "bar"] || miniBar;
+      out += '<rect x="' + fmt(x) + '" y="' + fmt(y) + '" width="' + fmt(w) + '" height="' + fmt(h) + '" rx="1" fill="#fcfdff" stroke="#cbd5e1" stroke-width="0.65"/>';
+      out += fn(x + 4, y + 5, Math.max(5, w - 9), Math.max(4, h - 10), SERIES[i % SERIES.length]);
+      out += text(x + 3, y + 8, String.fromCharCode(97 + i), 6.4, "start", INK, "bold");
     }
     return frame(out, footer || FOOTER_COMPOSITE);
   }
@@ -865,7 +864,7 @@
 
   function templateGrid(template, cols, rows, kinds, footer) {
     var layout = template && Array.isArray(template.panels) ? template.panels : [cols, rows];
-    return panelsGridPainted(layout[0] || cols, layout[1] || rows, kinds, footer);
+    return panelsGridPainted(layout[0] || cols, layout[1] || rows, kinds, footer, template.areas);
   }
 
   var T = {};
@@ -1652,7 +1651,10 @@
   function byTemplateId(template) {
     if (global.FigDiagram && typeof global.FigDiagram.supportsTemplate === "function" &&
         global.FigDiagram.supportsTemplate(template).supported) {
-      var raw = global.FigDiagram.example(template.id, true);
+      var raw = template.schematic || global.FigDiagram.example(template.id, true);
+      raw = JSON.parse(JSON.stringify(raw));
+      raw.id = raw.id || template.id;
+      raw.template_id = template.id;
       var actual = global.FigDiagram.previewSVG(raw);
       return frame(fitRenderedSVG(actual, 0, 0, W, 94),
         "FigDiagram 原生矢量 · 合成示例非论文/官方案例", "FigDiagram+FigRender");

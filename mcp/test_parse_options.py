@@ -95,6 +95,14 @@ out.cmpTab = cmpOld(tab);
 // 6：非法 numberFormat
 try { D.parseCSV('a,b\n1,2\n', { numberFormat: 'bogus' }); out.badFmt = 'NO_THROW'; }
 catch (e) { out.badFmt = 'THROW:' + e.message.slice(0, 60); }
+out.formatBoundary = [[], [undefined], [null], [false], [0], ['']].map(args => {
+  const opts = args.length ? { numberFormat: args[0] } : {};
+  const calls = [() => D.parseCell('3,14', ...args), () => D.parseCSV(semi, opts).rows[0][0]];
+  return calls.map(call => {
+    try { return call(); }
+    catch (e) { return e.name + ': ' + e.message; }
+  });
+});
 
 // 7：sniffNumberFormat
 out.sniff1 = D.sniffNumberFormat('x;y\n1;3,14\n2;2,5');
@@ -102,6 +110,8 @@ out.sniff2 = D.sniffNumberFormat(thou);
 out.sniff3 = D.sniffNumberFormat('x;y\n1;1,234\n2;2,500');
 out.sniff4 = D.sniffNumberFormat(sampleText || 'a,b\n1,2\n');
 out.sniff5 = D.sniffNumberFormat('x;y\n1;3,14\n2;abc\n');
+out.sniffTrailingZero = ['1.230', '2.0'].map(value =>
+  D.sniffNumberFormat('v;x\n" 1,5 ";a\n' + value + ';b\nNA;c').suggestion);
 
 // 8：parseCell
 out.pc1 = D.parseCell('3,14', 'comma_decimal');
@@ -224,6 +234,16 @@ class ParseOptionsTest(unittest.TestCase):
     def test_06_invalid_numberFormat_throws(self):
         self.assertTrue(self.out["badFmt"].startswith("THROW"))
 
+    def test_number_format_default_and_invalid_values(self):
+        labels = ("omitted", "undefined", "null", "false", "zero", "empty string")
+        for label, results in zip(labels, self.out["formatBoundary"], strict=True):
+            for api, result in zip(("parseCell", "parseCSV"), results, strict=True):
+                with self.subTest(api=api, number_format=label):
+                    if label in ("omitted", "undefined"):
+                        self.assertEqual(result, "3,14")
+                    else:
+                        self.assertRegex(result, r"^Error: .*numberFormat")
+
     def test_07_sniff(self):
         o = self.out
         self.assertEqual(o["sniff1"]["suggestion"], "comma_decimal")
@@ -239,6 +259,9 @@ class ParseOptionsTest(unittest.TestCase):
         self.assertEqual(o["sniff4"]["columns"], [])
         self.assertIsNone(o["sniff5"]["suggestion"])
         self.assertFalse(o["sniff5"]["ambiguous"])
+
+    def test_sniff_uses_original_numeric_spelling(self):
+        self.assertEqual(self.out["sniffTrailingZero"], ["comma_decimal", None])
 
     def test_08_parseCell(self):
         self.assertAlmostEqual(self.out["pc1"], 3.14)

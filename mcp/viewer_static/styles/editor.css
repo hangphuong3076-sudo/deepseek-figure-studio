@@ -436,7 +436,7 @@
   flex: 1 1 220px; min-width: 160px; font-size: 12px; padding: 4px 8px;
   border: 1px solid #C9D1DB; border-radius: 6px;
 }
-.tl-cat {
+.tl-cat, .tl-group {
   font-size: 12px; padding: 3px 6px; border: 1px solid #C9D1DB; border-radius: 6px;
   background: #fff; color: #1F2328;
 }
@@ -447,6 +447,7 @@
   display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 10px; max-height: 56vh; overflow: auto; padding: 2px;
 }
+.tl-section-title { grid-column: 1 / -1; margin: 4px 0 0; font-size: 14px; }
 .tl-has-detail .tl-grid { flex: 0 1 62%; }
 .tl-card {
   border: 1px solid #D8DEE6; border-radius: 8px; padding: 8px;
@@ -491,11 +492,6 @@
 .tl-detail-list.tl-hints li { color: #1d4ed8; }
 .tl-detail-actions { display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
 .tl-empty { grid-column: 1 / -1; text-align: center; color: #999; font-size: 13px; padding: 24px 0; }
-.tl-open-btn {
-  appearance: none; width: 100%; border: 1px solid #C9D1DB; border-radius: 6px;
-  background: #fff; color: #1F2328; font-size: 12px; padding: 5px 8px; cursor: pointer;
-}
-.tl-open-btn:hover { background: #F3F4F6; }
 @media (max-width: 1100px) {
   .ui-modal.template-library-modal { width: min(96vw, 1240px); }
   .tl-has-detail .tl-grid { flex: 1 1 100%; }

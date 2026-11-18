@@ -3,20 +3,21 @@
  *
  * Contract (APP-API.md):
  *   Settings.mount(panelEl)              apiKey (localStorage only) / baseUrl / model /
- *                                        proxyUrl / canvas default DPI
+ *                                        proxyUrl / request timeout / canvas default DPI
  *   Settings.apiKey() / Settings.setApiKey(k)
  *                                        setApiKey re-applies FigAI.config(...) and
  *                                        refreshes the AI panel state
  * Additive helpers (used by main.js / topbar):
  *   Settings.open()                      modal dialog via Ui.modal (topbar "设置" button)
  *   Settings.values()                    snapshot of all stored values
+ *   Settings.timeoutMs()                 configured AI request timeout in milliseconds
  *   Settings.defaultDpi()                canvas DPI used for newly created documents
  *   Settings.setDefaultDpi(v)            validates and persists, throws Chinese Error
  *   Settings.testConnection()            -> Promise<string>, sends one tiny real request
  *   Settings.bridgeMode()                -> true when FigAI is wired to the DSH llm 桥
  *   Settings.lastModelCall()             -> 最近一次真实 FigAI.chat 记录
  *                                        {source:"bridge"|"direct", ok, status, message, at}
- *                                        （由本模块包裹 FigAI.chat 记录，请求/返回原样透传）
+ *                                        （由本模块包裹 FigAI.chat 记录）
  * Additive progress helpers (真实模型阶段追踪，绝不伪造百分比):
  *   Settings.reserveRequestId(ns)        -> string  为即将发出的一次模型请求登记
  *                                        request_id（ns-… 保证多次请求不互相覆盖）；
@@ -32,7 +33,7 @@
     var DPI_MAX = 2400;
     var TEST_TIMEOUT_MS = 20000;
 
-    var state = { apiKey: "", baseUrl: "", model: "", proxyUrl: "", defaultDpi: 300 };
+    var state = { apiKey: "", baseUrl: "", model: "", proxyUrl: "", defaultDpi: 300, timeoutSeconds: 60 };
     var statusEl = null;
     var testOutEl = null;
     // 由 DSH Host 插件启动时，viewer.py 会通过 /api/ai/health 暴露本机 llm 桥；
@@ -72,6 +73,14 @@
 
     // ----------------------------------------------------------- persistence
 
+    function validTimeoutSeconds(n) {
+        return Number.isInteger(n) && n >= 10 && n <= 600;
+    }
+
+    function timeoutMs() {
+        return state.timeoutSeconds * 1000;
+    }
+
     function loadPersisted() {
         try {
             var raw = global.localStorage ? global.localStorage.getItem(LS_KEY) : null;
@@ -82,6 +91,7 @@
             if (typeof obj.baseUrl === "string") state.baseUrl = obj.baseUrl;
             if (typeof obj.model === "string") state.model = obj.model;
             if (typeof obj.proxyUrl === "string") state.proxyUrl = obj.proxyUrl;
+            if (validTimeoutSeconds(obj.timeoutSeconds)) state.timeoutSeconds = obj.timeoutSeconds;
             if (typeof obj.defaultDpi === "number" && isFinite(obj.defaultDpi) &&
                 obj.defaultDpi >= DPI_MIN && obj.defaultDpi <= DPI_MAX) {
                 state.defaultDpi = Math.round(obj.defaultDpi);
@@ -109,6 +119,7 @@
         if (!a || typeof a.config !== "function") return;
         var useBridge = !state.apiKey && !!harnessBridgeUrl;
         try {
+            a.REVIEW_TIMEOUT_MS = timeoutMs();
             a.config({
                 // 走 harness 桥时填占位 key（非空 → enabled()===true），proxyUrl 替换请求 URL。
                 apiKey: useBridge ? "harness" : state.apiKey, // "" clears the key -> enabled() === false
@@ -149,7 +160,7 @@
         return "other";
     }
 
-    // 包裹 FigAI.chat：请求参数与返回值 {text, usage, raw} 原样透传，
+    // 工作台各类 chat 共用设置的超时；探测/测试连接等显式超时优先。
     // 失败时原样 rethrow（不改变内核语义），仅旁路记录最近一次真实调用，
     // 供 AiPanel 在 requestOps 静默回退后如实展示桥/直连的失败原因。
     function wrapFigAIChat() {
@@ -157,6 +168,7 @@
         if (!a || typeof a.chat !== "function" || a.__viewerChatWrapped) return;
         var orig = a.chat;
         var wrapped = function (messages, opts) {
+            opts = Object.assign({ timeoutMs: timeoutMs() }, opts);
             var source = bridgeMode() ? "bridge" : "direct";
             var t0 = Date.now();
             return orig.call(a, messages, opts).then(function (res) {
@@ -283,6 +295,7 @@
             baseUrl: state.baseUrl,
             model: state.model,
             proxyUrl: state.proxyUrl,
+            timeoutSeconds: state.timeoutSeconds,
             defaultDpi: state.defaultDpi
         };
     }
@@ -398,6 +411,25 @@
             notifyAiPanel();
             pushStatus("设置已保存：" + label);
         };
+    }
+
+    function timeoutControl() {
+        var inp = h("input", { type: "number", min: "10", max: "600", step: "1",
+            "aria-label": "AI 请求超时（秒）" });
+        inp.value = String(state.timeoutSeconds);
+        inp.addEventListener("change", function () {
+            var seconds = Number(inp.value);
+            if (validTimeoutSeconds(seconds)) {
+                state.timeoutSeconds = seconds;
+                persist();
+                applyToFigAI();
+                pushStatus("AI 请求超时已保存：" + seconds + " 秒");
+            } else {
+                pushStatus("AI 请求超时需为 10–600 之间的整数秒", true);
+            }
+            inp.value = String(state.timeoutSeconds);
+        });
+        return inp;
     }
 
     function dpiControl() {
@@ -657,7 +689,7 @@
         advanced.open = !!state.apiKey;
         advanced.appendChild(h("summary", {
             style: "cursor:pointer;font-weight:bold;font-size:13px;color:#374151;margin-bottom:10px"
-        }, ["高级设置（Base URL / 模型 / 代理）"]));
+        }, ["高级设置（Base URL / 模型 / 代理 / 超时）"]));
         advanced.appendChild(h("div", { style: "font-size:11px;color:#6b7280;line-height:1.5;margin:8px 0 12px" },
             ["通过 DSH 打开时通常无需修改以下项目；改动会立即生效。"]));
         advanced.appendChild(row("Base URL",
@@ -666,6 +698,7 @@
             textInput(state.model, defaultModel(), plainChange("model", "模型"), 128)));
         advanced.appendChild(row("代理地址（可选）",
             textInput(state.proxyUrl, "留空则直连官方地址", plainChange("proxyUrl", "代理地址"), 2048)));
+        advanced.appendChild(row("AI 请求超时（秒）", timeoutControl(), "聊天、改图和审阅共用，范围为 10–600 秒。"));
         root.appendChild(advanced);
         return root;
     }
@@ -796,6 +829,7 @@
         apiKey: apiKey,
         setApiKey: setApiKey,
         values: values,
+        timeoutMs: timeoutMs,
         defaultDpi: defaultDpi,
         setDefaultDpi: setDefaultDpi,
         testConnection: testConnection,

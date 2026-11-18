@@ -1815,10 +1815,15 @@
         ct.w = pw / innerW;
         ct.h = ph / innerH;
       } else {
+        if (child.type === "group" && ct.w > 0 && ct.h > 0) {
+          var contents = figdoc().descendants(doc, child.id, {includeSelf:false});
+          figdoc().fitElements(contents, ct, {x:t.x + pad + px, y:t.y + pad + py, w:pw, h:ph});
+        }
         ct.x = t.x + pad + px;
         ct.y = t.y + pad + py;
         ct.w = pw;
         ct.h = ph;
+        if (child.type === "panel") relayoutPanelChildren(doc, child);
       }
     }
   }

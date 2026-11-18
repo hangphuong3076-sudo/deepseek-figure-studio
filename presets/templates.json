@@ -7,6 +7,7 @@
     "category": "chart / diagram / composite",
     "chart_type": "对应 figure-document element.chart.chartType",
     "panels": "默认子图布局 [cols, rows]",
+    "areas": "可选：按子图顺序列出每个区域的起始格（从 0 起）和跨度 {col,row,colSpan,rowSpan}",
     "recommend_when": "数据特征匹配规则（供模板推荐器解释）",
     "default_mapping": "列角色默认映射",
     "characterization": "可选：表征谱图骨架（technique/x_reverse/x_scale/x_label/y_label/curves/fit_model/fit_source/peak_annotations/normalize/offset_each_series）；curves[].column 引用 default_mapping 的槽名，应用时解析为真实数据列",
@@ -747,6 +748,39 @@
       "journal_default": "nature-double",
       "palette_default": "npg",
       "notes": "(a) 承担主论点；(b)(c)(d) 依次为对照/分解/验证。面板标签 8pt bold。"
+    },
+    {
+      "id": "tpl-composite-top-large",
+      "name": "上大下二复合图",
+      "category": "composite",
+      "chart_type": null,
+      "panels": [2, 3],
+      "areas": [
+        {"col": 0, "row": 0, "colSpan": 2, "rowSpan": 2},
+        {"col": 0, "row": 2, "colSpan": 1, "rowSpan": 1},
+        {"col": 1, "row": 2, "colSpan": 1, "rowSpan": 1}
+      ],
+      "recommend_when": "一张主图与两张支撑图",
+      "default_mapping": {},
+      "journal_default": "nature-double",
+      "palette_default": "npg",
+      "notes": "上方为主图，下方两幅小图并列。"
+    },
+    {
+      "id": "tpl-composite-left-wide",
+      "name": "左宽右窄复合图",
+      "category": "composite",
+      "chart_type": null,
+      "panels": [3, 1],
+      "areas": [
+        {"col": 0, "row": 0, "colSpan": 2, "rowSpan": 1},
+        {"col": 2, "row": 0, "colSpan": 1, "rowSpan": 1}
+      ],
+      "recommend_when": "主图与一张辅助图并排",
+      "default_mapping": {},
+      "journal_default": "nature-double",
+      "palette_default": "npg",
+      "notes": "左侧主图占两列，右侧辅助图占一列。"
     },
     {
       "id": "tpl-composite-1x3",

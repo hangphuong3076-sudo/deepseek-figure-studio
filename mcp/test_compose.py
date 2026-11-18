@@ -545,6 +545,35 @@ class ComposeUITest(unittest.TestCase):
         finally:
             page.context.close()
 
+    def test_draw_svg_in_right_slot_and_reopen(self):
+        page = self.open_page()
+        page.locator("#btn-compose").click()
+        page.get_by_role("button", name="先建空版式").click()
+        slots = page.locator('#stage [data-render="empty-layout"] rect')
+        slots.nth(1).click(position={"x": 8, "y": 8})
+        page.get_by_role("button", name="新建子图画布").click()
+        page.wait_for_function("() => App.doc.meta.compose_target")
+        source = page.evaluate("""async () => {
+          const elements = SvgImport.convert('<svg xmlns="http://www.w3.org/2000/svg">' +
+            '<g><g><path d="M0 0L12 10" stroke="blue"/></g></g></svg>').elements;
+          await App.commit(elements.map(element => ({op:'add_element', element})));
+          return App.doc.id;
+        }""")
+        page.get_by_role("button", name="放回组图").click()
+        page.wait_for_function("() => !App.doc.meta.compose_target && App.doc.elements.some(e=>e.type==='path')")
+        self.assertTrue(page.evaluate("async () => (await ViewerBoot.flush()).ok"))
+        page.reload()
+        page.wait_for_function("() => window.App?.doc?.elements.some(e=>e.type==='path')")
+        result = page.evaluate("""() => {
+          const d=App.doc, path=d.elements.find(e=>e.type==='path');
+          const cell=FigDoc.ancestors(d,path.id).find(e=>e.type==='panel');
+          return [FigDoc.validate(d).ok, cell.panelLayout.label,
+            d.elements.filter(e=>Compose.isEmptyCell(e)).map(e=>e.name)];
+        }""")
+        self.assertEqual(result, [True, "b", ["子图 a"]])
+        self.assertTrue(page.evaluate("async id => !!(await Tabs.switchTab(id))", source))
+        self.assertTrue(page.evaluate("() => App.doc.elements.some(e=>e.type==='path')"))
+
     def test_place_into_empty_cell(self):
         page = self.open_page()
         try:

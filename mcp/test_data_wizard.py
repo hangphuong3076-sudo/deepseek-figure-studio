@@ -241,6 +241,32 @@ const data = %s;
         self.assertTrue(out["ok"])
         self.assertEqual(out["mapping"]["y"], "value_b")
 
+    def test_step_one_waits_for_missing_column(self):
+        out = run_node(r"""
+const csv = 'rownames,time,value\n1,1949,112\n2,1949.08333333333,118\n' +
+  '3,1949.16666666667,132\n4,1949.25,129\n5,1949.33333333333,121';
+Import._applyDataTable(csv, 'air-passengers.csv');
+const w = global.__lastDataWizard;
+function findPreview(el) {
+  if (el.getAttribute('data-wizard-preview')) return el;
+  return el.children.map(findPreview).find(Boolean);
+}
+const box = findPreview(w.body);
+assert.strictEqual(w.draft().mapping.x, null);
+assert.strictEqual(box.textContent, '下一步选好列后即可预览。');
+w.goTo(2);
+assert.ok(box.textContent.includes('横轴（x）'));
+w.goTo(1);
+assert.strictEqual(box.textContent, '下一步选好列后即可预览。');
+w.goTo(2);
+w.setMapping('x', 'time');
+w.setMapping('y', 'value');
+assert.ok(box.innerHTML.includes('<svg'));
+assert.strictEqual(commits, 0);
+console.log(JSON.stringify({ok:true}));
+""")
+        self.assertTrue(out["ok"])
+
     def test_bar_semantics_and_preset_canvas(self):
         out = run_node(r"""
 const data = %s;

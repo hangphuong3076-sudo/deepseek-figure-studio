@@ -714,7 +714,7 @@
       fail('FigRender：元素 ' + el.id + ' 的图表 width_mm/height_mm 必须是正数');
     }
     if (isEmptyLayoutChart(el.chart)) {
-      return '<g data-render="empty-layout" transform="translate(' + fmt(t.x) + ' ' + fmt(t.y) + ')">' +
+      return '<g data-render="empty-layout" data-fig-id="' + escAttr(el.id) + '" transform="translate(' + fmt(t.x) + ' ' + fmt(t.y) + ')">' +
         '<rect width="' + fmt(t.w) + '" height="' + fmt(t.h) + '"' +
         ' fill="#FFFFFF" stroke="#999999" stroke-width="0.3" stroke-dasharray="1 1"/>' +
         '<text x="' + fmt(t.w / 2) + '" y="' + fmt(t.h / 2 - 1.2) + '" text-anchor="middle"' +

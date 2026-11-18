@@ -891,13 +891,17 @@
       id: assignId(el, ctx),
       type: 'group',
       transform: { x: r3(box.x), y: r3(box.y), w: r3(box.w), h: r3(box.h), rotation: 0 },
-      children: kids.map(function (k) { return k.id; }),
+      children: [],
       parent_id: null,
       style: {}
     };
     var op = opacityOf(el);
     if (op < 1) g.style.opacity = r3(op);
-    kids.forEach(function (k) { if (k.parent_id == null) k.parent_id = g.id; });
+    kids.forEach(function (k) {
+      if (k.parent_id != null) return;
+      k.parent_id = g.id;
+      g.children.push(k.id);
+    });
     return [g].concat(kids);
   }
 

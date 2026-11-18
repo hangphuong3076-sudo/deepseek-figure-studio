@@ -757,6 +757,7 @@
         palette_id: null,
         title: title || undefined,
         // H1：按目标画布直接排版（fitBuiltIntoCanvas 保留作兜底，不再缩放）
+        canvas_fill: ctx && ctx.canvasFill,
         canvas: { width_mm: canvasRes.canvas.width_mm, height_mm: canvasRes.canvas.height_mm }
       };
       if (mapping && Object.keys(mapping).length) opts.mapping = mapping;
@@ -765,7 +766,7 @@
         opts.axes = ctx.axesExtra;
       }
       var built = global.FigPresets.templateFromStats(templateId, buildData, opts);
-      fitBuiltIntoCanvas(built, canvasRes.canvas);
+      if (opts.canvas_fill == null) fitBuiltIntoCanvas(built, canvasRes.canvas);
       built.effectiveCanvas = canvasRes.canvas;
       built._canvasOps = canvasRes.ops;
       return built;

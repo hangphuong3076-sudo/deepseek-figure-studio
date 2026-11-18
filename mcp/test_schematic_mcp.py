@@ -282,10 +282,10 @@ class SchematicMCPTests(unittest.TestCase):
 
     def test_live_template_capability(self):
         templates = self.mcp.call("figure_templates", {"include_unsupported": True})["templates"]
-        # R7+R9+R10：模板库 88 项 = 76 full + 12 layout，0 unsupported
-        self.assertEqual(len(templates), 88)
+        # R7+R9+R10：模板库 90 项 = 76 full + 14 layout，0 unsupported
+        self.assertEqual(len(templates), 90)
         counts = collections.Counter(item["capability"] for item in templates)
-        self.assertEqual(dict(counts), {"full": 76, "layout": 12})
+        self.assertEqual(dict(counts), {"full": 76, "layout": 14})
         supported = {item["id"] for item in templates if item["category"] == "diagram" and item["capability"] == "full"}
         self.assertEqual(supported, {
             "tpl-diagram-flow", "tpl-diagram-arch", "tpl-diagram-pipeline",

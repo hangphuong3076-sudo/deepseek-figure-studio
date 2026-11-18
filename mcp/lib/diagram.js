@@ -391,7 +391,11 @@
       columns: Math.min(hasChartSlot ? 2 : 4, spec.nodes.length),
       gap_x: 5, gap_y: 8, margin: 7, auto_layout: false, palette_id: null };
     if (input.layout !== undefined) {
-      keys(input.layout, ["mode", "direction", "columns", "gap_x", "gap_y", "gapX", "gapY", "margin", "auto_layout", "autoLayout", "palette_id", "paletteId"], "layout");
+      keys(input.layout, ["mode", "direction", "columns", "gap_x", "gap_y", "gapX", "gapY", "margin", "page_fill", "auto_layout", "autoLayout", "palette_id", "paletteId"], "layout");
+      if (input.layout.page_fill !== undefined) {
+        if ([0.8, 1].indexOf(input.layout.page_fill) < 0) throw new Error("INVALID_LAYOUT: page_fill 只允许 0.8 或 1");
+        spec.layout.page_fill = input.layout.page_fill;
+      }
       var paletteId = alias(input.layout, "palette_id", "paletteId", "layout");
       if (paletteId !== undefined && paletteId !== null) spec.layout.palette_id = text(paletteId, "layout.palette_id", false);
       if (input.layout.mode !== undefined) {
@@ -1950,6 +1954,21 @@
     var other = base.elements.filter(function (el) { return !el || el.diagram_id !== spec.id; });
     var maxZ = 0; other.forEach(function (el) { if (el && finite(el.z)) maxZ = Math.max(maxZ, el.z); });
     var built = buildElements(spec, previous, opts.auto_layout !== true && spec.layout.auto_layout !== true, maxZ + 1);
+    if (spec.layout.page_fill) {
+      var cw = spec.canvas.width_mm, ch = spec.canvas.height_mm, fill = spec.layout.page_fill;
+      var visible = built.elements.filter(function (el) {
+        return el.visible !== false && el.diagram_part !== "scene" && el.type !== "connector" && !el.relation_label_for;
+      });
+      var left = Math.min.apply(null, visible.map(function (e) { return e.transform.x; }));
+      var top = Math.min.apply(null, visible.map(function (e) { return e.transform.y; }));
+      var right = Math.max.apply(null, visible.map(function (e) { return e.transform.x + e.transform.w; }));
+      var bottom = Math.max.apply(null, visible.map(function (e) { return e.transform.y + e.transform.h; }));
+      built.layout.page_fit = global.FigDoc.fitElements(built.elements,
+        {x:left, y:top, w:right-left, h:bottom-top},
+        {x:cw*(1-fill)/2, y:ch*(1-fill)/2, w:cw*fill, h:ch*fill});
+      built.elements[0].transform = {x:0, y:0, w:cw, h:ch, rotation:0};
+      built.canvas = spec.canvas;
+    }
     base.canvas = Object.assign({}, base.canvas, clone(built.canvas || spec.canvas));
     base.elements = other.concat(built.elements);
     base.meta = base.meta || {}; base.meta.diagrams = base.meta.diagrams || {};

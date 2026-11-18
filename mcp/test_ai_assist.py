@@ -82,6 +82,30 @@ console.log(JSON.stringify({hasSentinel:JSON.stringify(d).indexOf('25.75')>=0||J
 
 
 class BuildAssistMessages(unittest.TestCase):
+    def test_svg_stroke_width_in_assistant_and_export(self):
+        out = node_json(PRELUDE + """
+require('./lib/render.js');
+var transform={x:0,y:0,w:12,h:3,rotation:0};
+var svgDoc=FigDoc.create();
+svgDoc.elements=['line','path','text'].map((type,i)=>({
+  id:'svg-el-'+i,type,transform:{...transform},style:{stroke:'#111111'},
+  ...(type==='path'?{pathData:'M0 0 L12 3'}:type==='text'?{text:'axis'}:{})
+}));
+svgDoc.anchors=[{id:'tick-anchor',label:'刻度',element_ids:['svg-el-0','svg-el-2']}];
+var prompt=FigAI.buildAssistMessages({doc:svgDoc,instruction:'修改刻度线宽'})[0].content;
+var ops=FigAI.fallbackOps({doc:svgDoc,instruction:'把 @tick-anchor 的线宽改为 0.6pt'}).ops;
+var edited=FigOps.applyAll(svgDoc,ops).doc;
+var svg=FigRender.toSVG(edited,{});
+console.log(JSON.stringify({prompt:prompt.includes('"strokeWidthPt":0.6'),ops,
+  exported:/data-fig-id="svg-el-0"[^>]*stroke-width="0.212"/.test(svg),
+  other:edited.elements.slice(1).map(e=>e.style.strokeWidthPt)}));
+""")
+        self.assertTrue(out["prompt"])
+        self.assertEqual(out["ops"][0]["targets"], ["svg-el-0"])
+        self.assertEqual(out["ops"][0]["style"], {"strokeWidthPt": 0.6})
+        self.assertTrue(out["exported"])
+        self.assertEqual(out["other"], [None, None])
+
     def test_prompt_and_context(self):
         out = node_json(PRELUDE + """
 var msgs=FigAI.buildAssistMessages({doc:doc,instruction:'把点改蓝',anchors:[],selection:[],
@@ -179,6 +203,18 @@ console.log(JSON.stringify({ok:true,calls:__calls.length,result:r}));
 
 
 class ApplyTemplateCanvas(unittest.TestCase):
+    def test_explicit_fill_on_tall_canvas(self):
+        out = node_json(PRELUDE + """
+var result=[0.8,1].map(fill=>{
+  var built=FigPresets.templateFromStats('tpl-scatter',chart.chart.data.inline,
+    {canvas:{width_mm:100,height_mm:200},canvas_fill:fill});
+  var t=built.elements.find(e=>e.type==='panel').transform;
+  return [t.x,t.y,t.w,t.h].map(Math.round);
+});
+console.log(JSON.stringify(result));
+""")
+        self.assertEqual(out, [[10, 20, 80, 160], [0, 0, 100, 200]])
+
     def test_canvas_default_and_explicit(self):
         out = node_json(
             "require('./lib/figdoc.js');require('./lib/ops.js');require('./lib/presets.js');require('./lib/data.js');require('./lib/palette.js');\n"

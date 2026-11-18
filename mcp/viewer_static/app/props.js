@@ -338,7 +338,11 @@
   function onStrokeWidth() {
     var v = parseNum(refs.strokeWidth.value);
     if (v === null || v < 0) { app().error("线宽应为非负数（pt）"); render(); return; }
-    commitStyle({ strokeWidthPt: r3(v) });
+    var ids = effectiveIds(), targets = new Set(ids);
+    elementsOf(ids).forEach(function (el) {
+      figdoc().strokeElements(app().doc, el, true).forEach(function (node) { targets.add(node.id); });
+    });
+    commit([{op:"set_style", targets:Array.from(targets), style:{strokeWidthPt:r3(v)}}], "修改线宽");
   }
 
   function onDash() {
@@ -2717,7 +2721,7 @@
     look.appendChild(colorRow("填充", "fillNone", "无", "fillColor", onFill));
     look.appendChild(colorRow("描边", "strokeNone", "无", "strokeColor", onStroke));
     var look2 = h("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px", padding: "4px 8px" } });
-    look2.appendChild(numRow("线宽", "strokeWidth", 0.25, 0, onStrokeWidth, "pt"));
+    look2.appendChild(numRow("线宽", "strokeWidth", 0.05, 0, onStrokeWidth, "pt"));
     look2.appendChild(numRow("不透明", "opacity", 0.05, 0, onOpacity, ""));
     var dashWrap = h("label", {
       style: { display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", margin: "4px 8px" }
@@ -3199,7 +3203,12 @@
     refs.strokeColor.title = isMixed(strokeV) ? "混合（多种描边色）" : "描边色";
 
     // Style numbers
-    setNumInput(refs.strokeWidth, styleVal(els, "strokeWidthPt", DEFAULTS.strokeWidthPt));
+    var strokeEls = [];
+    els.forEach(function (el) {
+      if (el.type === "group") strokeEls = strokeEls.concat(figdoc().strokeElements(app().doc, el, true));
+      else strokeEls.push(el);
+    });
+    setNumInput(refs.strokeWidth, styleVal(strokeEls.length ? strokeEls : els, "strokeWidthPt", DEFAULTS.strokeWidthPt));
     setNumInput(refs.opacity, styleVal(els, "opacity", DEFAULTS.opacity));
     setTextInput(refs.dash, styleVal(els, "dash", null));
     setNumInput(refs.fontSize, styleVal(els, "fontSizePt", DEFAULTS.fontSizePt));

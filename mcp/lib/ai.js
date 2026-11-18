@@ -222,6 +222,8 @@
             return; // 与锚点说明行合并，避免重复
           }
           lines.push("- " + o.usage);
+          if (o.fields) lines.push("    字段：" + o.fields.join(", "));
+          if (o.op === "set_style") lines.push('    原生线条、路径和边框可按元素 id 改线宽，例如 {"op":"set_style","targets":["元素id"],"style":{"strokeWidthPt":0.6}}。组内线条各有样式，请按目标宽度分别列出实际线条 id。');
           if (o.enums) enumsText(o.enums).forEach(function (t) { lines.push(t); });
           if (o.notes) o.notes.forEach(function (n) { lines.push("    注意：" + n); });
         });
@@ -359,7 +361,7 @@
       var b = elementBbox(el, byId, {});
       var bbox = b ? round1(b.x) + "," + round1(b.y) + "," + round1(b.w) + "," + round1(b.h) : "-";
       var desc = el.type === "text" ? cell(el.text, 24) : cell(el.name || (el.chart && el.chart.chartType) || "", 24);
-      lines.push("| " + el.id + " | " + el.type + " | " + cell(el.name, 16) + " | " + bbox + " | " + desc + " |");
+      lines.push("| " + el.id + " | " + el.type + " | " + cell(el.name, 16) + " | " + bbox + " | " + desc + (el.style && el.style.strokeWidthPt != null ? " 描边 " + el.style.strokeWidthPt + "pt" : "") + (el.parent_id ? " 父组 " + el.parent_id : "") + " |");
     }
     return lines.join("\n");
   }
@@ -373,7 +375,7 @@
       var m = a.bbox_mm || {};
       lines.push("| " + a.id + " | " + cell(a.label, 16) + " | " +
         (m.x != null ? round1(m.x) + "," + round1(m.y) + "," + round1(m.w) + "," + round1(m.h) : "-") +
-        " | " + cell(a.note, 24) + " |");
+        " | " + cell(a.note, 24) + (Array.isArray(a.element_ids) && a.element_ids.length ? " 元素：" + a.element_ids.join(", ") : "") + " |");
     }
     return lines.join("\n");
   }
@@ -1326,6 +1328,25 @@
         return { ops: [], explanation: "离线模式：目标元素缺少 transform，无法计算移动位置。" };
       }
       return okResult(moveOps, "移动到" + mDir[1], ids.length);
+    }
+
+    var width = instruction.match(/(?:线宽|描边宽度)\s*(?:改成|改为|设为|设置为|调整为|调为|为|到)?\s*(\d+(?:\.\d+)?)\s*(?:pt|磅)\s*[。！!]?$/i);
+    if (width && !/[，；;。\n]|不要|别改|不改|是否|能否|如何|\d\s*(?:pt|磅)/i.test(instruction.slice(0, width.index))) {
+      if (!targets) return noTargetResult("修改线宽");
+      var strokes = new Set();
+      var explicitMembers = new Set();
+      if (t.via === "anchor") targets.forEach(function (ref) {
+        var anchor = findAnchorById(doc, opts.anchors, ref.slice(1));
+        (anchor && anchor.element_ids || []).forEach(function (id) { explicitMembers.add(id); });
+      });
+      global.FigOps.resolveTargets(doc, targets).forEach(function (id) {
+        var el = global.FigDoc.get(doc, id);
+        global.FigDoc.strokeElements(doc, el, t.via !== "anchor" || explicitMembers.has(id))
+          .forEach(function (node) { strokes.add(node.id); });
+      });
+      if (strokes.size && isFinite(Number(width[1]))) return okResult([{
+        op: "set_style", targets: Array.from(strokes), style: {strokeWidthPt: Number(width[1])}
+      }], "线宽设为 " + width[1] + "pt", strokes.size);
     }
 
     // --- 字号 <n>(pt|磅) -> set_style fontSizePt ---

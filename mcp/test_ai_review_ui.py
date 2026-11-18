@@ -4,7 +4,7 @@
 viewer.py 以 FIGURE_LLM_BRIDGE 指向测试内桩 HTTP 服务（ThreadingHTTPServer，
 POST /chat 返回 OpenAI 形状应答），走真实桥接路径：页面 → /api/ai/chat → 桩。
 覆盖：
-  1) 桩响应慢于 FigAI.REVIEW_TIMEOUT_MS（测试内调低）→ 显示「模型响应超时
+  1) 桩响应慢于 工作台设置的超时→ 显示「模型响应超时
      （未断开）」，绝不显示「DSH 桥未连接」；
   2) 桩连续返回非 JSON → 「无法解析」措辞，且桩恰好收到 2 次请求
      （首答 + 一次自我修正）；
@@ -156,12 +156,34 @@ class AiReviewUiTest(unittest.TestCase):
             "window.AiPanel && typeof AiPanel.statusText === 'function'"
             " ? AiPanel.statusText() : ''")
 
+    def set_timeout(self, page, seconds):
+        page.click("#btn-settings")
+        modal = page.locator(".ui-modal-settings")
+        modal.locator(".settings-advanced summary").click()
+        field = modal.get_by_role("spinbutton", name="AI 请求超时（秒）")
+        field.fill(str(seconds))
+        field.press("Tab")
+        modal.get_by_role("button", name="关闭", exact=True).click()
+
+    def test_0_chat_timeout_persists_and_probe_keeps_its_deadline(self):
+        ctx, page = self.open_page()
+        self.assertEqual(page.evaluate("Settings.timeoutMs()"), 60000)
+        self.set_timeout(page, 240)
+        page.reload()
+        page.wait_for_function("window.Settings && Settings.bridgeMode()")
+        self.stub.mode = "http500"
+        page.evaluate("AiPanel.chat('测试问答').catch(() => {})")
+        self.assertEqual(page.evaluate("Settings.lastModelCall().timeoutMs"), 240000)
+        page.evaluate("Settings.testConnection().catch(() => {})")
+        self.assertEqual(page.evaluate("Settings.lastModelCall().timeoutMs"), 20000)
+        ctx.close()
+
     # ------------------------------------------------------------- 1
     def test_1_review_timeout_shows_timeout_not_bridge_down(self):
         ctx, page = self.open_page()
         self.stub.mode = "sleep"
-        self.stub.sleep_seconds = 5.0
-        page.evaluate("FigAI.REVIEW_TIMEOUT_MS = 400;")
+        self.stub.sleep_seconds = 12.0
+        self.set_timeout(page, 10)
         n0 = self.stub.count()
         page.click("#ai-review-btn")
         page.wait_for_function(
@@ -169,6 +191,7 @@ class AiReviewUiTest(unittest.TestCase):
             "/模型响应超时/.test(AiPanel.statusText())",
             timeout=20000)
         txt = self.status_text(page)
+        self.assertEqual(page.evaluate("Settings.lastModelCall().timeoutMs"), 10000)
         self.assertIn("模型响应超时", txt)
         self.assertIn("未断开", txt)
         self.assertNotIn("桥未连接", txt)

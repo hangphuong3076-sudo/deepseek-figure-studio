@@ -287,13 +287,32 @@
 
   async function importProject(file) {
     var doc = appDoc();
-    if (doc) {
-      var ok = await confirmBox("导入工程文件将替换当前文档（历史记录随工程文件一起恢复）。是否继续？");
-      if (!ok) return false;
-    }
     try {
       if (!file) throw new Error("未选择文件");
       var res = await global.FigStore.importProjectFile(file);
+      var check = global.FigDoc.validate(res.doc);
+      if (!check.ok && check.errors.every(function (msg) { return msg.includes("children 不一致"); })) {
+        // Older SVG imports also listed grandchildren as direct children. Keep the
+        // original project/history and recover only the current revision in a new tab.
+        var copy = global.FigDoc.clone(res.doc);
+        copy.elements.filter(function (el) { return el.type === "group"; }).forEach(function (group) {
+          group.children = group.children.filter(function (id) {
+            var ancestors = global.FigDoc.ancestors(copy, id);
+            return !ancestors.slice(1).some(function (parent) { return parent.id === group.id; });
+          });
+        });
+        if (!global.FigDoc.validate(copy).ok) throw new Error("无法确定正确的分组关系，请保留工程文件");
+        if (!await confirmBox("旧版工程包含重复的 SVG 分组引用。将当前图形和修改恢复到新画布？副本从这一版开始记录撤销历史，原文件保留全部历史。")) return false;
+        if (!global.Tabs || !global.Tabs.available()) throw new Error("恢复副本需要在工作台内打开工程");
+        copy.id = global.FigDoc.uid("doc");
+        copy.title = (copy.title || "画布") + "（分组恢复）";
+        copy.history = [];
+        delete copy.meta.save_checkpoint;
+        delete copy.meta.legacy_save_checkpoints;
+        return !!await global.Tabs.newTab(global.FigOps.captureHistoryOrigin(copy, 0));
+      }
+      if (!check.ok) throw new Error(check.errors.join("；"));
+      if (doc && !await confirmBox("导入工程文件将替换当前文档（历史记录随工程文件一起恢复）。是否继续？")) return false;
       thumbCache.clear();
       await global.App.publishDoc(res.doc, { reason: "history:import" });
       var n = (res.doc.history || []).length;

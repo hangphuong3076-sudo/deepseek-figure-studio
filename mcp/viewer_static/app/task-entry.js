@@ -2,7 +2,7 @@
  * task-entry.js — TaskEntry（R03 空文档任务入口）
  *
  * 空文档（elements 为空）时在画布区显示任务卡片：
- *   从数据绘图（数据映射向导）/ 编辑已有 SVG（逐元素导入）/ 组合多张图（模板页）
+ *   从数据绘图（数据映射向导）/ 编辑已有 SVG（逐元素导入）/ 组合多张图（组图对话框）
  * 以及可直接打开的教学示例（examples/teaching/，经 /teaching/ 静态路由）。
  * 教学示例全部标注「演示数据」；文档一旦有元素即隐藏，不遮挡编辑。
  *
@@ -167,10 +167,9 @@
             }
           }),
         card('组合多张图',
-          '选用多面板版式（2×2 等）与期刊尺寸模板，把多张图排成论文图版。',
-          '浏览模板', function () {
-            var tab = document.getElementById('tab-templates');
-            if (tab) tab.click();
+          '从已打开的画布选取图表或图片，设置版式和期刊栏宽，组合成论文图版。',
+          '打开组图', function () {
+            global.Compose.open();
           })
       ]),
       h('div', {

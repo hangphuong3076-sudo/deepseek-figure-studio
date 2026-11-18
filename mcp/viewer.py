@@ -165,8 +165,8 @@ EXPORT_CONTENT_TYPES = {
     "svg": "image/svg+xml; charset=utf-8",
 }
 
-# /api/ai/chat 转发本机 llm 桥的超时；前端审阅请求可到 180s，取 200s 留余量。
-AI_CHAT_TIMEOUT_SECONDS = 200
+# 转发上限覆盖工作台可配置的最长请求时间；较短的等待时间由前端控制。
+AI_CHAT_TIMEOUT_SECONDS = 600
 # /api/ai/progress 反查模型桥进度的超时（轻量状态查询，必须快速返回）。
 AI_PROGRESS_TIMEOUT_SECONDS = 2
 # 进度任务表上限：只保留最近有限条（FIFO 淘汰），避免长会话无界增长。

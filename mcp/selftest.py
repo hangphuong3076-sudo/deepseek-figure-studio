@@ -1404,7 +1404,7 @@ function lineChart() {
     mapping: {x: 'x', y: 'y'}, axes: {}};
 }
 (async () => {
-  await test('88模板能力同源RENDERS/FigDiagram：76 full / 12 layout / 0 unsupported（R10 补齐13图型）', () => {
+  await test('90模板能力同源RENDERS/FigDiagram：76 full / 14 layout / 0 unsupported（R10 补齐13图型）', () => {
     assert.strictEqual(FigData.supportsChartType('bar'), true);
     // R10：pca/roc 等 13 图型已有真实渲染器；treemap 等仍无 RENDERS 实现
     assert.strictEqual(FigData.supportsChartType('pca'), true);
@@ -1416,8 +1416,8 @@ function lineChart() {
       out[template.capability.status] = (out[template.capability.status] || 0) + 1;
       return out;
     }, {});
-    assert.strictEqual(templates.length, 88);
-    assert.deepStrictEqual(counts, {full: 76, layout: 12});
+    assert.strictEqual(templates.length, 90);
+    assert.deepStrictEqual(counts, {full: 76, layout: 14});
     for (const template of templates) {
       if (template.category === 'composite' && template.chart_type === null) {
         assert.strictEqual(template.capability.status, 'layout');
@@ -3074,14 +3074,14 @@ def main():
         default_templates = (client.call_tool("figure_templates", {})
                              .get("templates") or [])
         record("模板推荐默认仅含 full/layout，不包含 unsupported",
-               len(default_templates) == 88
+               len(default_templates) == 90
                and all(t.get("capability") in ("full", "layout")
                        and t.get("can_apply") is True for t in default_templates),
                "templates=%d" % len(default_templates))
         template_payload = client.call_tool("figure_templates", {"include_unsupported": True})
         templates = template_payload.get("templates") or []
-        record("模板能力表覆盖88个模板及 XPS / Raman / R7 表征谱图 / R9 示意图",
-               len(templates) == 88
+        record("模板能力表覆盖90个模板及 XPS / Raman / R7 表征谱图 / R9 示意图",
+               len(templates) == 90
                and all(t.get("capability") in ("full", "layout", "unsupported")
                        for t in templates)
                and any(t.get("id") == "tpl-xps-highres-fit" for t in templates)

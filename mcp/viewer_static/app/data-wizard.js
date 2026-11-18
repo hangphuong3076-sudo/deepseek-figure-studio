@@ -439,6 +439,7 @@
     var panels = [];
     var currentStep = 1;
     var previewBox = null;
+    var previewNeedsMapping = false;
     var statsHost = null;
     var tipHost = null;
     var summaryHost = null;
@@ -500,6 +501,7 @@
           return { row: e.row, column: e.column, from: e.from, to: e.to };
         }),
         parseOptions: parseOptionsForCommit(),
+        canvasFill: draft.canvasFill,
         placeIn: placeInChoice(),
         axesExtra: axesExtraForCreate()   // R4-HB：右轴配置透传给 buildDraft
       };
@@ -708,6 +710,10 @@
       });
       var reason;
       if (missing.length) {
+        previewNeedsMapping = true;
+        if (currentStep === 1) {
+          return h('div', { 'class': 'dw-note', text: '下一步选好列后即可预览。' });
+        }
         var names = missing.map(function (s) { return slotNameLabel(tpl, s); }).join('、');
         reason = '「' + ((tpl && tpl.name) || (tpl && tpl.template_id) || '该模板') +
           '」还缺：' + names + '。请到第 2 步选择对应的列。';
@@ -769,6 +775,7 @@
     // ---- 预览（不写正式文档/历史/工程） ----
     function refreshPreview() {
       if (!previewBox) return;
+      previewNeedsMapping = false;
       var mapping = currentMapping();
       var choice = currentCanvasChoice();
       var tpl = currentTemplate();
@@ -2029,6 +2036,17 @@
     step3.appendChild(h('div', { 'class': 'dw-h', text: '画布' }));
     canvasHost = h('div', {});
     step3.appendChild(canvasHost);
+    var canvasFill = h('select', { 'aria-label': '模板占幅' }, [
+      h('option', { value: '0.8', text: '居中 80%' }),
+      h('option', { value: '1', text: '铺满页面' }),
+      h('option', { value: '', text: '模板默认排版' })
+    ]);
+    draft.canvasFill = 0.8;
+    canvasFill.addEventListener('change', function () {
+      draft.canvasFill = canvasFill.value ? Number(canvasFill.value) : undefined;
+      refreshPreview();
+    });
+    step3.appendChild(h('label', {}, ['模板占幅 ', canvasFill]));
     step3.appendChild(h('div', { 'class': 'dw-h', text: '图表标题（可留空）' }));
     titleInput = h('input', {
       type: 'text', value: draft.title,
@@ -2117,7 +2135,9 @@
 
     function goTo(n) {
       n = Math.max(1, Math.min(4, Math.round(Number(n)) || 1));
+      var changeMappingHint = previewNeedsMapping && ((currentStep === 1) !== (n === 1));
       currentStep = n;
+      if (changeMappingHint) refreshPreview();
       panels.forEach(function (p, i) { p.hidden = i !== n - 1; });
       syncStepBar();
       syncFooter();
